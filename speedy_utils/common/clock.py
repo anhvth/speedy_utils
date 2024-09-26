@@ -1,16 +1,17 @@
 import time
 from loguru import logger
 
-__all__ = ["Clock"]
+__all__ = ["Clock", "timef"]
 
 
 def timef(func):
+    "Decorator to print the execution time of a function"
     def wrapper(*args, **kwargs):
         start_time = time.time()
         result = func(*args, **kwargs)
         end_time = time.time()
         execution_time = end_time - start_time
-        print(f"{func.__name__} took {execution_time:0.2f} seconds to execute.")
+        logger.info(f"{func.__name__} took {execution_time:0.2f} seconds to execute.")
         return result
 
     return wrapper
