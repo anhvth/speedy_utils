@@ -60,6 +60,7 @@ class Clock:
             self.start()
         self.print_counter = 0
         self.last_print_time = time.time()
+        self.min_depth = 1e9
 
     def start(self):
         """Start the timer or reset if already started."""
@@ -91,11 +92,25 @@ class Clock:
         return elapsed
 
     def update_task(self, task_name):
-        """Update the elapsed time for the specified task."""
-        # get the file:line_no that call this
-        file_lineno = f"{inspect.stack()[1].filename.split('/')[-1]}:{inspect.stack()[1].lineno}"
+        """Update the elapsed time for the specified task, including file, line, and call depth."""
 
-        task_name = f"{task_name} ({file_lineno})"
+        # Get the full call stack
+        stack = inspect.stack()
+
+        # Get the file and line number of the caller (the previous frame in the stack)
+        caller_frame = stack[1]
+        file_lineno = f"{caller_frame.filename.split('/')[-1]}:{caller_frame.lineno}"
+
+        # Calculate the depth of the current call (i.e., how far it is in the stack)
+        call_depth = len(stack) - 1  # Subtract 1 to exclude the current frame from the depth count
+        if call_depth < self.min_depth:
+            self.min_depth = call_depth
+
+        # Add both file:line_no and the call depth to the task name
+        # rel_call_depth -= self.min_depth
+        task_name = f"{task_name} ({file_lineno}, depth={call_depth})"
+
+        # Update the task time in the internal task table
         if task_name not in self.task_times:
             self.task_times[task_name] = 0
         self.task_times[task_name] += self.time_since_last_checkpoint()
@@ -103,13 +118,21 @@ class Clock:
     def print_task_table(self, interval=1):
         """Print the task time table at regular intervals."""
         current_time = time.time()
+
+        def _get_reldepth_name(old_name: str) -> str:
+            # replace the depth with reldepth
+            depth = int(old_name.split("depth=")[1].split(")")[0])
+            reldepth = depth - self.min_depth
+            new_n = old_name.replace(f"depth={depth}", f"depth={reldepth}")
+            return new_n
+
         if current_time - self.last_print_time > interval:
             self.print_counter += 1
             total_time = sum(self.task_times.values())
 
             # Prepare data for the table
             table_data = [
-                [task_name, f"{time_spent:.2f} s", f"{(time_spent / total_time) * 100:.2f} %"]
+                [_get_reldepth_name(task_name), f"{time_spent:.2f} s", f"{(time_spent / total_time) * 100:.2f} %"]
                 for task_name, time_spent in self.task_times.items()
             ]
 
