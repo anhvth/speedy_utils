@@ -138,7 +138,7 @@ class Clock:
         else:
             return "\033[94m"  # Blue
 
-    def print_task_table(self, interval=1):
+    def print_task_table(self, interval=1, max_dept=None):
         """Print the task time table at regular intervals."""
         current_time = time.time()
 
@@ -152,6 +152,8 @@ class Clock:
                 time_spent = data["time"]
                 file_lineno = data["file_lineno"]
                 depth = data["depth"] - self.min_depth
+                if max_dept is not None and depth > max_dept:
+                    continue
                 percentage = (time_spent / total_time) * 100
 
                 # Get color code based on percentage
@@ -167,7 +169,8 @@ class Clock:
             )
 
             self.last_print_time = current_time
-            logger.info(f"\n{table}")
+            total_time_str = f"\nTotal time elapsed: {total_time:.2f} seconds."
+            logger.info(f"\n{table}\n{total_time_str}")
 
 
 # Example of how to instantiate the Timer
