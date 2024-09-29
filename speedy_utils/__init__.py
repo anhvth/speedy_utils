@@ -1,4 +1,4 @@
-from .common.clock import Clock, timef
+from .common.clock import Clock, timef, speedy_timer
 from .common.utils_cache import (
     ICACHE,
     SPEED_CACHE_DIR,
@@ -52,5 +52,6 @@ __all__ = [
     "multi_process",
     "async_multi_thread",
     "memoize_method",
+    "speedy_timer",
 ]
 __version__ = "0.1.0"
