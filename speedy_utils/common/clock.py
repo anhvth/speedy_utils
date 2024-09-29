@@ -138,7 +138,7 @@ class Clock:
         else:
             return "\033[94m"  # Blue
 
-    def print_task_table(self, interval=1, max_dept=None):
+    def print_task_table(self, interval=1, max_depth=None):
         """Print the task time table at regular intervals."""
         current_time = time.time()
 
@@ -152,7 +152,7 @@ class Clock:
                 time_spent = data["time"]
                 file_lineno = data["file_lineno"]
                 depth = data["depth"] - self.min_depth
-                if max_dept is not None and depth > max_dept:
+                if max_depth is not None and depth > max_depth:
                     continue
                 percentage = (time_spent / total_time) * 100
 
