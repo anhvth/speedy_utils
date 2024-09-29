@@ -21,6 +21,15 @@ def timef(func):
     return wrapper
 
 
+import time
+import inspect
+import os
+from tabulate import tabulate
+import logging
+
+logger = logging.getLogger(__name__)
+
+
 class Clock:
     """
     A simple timer utility to measure and log time intervals.
@@ -60,14 +69,15 @@ class Clock:
             self.start()
         self.print_counter = 0
         self.last_print_time = time.time()
-        self.min_depth = 1e9
+        self.min_depth = float("inf")
 
     def start(self):
         """Start the timer or reset if already started."""
-        if self.start_time is None:
-            self.start_time = time.time()
-            self.last_checkpoint = self.start_time
-            logger.info(f"Timer started. {id(self)=}")
+        if self.start_time is not None:
+            raise ValueError("Timer has already been started.")
+        self.start_time = time.time()
+        self.last_checkpoint = self.start_time
+        logger.info(f"Timer started. {id(self)=}")
 
     def elapsed_time(self):
         """Return the time elapsed since the timer started."""
@@ -83,13 +93,19 @@ class Clock:
         else:
             logger.info(msg)
 
-    def time_since_last_checkpoint(self):
-        """Return the time elapsed since the last checkpoint."""
+    def _tick(self):
+        """Return the time elapsed since the last checkpoint and update the last checkpoint."""
         assert self.start_time is not None, f"Timer has not been started. {id(self)=}"
         current_time = time.time()
         elapsed = current_time - self.last_checkpoint
         self.last_checkpoint = current_time
         return elapsed
+
+    def time_since_last_checkpoint(self):
+        """Return the time elapsed since the last checkpoint."""
+        if self.start_time is None:
+            raise ValueError("Timer has not been started.")
+        return time.time() - self.last_checkpoint
 
     def update_task(self, task_name):
         """Update the elapsed time for the specified task, including file, line, and call depth."""
@@ -99,48 +115,59 @@ class Clock:
 
         # Get the file and line number of the caller (the previous frame in the stack)
         caller_frame = stack[1]
-        file_lineno = f"{caller_frame.filename.split('/')[-1]}:{caller_frame.lineno}"
+        file_lineno = f"{os.path.basename(caller_frame.filename)}:{caller_frame.lineno}"
 
         # Calculate the depth of the current call (i.e., how far it is in the stack)
         call_depth = len(stack) - 1  # Subtract 1 to exclude the current frame from the depth count
         if call_depth < self.min_depth:
             self.min_depth = call_depth
 
-        # Add both file:line_no and the call depth to the task name
-        # rel_call_depth -= self.min_depth
-        task_name = f"{task_name} ({file_lineno}, depth={call_depth})"
-
         # Update the task time in the internal task table
         if task_name not in self.task_times:
-            self.task_times[task_name] = 0
-        self.task_times[task_name] += self.time_since_last_checkpoint()
+            self.task_times[task_name] = {"time": 0, "file_lineno": file_lineno, "depth": call_depth}
+        self.task_times[task_name]["time"] += self._tick()
+
+    def get_percentage_color(self, percentage):
+        """Return ANSI color code based on percentage."""
+        if percentage >= 75:
+            return "\033[91m"  # Red
+        elif percentage >= 50:
+            return "\033[93m"  # Yellow
+        elif percentage >= 25:
+            return "\033[92m"  # Green
+        else:
+            return "\033[94m"  # Blue
 
     def print_task_table(self, interval=1):
         """Print the task time table at regular intervals."""
         current_time = time.time()
 
-        def _get_reldepth_name(old_name: str) -> str:
-            # replace the depth with reldepth
-            depth = int(old_name.split("depth=")[1].split(")")[0])
-            reldepth = depth - self.min_depth
-            new_n = old_name.replace(f"depth={depth}", f"depth={reldepth}")
-            return new_n
-
         if current_time - self.last_print_time > interval:
             self.print_counter += 1
-            total_time = sum(self.task_times.values())
+            total_time = sum(data["time"] for data in self.task_times.values()) or 1  # Avoid division by zero
 
             # Prepare data for the table
-            table_data = [
-                [_get_reldepth_name(task_name), f"{time_spent:.2f} s", f"{(time_spent / total_time) * 100:.2f} %"]
-                for task_name, time_spent in self.task_times.items()
-            ]
+            table_data = []
+            for task_name, data in self.task_times.items():
+                time_spent = data["time"]
+                file_lineno = data["file_lineno"]
+                depth = data["depth"] - self.min_depth
+                percentage = (time_spent / total_time) * 100
+
+                # Get color code based on percentage
+                color_code = self.get_percentage_color(percentage)
+                percentage_str = f"{percentage:.2f} %"
+                colored_percentage = f"{color_code}{percentage_str}\033[0m"
+
+                table_data.append([task_name, file_lineno, depth, f"{time_spent:.2f} s", colored_percentage])
 
             # Add headers and log using tabulate
-            table = tabulate(table_data, headers=["Task", "Time (s)", "Percentage (%)"], tablefmt="grid")
+            table = tabulate(
+                table_data, headers=["Task", "File:Line", "Depth", "Time (s)", "Percentage (%)"], tablefmt="grid"
+            )
 
             self.last_print_time = current_time
-            logger.opt(depth=1).info(f"\n{table}")
+            logger.info(f"\n{table}")
 
 
 # Example of how to instantiate the Timer
