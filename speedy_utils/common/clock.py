@@ -93,7 +93,7 @@ class Clock:
     def update_task(self, task_name):
         """Update the elapsed time for the specified task."""
         # get the file:line_no that call this
-        file_lineno = f"{inspect.stack()[2].filename.split('/')[-1]}:{inspect.stack()[2].lineno}"
+        file_lineno = f"{inspect.stack()[1].filename.split('/')[-1]}:{inspect.stack()[1].lineno}"
 
         task_name = f"{task_name} ({file_lineno})"
         if task_name not in self.task_times:
