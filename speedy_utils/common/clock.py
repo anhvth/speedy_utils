@@ -25,9 +25,7 @@ import time
 import inspect
 import os
 from tabulate import tabulate
-import logging
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 class Clock:
