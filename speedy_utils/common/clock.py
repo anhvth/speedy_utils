@@ -1,8 +1,9 @@
-import inspect
 import time
-
-from loguru import logger
+import inspect
+import os
 from tabulate import tabulate
+from loguru import logger
+
 
 __all__ = ["Clock", "timef"]
 
@@ -21,11 +22,6 @@ def timef(func):
     return wrapper
 
 
-import time
-import inspect
-import os
-from tabulate import tabulate
-from loguru import logger
 
 
 class Clock:
