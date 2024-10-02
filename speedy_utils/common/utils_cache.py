@@ -39,7 +39,7 @@ def memoize(
     """Cache result of function call on disk."""
     assert cache_type in [".pkl", ".json"]
     if os.environ.get("AV_MEMOIZE_DISABLE", "0") == "1":
-        logger.info("Memoize is disabled")
+        logger.opt(depth=2).info("Memoize is disabled")
         return func
 
     @functools.wraps(func)
@@ -48,7 +48,7 @@ def memoize(
             arg_names = inspect.getfullargspec(func).args
             func_source = inspect.getsource(func).replace(" ", "")
             if cache_key is not None:
-                logger.info(f"Use cache_key={kwargs[cache_key]}")
+                logger.opt(depth=2).info(f"Use cache_key={kwargs[cache_key]}")
                 fid = [func_source, kwargs[cache_key]]
                 func_id = identify(fid)
             elif len(arg_names) > 0 and arg_names[0] == "self" and ignore_self:
@@ -62,7 +62,7 @@ def memoize(
             mkdir_or_exist(os.path.dirname(cache_path))
             if osp.exists(cache_path):
                 if verbose:
-                    logger.info(f"Load from cache file: {cache_path}")
+                    logger.opt(depth=2).info(f"Load from cache file: {cache_path}")
                 result = load_json_or_pickle(cache_path)
             else:
                 result = func(*args, **kwargs)
@@ -70,7 +70,7 @@ def memoize(
             return result
         except Exception as e:
             traceback.print_exc()
-            logger.warning(f"Exception: {e}, using default function call")
+            logger.opt(depth=2).warning(f"Exception: {e}, using default function call")
             return func(*args, **kwargs)
 
     return memoized_func

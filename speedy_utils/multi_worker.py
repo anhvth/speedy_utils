@@ -66,10 +66,10 @@ def multi_process(
         desc = f"{fn_name} at {file_line}"
 
     if os.environ.get("DEBUG", "0") == "1":
-        logger.info("DEBUGGING set num workers to 1")
+        logger.opt(depth=2).info("DEBUGGING set num workers to 1")
         workers = 1
 
-    logger.info("Multi-processing {} | Num samples: {}", desc, len(inputs))
+    logger.opt(depth=2).info("Multi-processing {} | Num samples: {}", desc, len(inputs))
 
     results = []
     with Pool(
@@ -86,7 +86,7 @@ def multi_process(
             else:
                 results = pool.map(_pool_process_executor, inputs)
         except Exception as e:
-            logger.error(f"[multiprocess] Error {e}")
+            logger.opt(depth=2).error(f"[multiprocess] Error {e}")
 
     return results
 
