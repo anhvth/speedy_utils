@@ -49,6 +49,9 @@ def load_json_or_pickle(fname: str) -> Any:
         with open(fname, "rb") as f:
             return pickle.load(f)
 
+def load_jsonl(path):
+    lines = open(path, "r", encoding="utf-8").read().splitlines()
+    return [json.loads(line) for line in lines]
 
 def load_by_ext(
     fname: Union[str, List[str]], do_memoize: bool = False
@@ -81,7 +84,9 @@ def load_by_ext(
                 return f.read().splitlines()
 
         def load_default(path: str) -> Any:
-            if path.endswith(".jsonl") or path.endswith(".json"):
+            if path.endswith(".jsonl"):
+                return load_jsonl(path)
+            elif path.endswith(".json"):
                 try:
                     return load_json_or_pickle(path)
                 except json.JSONDecodeError as exc:
