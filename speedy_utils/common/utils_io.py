@@ -3,6 +3,7 @@
 import json
 import os
 import os.path as osp
+from pathlib import Path
 import pickle
 from glob import glob
 from typing import Any, List, Dict, Union
@@ -25,6 +26,8 @@ def dump_json_or_pickle(
     """
     Dump an object to a file, supporting both JSON and pickle formats.
     """
+    if isinstance(fname, Path):
+        fname = str(fname)
     mkdir_or_exist(osp.abspath(os.path.dirname(osp.abspath(fname))))
     if fname.endswith(".json"):
         with open(fname, "w", encoding="utf-8") as f:
@@ -59,11 +62,14 @@ def load_by_ext(
     """
     Load data based on file extension.
     """
+    if isinstance(fname, Path):
+        fname = str(fname)
     from .utils_cache import (
         memoize,
     )  # Adjust import based on your actual multi_worker module
 
     from speedy_utils import multi_process  # Ensure multi_worker is correctly referenced
+    
 
     try:
         if isinstance(fname, str) and "*" in fname:
