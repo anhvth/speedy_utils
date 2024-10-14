@@ -16,7 +16,7 @@ def timef(func):
         result = func(*args, **kwargs)
         end_time = time.time()
         execution_time = end_time - start_time
-        logger.info(f"{func.__name__} took {execution_time:0.2f} seconds to execute.")
+        logger.opt(depth=2).info(f"{func.__name__} took {execution_time:0.2f} seconds to execute.")
         return result
 
     return wrapper
@@ -71,7 +71,7 @@ class Clock:
             raise ValueError("Timer has already been started.")
         self.start_time = time.time()
         self.last_checkpoint = self.start_time
-        logger.info(f"Timer started. {id(self)=}")
+        logger.opt(depth=2).info(f"Timer started. {id(self)=}")
 
     def elapsed_time(self):
         """Return the time elapsed since the timer started."""
@@ -85,11 +85,14 @@ class Clock:
         if custom_logger:
             custom_logger(msg)
         else:
-            logger.info(msg)
+            logger.opt(depth=2).info(msg)
 
     def _tick(self):
         """Return the time elapsed since the last checkpoint and update the last checkpoint."""
-        assert self.start_time is not None, f"Timer has not been started. {id(self)=}"
+        # assert self.start_time is not None, f"Timer has not been started. {id(self)=}"
+        if not self.start_time:
+            logger.opt(depth=2).warning("Timer has not been started. Please call start() before using this method.")
+            return
         current_time = time.time()
         elapsed = current_time - self.last_checkpoint
         self.last_checkpoint = current_time
@@ -98,7 +101,9 @@ class Clock:
     def time_since_last_checkpoint(self):
         """Return the time elapsed since the last checkpoint."""
         if self.start_time is None:
-            raise ValueError("Timer has not been started.")
+            # raise ValueError("Timer has not been started.")
+            logger.opt(depth=2).warning("Timer has not been started. Please call start() before using this method.")
+            return
         return time.time() - self.last_checkpoint
 
     def update_task(self, task_name):
@@ -164,7 +169,7 @@ class Clock:
 
             self.last_print_time = current_time
             total_time_str = f"\nTotal time elapsed: {total_time:.2f} seconds."
-            logger.info(f"\n{table}\n{total_time_str}")
+            logger.opt(depth=2).info(f"\n{table}\n{total_time_str}")
 
 
 # Example of how to instantiate the Timer

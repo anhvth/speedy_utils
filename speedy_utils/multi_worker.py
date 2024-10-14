@@ -109,10 +109,14 @@ def multi_process(
 
     # Debugging flag check to reduce workers to 1
     if os.environ.get("DEBUG", "0") == "1":
-        logger.info("DEBUGGING set num workers to 1")
+        logger.opt(depth=2).info("DEBUGGING set num workers to 1")
         workers = 1
 
+<<<<<<< HEAD
     logger.info(f"Multi-processing {desc} | Num samples: {len(inputs)}")
+=======
+    logger.opt(depth=2).info("Multi-processing {} | Num samples: {}", desc, len(inputs))
+>>>>>>> ad0aab24f6942f1ece7e7056ad357f69c47845bd
 
     # Results list to store processed outputs
     results = []
@@ -143,6 +147,7 @@ def multi_process(
             pool.terminate()  # Terminate any remaining workers
             pool.join()       # Ensure pool shutdown completes
         except Exception as e:
+<<<<<<< HEAD
             # Catch any other exceptions and log the error
             logger.error(f"[multiprocess] Error: {e}")
             pool.terminate()  # Ensure the pool is terminated in case of error
@@ -152,6 +157,9 @@ def multi_process(
             pool.close()  # Prevents new tasks from being submitted
             pool.join()   # Wait for all processes to finish or be terminated
             logger.info("Pool closed and cleaned up.")
+=======
+            logger.opt(depth=2).error(f"[multiprocess] Error {e}")
+>>>>>>> ad0aab24f6942f1ece7e7056ad357f69c47845bd
 
     return results
 
