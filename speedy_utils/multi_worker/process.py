@@ -1,3 +1,4 @@
+import gc
 import multiprocessing
 from multiprocessing import Pool
 import pandas as pd
@@ -59,6 +60,7 @@ def multi_process(func, inputs, workers=4, verbose=True):
     finally:
         pool.close()  # Ensure all processes are properly closed
         pool.join()  # Wait for all processes to complete
+        gc.collect()  # Collect garbage to free up resources
 
     return list(results)
 

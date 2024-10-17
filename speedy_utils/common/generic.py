@@ -16,7 +16,9 @@ class TaskDistributor(Generic[T]):
         :param debug: If True, enables debug-level logging.
         """
         self.workers = workers
-        self.usage_counter = Counter()  # Tracks the number of tasks each worker is handling
+        self.usage_counter = Counter()
+        for w in workers:
+            self.usage_counter[w] = 0  # Initialize usage counter for each worker
         self.lock = Lock()  # Ensures thread-safe access to shared data
 
         # Set up logger with loguru
@@ -29,9 +31,10 @@ class TaskDistributor(Generic[T]):
     def _get_least_busy_worker(self) -> T:
         """Select the worker that has handled the fewest tasks."""
         with self.lock:
-            worker = min(self.workers, key=lambda worker: self.usage_counter[worker])
-
-            logger.debug(f"Selected worker: {worker}, usage_counter: {self.usage_counter}")
+            v2k = {v: k for k, v in self.usage_counter.items()}
+            min_value = min(v2k.keys())
+            worker = v2k[min_value]
+            logger.info(f"Selected worker: {worker}, usage_counter: {self.usage_counter}")
             return worker
 
     def _update_worker_usage(self, worker: T, delta: int):
@@ -39,7 +42,7 @@ class TaskDistributor(Generic[T]):
         with self.lock:
             self.usage_counter[worker] += delta
             action = "Incremented" if delta > 0 else "Decremented"
-            logger.debug(f"{action} usage count for worker {worker}: {self.usage_counter[worker]}")
+            logger.debug(f"{action} usage count for worker {worker}, Usage:{self.usage_counter}")
 
     def delegate_task(self, task_func: Callable[[T], Any], *args, **kwargs) -> Any:
         """

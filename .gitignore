@@ -4,3 +4,4 @@ build/
 .hypothesis/
 **/__pycache__/**
 dist/
+.ipynb_checkpoints
