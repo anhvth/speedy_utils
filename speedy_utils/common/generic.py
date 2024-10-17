@@ -71,22 +71,25 @@ class TaskDistributor(Generic[T]):
         :param name: The attribute name to delegate.
         :return: The delegated attribute or method.
         """
-        worker = self._get_least_busy_worker()
-        if hasattr(worker, name):
-            attr = getattr(worker, name)
-            # If it's a callable (method), return a wrapper to delegate the task
-            if callable(attr):
-                def delegated_method(*args, **kwargs):
-                    logger.debug(f"Delegating method '{name}' to worker {worker} with args {args} and kwargs {kwargs}")
-                    return self.delegate_task(attr, *args, **kwargs)
-                return delegated_method
-            else:
+        try:
+            worker = self._get_least_busy_worker()
+            if hasattr(worker, name):
+                attr = getattr(worker, name)
+                # If it's a callable (method), return a wrapper to delegate the task
+                if callable(attr):
+                    def delegated_method(*args, **kwargs):
+                        logger.debug(f"Delegating method '{name}' to worker {worker} with args {args} and kwargs {kwargs}")
+                        return self.delegate_task(attr, *args, **kwargs)
+                    return delegated_method
+                else:
 
-                logger.debug(f"Accessing attribute '{name}' of worker {worker}")
-                return attr  # If it's not callable, return the attribute directly
-        error_message = f"'{type(self).__name__}' object has no attribute '{name}'"
-        logger.error(error_message)
-        raise AttributeError(error_message)
+                    logger.debug(f"Accessing attribute '{name}' of worker {worker}")
+                    return attr  # If it's not callable, return the attribute directly
+            error_message = f"'{type(self).__name__}' object has no attribute '{name}'"
+            logger.error(error_message)
+            raise AttributeError(error_message)
+        except:
+            return super().__getattr__(name)
 
     def __dir__(self):
         """

@@ -8,7 +8,8 @@ from .common.utils_io import (dump_json_or_pickle, dump_jsonl, load_by_ext,
 from .common.utils_misc import (convert_to_builtin_python, flatten_list,
                                 get_arg_names, is_interactive, mkdir_or_exist)
 from .common.utils_print import fprint, print_table, setup_logger
-from .multi_worker import async_multi_thread, multi_process, multi_thread
+from .multi_worker.process import multi_process
+from .multi_worker.thread import multi_thread 
 
 __all__ = [
     "SPEED_CACHE_DIR",
@@ -34,7 +35,6 @@ __all__ = [
     "Clock",
     "multi_thread",
     "multi_process",
-    "async_multi_thread",
     "memoize_method",
     "speedy_timer",
     "TaskDistributor",
