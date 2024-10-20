@@ -7,7 +7,10 @@ from typing import Any, Callable, List
 from loguru import logger
 from tqdm import tqdm
 
+from speedy_utils.multi_worker._handle_inputs import handle_inputs
 
+
+# @handle_inputs
 def multi_thread(
     func: Callable,
     inputs: List[Any],
@@ -15,6 +18,8 @@ def multi_thread(
     verbose: bool = True,
     desc: str | None = None,
 ) -> List[Any]:
+    if workers == 1:
+        return [func(inp) for inp in tqdm(inputs)]
     if desc is None:
         fn_name = func.__name__
         try:

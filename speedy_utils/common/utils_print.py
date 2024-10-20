@@ -54,6 +54,10 @@ def fprint(
     """
     Pretty print structured data.
     """
+    if hasattr(input_data, "toDict"):
+        input_data = input_data.toDict()
+        
+    
     if hasattr(input_data, "model_dump"):
         input_data = input_data.model_dump()
     if not isinstance(input_data, (dict, str)):
