@@ -100,6 +100,9 @@ class Clock:
         self.last_checkpoint = current_time
         return elapsed
 
+    def tick(self):
+        return self._tick()
+    
     def time_since_last_checkpoint(self):
         """Return the time elapsed since the last checkpoint."""
         if self.start_time is None:
@@ -134,7 +137,7 @@ class Clock:
                 "file_lineno": file_lineno,
                 "depth": call_depth,
             }
-        self.task_times[task_name]["time"] += self._tick()
+        self.task_times[task_name]["time"] += self.tick()
 
     def get_percentage_color(self, percentage):
         """Return ANSI color code based on percentage."""

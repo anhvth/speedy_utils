@@ -61,7 +61,7 @@ def multi_thread(
                         idx, result = future.result()
                         results[idx] = result  # Store result at the correct index
                     except Exception as e:
-                        _log(f"Error occurred in one of the threads: {e}")
+                        _log(f"Error occurred in one of the threads: {str(e[:1000])}")
             else:
                 for future in as_completed(futures):
                     if stop_event.is_set():
@@ -70,7 +70,7 @@ def multi_thread(
                         idx, result = future.result()
                         results[idx] = result  # Store result at the correct index
                     except Exception as e:
-                        _log(f"Error occurred in one of the threads: {e}")
+                        _log(f"Error occurred in one of the threads: {str(e)[:1000]}")
 
     except KeyboardInterrupt:
         _log("\nExecution manually interrupted. Cleaning up...")
@@ -80,7 +80,9 @@ def multi_thread(
             if not future.done():
                 future.cancel()
     except Exception as e:
-        _log(f"An error occurred during execution: {e}")
+        import traceback;
+        trace_back_str = traceback.format_exc()[:1000]
+        _log(f"An error occurred during execution: {trace_back_str}")
     finally:
         _log("Cleaning up any remaining threads or resources...")
         executor.shutdown(wait=False)

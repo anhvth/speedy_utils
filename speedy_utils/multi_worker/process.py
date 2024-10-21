@@ -19,24 +19,25 @@ def task_wrapper(func: Callable, index: int, input_kwargs: Dict[str, Any], resul
         result = func(**input_kwargs)
         results[index] = result
     except Exception as e:
+        logger.error(f"Error in task {index}: {e}")
         results[index] = None  # Handle exception and return None for failed tasks
 
 
 __gf__: callable = None
 
 
-# @handle_inputs
 def multi_process(func: Callable, inputs: List[Dict[str, Any]], workers: int = 4, verbose: bool = True) -> List[Any]:
     """
     Executes a function concurrently across multiple processes with a list of dictionary inputs.
     Returns partial results on KeyboardInterrupt.
     """
     inputs = handle_inputs(func, inputs)
+    
     global __gf__
     __gf__ = func
     manager = multiprocessing.Manager()
     results = manager.list([None] * len(inputs))  # Shared list for results
-
+    # Create a pool of worker processes
     with Pool(processes=workers) as pool:
         tasks = []
 
