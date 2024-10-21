@@ -84,5 +84,8 @@ def multi_thread(
     finally:
         _log("Cleaning up any remaining threads or resources...")
         executor.shutdown(wait=False)
-
+        
+    none_rate= sum(1 for r in results if r is None) / len(results)
+    if none_rate > 0.:
+        logger.warning(f"{none_rate*100:0.2f} % of tasks failed. Consider increasing workers or checking input data.")
     return results

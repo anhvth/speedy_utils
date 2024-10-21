@@ -54,15 +54,16 @@ def multi_process(func: Callable, inputs: List[Dict[str, Any]], workers: int = 4
 
         except KeyboardInterrupt:
             logger.warning("KeyboardInterrupt detected, returning partial results...")
-            # Terminate remaining processes and return the results collected so far
             pool.terminate()  # Stop remaining processes
-            return list(results)  # Return the results so far
         finally:
             logger.debug("Closing and joining the pool...")
             pool.close()  # Ensure all processes are properly closed
             pool.join()  # Wait for all processes to complete
             gc.collect()  # Collect garbage to free up resources
-
+    # Check results if more than 5 percent is None, then raise an error
+    none_rate= sum(1 for r in results if r is None) / len(results)
+    if none_rate > 0.05:
+        logger.warning(f"{none_rate*100:0.2f} % of tasks failed. Consider increasing workers or checking input data.")
     __gf__ = None
     return list(results)
 

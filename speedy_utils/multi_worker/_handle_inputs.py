@@ -1,9 +1,17 @@
+from collections.abc import Iterable
 from typing import Any, Callable, Dict, List, Union
 
 import pandas as pd
 
+# Example object
+my_object = range(3)
+
 
 def handle_inputs(f: Callable, inputs: Union[List[Dict[str, Any]], List[Any], pd.DataFrame]) -> List[Dict[str, Any]]:
+    if isinstance(inputs, range | list | tuple):
+        inputs = list(inputs)
+                
+    # Check if the object is iterable)
     if f.__code__.co_argcount == 1:
         if isinstance(inputs, pd.DataFrame):
             inputs = inputs.to_dict("records")
