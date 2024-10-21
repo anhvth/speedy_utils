@@ -8,10 +8,7 @@ import pandas as pd
 from loguru import logger
 from tqdm import tqdm
 
-from speedy_utils.common.clock import Clock
 from speedy_utils.multi_worker._handle_inputs import handle_inputs
-
-clock = Clock()
 
 
 def task_wrapper(func: Callable, index: int, input_kwargs: Dict[str, Any], results: List[Any]) -> None:
@@ -22,9 +19,6 @@ def task_wrapper(func: Callable, index: int, input_kwargs: Dict[str, Any], resul
         result = func(**input_kwargs)
         results[index] = result
     except Exception as e:
-        if clock.time_since_last_checkpoint() > 5:
-            logger.error(f"Error processing input at index {index}: {e}")
-            clock._tick()
         results[index] = None  # Handle exception and return None for failed tasks
 
 
@@ -69,6 +63,7 @@ def multi_process(func: Callable, inputs: List[Dict[str, Any]], workers: int = 4
             pool.join()  # Wait for all processes to complete
             gc.collect()  # Collect garbage to free up resources
 
+    __gf__ = None
     return list(results)
 
 
