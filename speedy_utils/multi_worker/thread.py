@@ -10,16 +10,22 @@ from tqdm import tqdm
 from speedy_utils.multi_worker._handle_inputs import handle_inputs
 
 
-# @handle_inputs
 def multi_thread(
     func: Callable,
     inputs: List[Any],
     workers: int = 4,
-    verbose: bool = True,
+    verbose: bool = None,
     desc: str | None = None,
 ) -> List[Any]:
+
+    inputs = handle_inputs(func, inputs)
     if workers == 1:
         return [func(inp) for inp in tqdm(inputs)]
+    if verbose is None:
+        if len(inputs) > 1000:
+            verbose = True
+        else:
+            verbose = False
     if desc is None:
         fn_name = func.__name__
         try:
@@ -33,9 +39,10 @@ def multi_thread(
     if isinstance(inputs[0], dict):
         orig_f = func
         func = lambda x: orig_f(**x)
-    
+
     stop_event = threading.Event()
     results = [None] * len(inputs)  # Placeholder for results in order of inputs
+    _log = logger.info if verbose else lambda x: None
 
     def wrapped_func(idx, *args, **kwargs):
         if stop_event.is_set():
@@ -54,7 +61,7 @@ def multi_thread(
                         idx, result = future.result()
                         results[idx] = result  # Store result at the correct index
                     except Exception as e:
-                        print(f"Error occurred in one of the threads: {e}")
+                        _log(f"Error occurred in one of the threads: {e}")
             else:
                 for future in as_completed(futures):
                     if stop_event.is_set():
@@ -63,23 +70,19 @@ def multi_thread(
                         idx, result = future.result()
                         results[idx] = result  # Store result at the correct index
                     except Exception as e:
-                        print(f"Error occurred in one of the threads: {e}")
+                        _log(f"Error occurred in one of the threads: {e}")
 
     except KeyboardInterrupt:
-        print("\nExecution manually interrupted. Cleaning up...")
+        _log("\nExecution manually interrupted. Cleaning up...")
         stop_event.set()
 
         for future in futures:
             if not future.done():
                 future.cancel()
     except Exception as e:
-        print(f"An error occurred during execution: {e}")
+        _log(f"An error occurred during execution: {e}")
     finally:
-        print("Cleaning up any remaining threads or resources...")
+        _log("Cleaning up any remaining threads or resources...")
         executor.shutdown(wait=False)
 
     return results
-
-
-
-

@@ -1,9 +1,9 @@
-import time
 import inspect
 import os
-from tabulate import tabulate
-from loguru import logger
+import time
 
+from loguru import logger
+from tabulate import tabulate
 
 __all__ = ["Clock", "timef"]
 
@@ -16,12 +16,12 @@ def timef(func):
         result = func(*args, **kwargs)
         end_time = time.time()
         execution_time = end_time - start_time
-        logger.opt(depth=2).info(f"{func.__name__} took {execution_time:0.2f} seconds to execute.")
+        logger.opt(depth=2).info(
+            f"{func.__name__} took {execution_time:0.2f} seconds to execute."
+        )
         return result
 
     return wrapper
-
-
 
 
 class Clock:
@@ -91,7 +91,9 @@ class Clock:
         """Return the time elapsed since the last checkpoint and update the last checkpoint."""
         # assert self.start_time is not None, f"Timer has not been started. {id(self)=}"
         if not self.start_time:
-            logger.opt(depth=2).warning("Timer has not been started. Please call start() before using this method.")
+            logger.opt(depth=2).warning(
+                "Timer has not been started. Please call start() before using this method."
+            )
             return
         current_time = time.time()
         elapsed = current_time - self.last_checkpoint
@@ -102,7 +104,9 @@ class Clock:
         """Return the time elapsed since the last checkpoint."""
         if self.start_time is None:
             # raise ValueError("Timer has not been started.")
-            logger.opt(depth=2).warning("Timer has not been started. Please call start() before using this method.")
+            logger.opt(depth=2).warning(
+                "Timer has not been started. Please call start() before using this method."
+            )
             return
         return time.time() - self.last_checkpoint
 
@@ -117,13 +121,19 @@ class Clock:
         file_lineno = f"{os.path.basename(caller_frame.filename)}:{caller_frame.lineno}"
 
         # Calculate the depth of the current call (i.e., how far it is in the stack)
-        call_depth = len(stack) - 1  # Subtract 1 to exclude the current frame from the depth count
+        call_depth = (
+            len(stack) - 1
+        )  # Subtract 1 to exclude the current frame from the depth count
         if call_depth < self.min_depth:
             self.min_depth = call_depth
 
         # Update the task time in the internal task table
         if task_name not in self.task_times:
-            self.task_times[task_name] = {"time": 0, "file_lineno": file_lineno, "depth": call_depth}
+            self.task_times[task_name] = {
+                "time": 0,
+                "file_lineno": file_lineno,
+                "depth": call_depth,
+            }
         self.task_times[task_name]["time"] += self._tick()
 
     def get_percentage_color(self, percentage):
@@ -143,7 +153,9 @@ class Clock:
 
         if current_time - self.last_print_time > interval:
             self.print_counter += 1
-            total_time = sum(data["time"] for data in self.task_times.values()) or 1  # Avoid division by zero
+            total_time = (
+                sum(data["time"] for data in self.task_times.values()) or 1
+            )  # Avoid division by zero
 
             # Prepare data for the table
             table_data = []
@@ -160,11 +172,21 @@ class Clock:
                 percentage_str = f"{percentage:.2f} %"
                 colored_percentage = f"{color_code}{percentage_str}\033[0m"
 
-                table_data.append([task_name, file_lineno, depth, f"{time_spent:.2f} s", colored_percentage])
+                table_data.append(
+                    [
+                        task_name,
+                        file_lineno,
+                        depth,
+                        f"{time_spent:.2f} s",
+                        colored_percentage,
+                    ]
+                )
 
             # Add headers and log using tabulate
             table = tabulate(
-                table_data, headers=["Task", "File:Line", "Depth", "Time (s)", "Percentage (%)"], tablefmt="grid"
+                table_data,
+                headers=["Task", "File:Line", "Depth", "Time (s)", "Percentage (%)"],
+                tablefmt="grid",
             )
 
             self.last_print_time = current_time

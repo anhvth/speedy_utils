@@ -10,7 +10,9 @@ from tqdm import tqdm
 
 from speedy_utils.common.clock import Clock
 from speedy_utils.multi_worker._handle_inputs import handle_inputs
+
 clock = Clock()
+
 
 def task_wrapper(func: Callable, index: int, input_kwargs: Dict[str, Any], results: List[Any]) -> None:
     """
@@ -20,7 +22,7 @@ def task_wrapper(func: Callable, index: int, input_kwargs: Dict[str, Any], resul
         result = func(**input_kwargs)
         results[index] = result
     except Exception as e:
-        if clock.time_since_last_checkpoint()> 5:
+        if clock.time_since_last_checkpoint() > 5:
             logger.error(f"Error processing input at index {index}: {e}")
             clock._tick()
         results[index] = None  # Handle exception and return None for failed tasks
@@ -29,12 +31,13 @@ def task_wrapper(func: Callable, index: int, input_kwargs: Dict[str, Any], resul
 __gf__: callable = None
 
 
-@handle_inputs
+# @handle_inputs
 def multi_process(func: Callable, inputs: List[Dict[str, Any]], workers: int = 4, verbose: bool = True) -> List[Any]:
     """
     Executes a function concurrently across multiple processes with a list of dictionary inputs.
     Returns partial results on KeyboardInterrupt.
     """
+    inputs = handle_inputs(func, inputs)
     global __gf__
     __gf__ = func
     manager = multiprocessing.Manager()
@@ -68,9 +71,12 @@ def multi_process(func: Callable, inputs: List[Dict[str, Any]], workers: int = 4
 
     return list(results)
 
+
 def f2(input):
     logger.debug(f"x={input}")
     return input
+
+
 class Test:
     def f_simple(self, **kwargs):
         """
@@ -84,6 +90,7 @@ class Test:
         print(f"Done with x={x}, y={y}, result={result}")
         return result
 
+
 if __name__ == "__main__":
 
     o = Test()
@@ -96,9 +103,10 @@ if __name__ == "__main__":
         {"x": 5, "y": 6},
         {"x": 3, "y": 12},
     ]
+
     def f1(**kwargs):
         return o.f_simple(**kwargs)
+
     # f2 = lambda **x: o.f_simple(**x)
     results = multi_process(f2, inputs, workers=3, verbose=True)
     print(results)
-
