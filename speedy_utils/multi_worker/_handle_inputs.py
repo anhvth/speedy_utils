@@ -15,11 +15,11 @@ def handle_inputs(f: Callable, inputs: Union[List[Dict[str, Any]], List[Any], pd
     if f.__code__.co_argcount == 1:
         if isinstance(inputs, pd.DataFrame):
             inputs = inputs.to_dict("records")
-        # logger.debug("Function has only 1 argument, converting list of dictionaries to list of values...")
         assert isinstance(inputs, list), "inputs must be a list"
         arg_name = f.__code__.co_varnames[0]
         inputs = [{arg_name: input_} for input_ in inputs]
     else:
+        raise NotImplementedError("Function has more than one argument, not implemented yet.")
         if isinstance(inputs, pd.DataFrame):
             # logger.debug("Converting DataFrame to list of dictionaries...")
             inputs = inputs.to_dict("records")

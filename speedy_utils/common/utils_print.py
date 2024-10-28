@@ -50,13 +50,15 @@ def fprint(
     table_format: str = "grid",
     str_wrap_width: int = 80,
     grep=None,
+    is_notebook=True,
 ) -> None:
     """
     Pretty print structured data.
     """
     if hasattr(input_data, "toDict"):
         input_data = input_data.toDict()
-        
+    if hasattr(input_data, "to_dict"):
+        input_data = input_data.to_dict()
     
     if hasattr(input_data, "model_dump"):
         input_data = input_data.model_dump()
@@ -100,13 +102,13 @@ def fprint(
 
     processed_data = copy.deepcopy(input_data)
 
-    if isinstance(processed_data, dict):
+    if isinstance(processed_data, dict) and is_notebook:
         if key_keep is not None:
             processed_data = keep_keys(processed_data, key_keep)
         elif key_ignore is not None:
             processed_data = remove_keys(processed_data, key_ignore)
 
-        if is_interactive():
+        if is_interactive() or is_notebook:
             display_pretty_table_html(processed_data)
             return
 
