@@ -14,7 +14,7 @@ def handle_inputs(f: Callable, inputs: Union[List[Dict[str, Any]], List[Any], pd
     # Check if the object is iterable)
     if f.__code__.co_argcount == 1:
         if isinstance(inputs, pd.DataFrame):
-            inputs = inputs.to_dict("records")
+            inputs = [r for _, r in inputs.iterrows()]
         assert isinstance(inputs, list), "inputs must be a list"
         arg_name = f.__code__.co_varnames[0]
         inputs = [{arg_name: input_} for input_ in inputs]

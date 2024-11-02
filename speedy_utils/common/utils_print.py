@@ -59,7 +59,7 @@ def fprint(
         input_data = input_data.toDict()
     if hasattr(input_data, "to_dict"):
         input_data = input_data.to_dict()
-    
+
     if hasattr(input_data, "model_dump"):
         input_data = input_data.model_dump()
     if not isinstance(input_data, (dict, str)):
@@ -67,7 +67,7 @@ def fprint(
 
     if isinstance(input_data, dict):
         input_data = flatten_dict(input_data)
-    
+
     if grep is not None:
         input_data = {k: v for k, v in input_data.items() if grep in str(k)}
 
@@ -161,7 +161,6 @@ def print_table(data: Any) -> None:
     print(table)
 
 
-
 from loguru import logger
 import sys
 import re
@@ -170,21 +169,18 @@ from loguru import logger
 import sys
 import re
 
-def setup_logger(
-    level: str = "INFO", 
-    enable_grep: str = "", 
-    disable_grep: str = ""
-):
+
+def setup_logger(level: str = "INFO", enable_grep: str = "", disable_grep: str = ""):
     """
     Setup the logger with the specified level and control logging based on grep patterns.
-    
-    :param level: The desired log level. 
-                  Valid levels: 'T' (TRACE), 'D' (DEBUG), 'I' (INFO), 'S' (SUCCESS), 
+
+    :param level: The desired log level.
+                  Valid levels: 'T' (TRACE), 'D' (DEBUG), 'I' (INFO), 'S' (SUCCESS),
                   'W' (WARNING), 'E' (ERROR), 'C' (CRITICAL), 'DISABLE'.
     :param enable_grep: A comma-separated string of patterns. Only logs matching these patterns will be enabled.
     :param disable_grep: A comma-separated string of patterns. Logs matching these patterns will be disabled.
     """
-    
+
     # Map the shorthand level to the full name
     level_mapping = {
         "T": "TRACE",
@@ -195,30 +191,30 @@ def setup_logger(
         "E": "ERROR",
         "C": "CRITICAL",
     }
-    
+
     # Set the level based on the input (or default to INFO)
     level = level_mapping.get(level.upper(), level.upper())
 
     # Remove any existing handlers to avoid duplication
     logger.remove()
-    
+
     # Grep pattern handling
     enable_patterns = [pattern.strip() for pattern in enable_grep.split(",") if pattern.strip()]
     disable_patterns = [pattern.strip() for pattern in disable_grep.split(",") if pattern.strip()]
-    
+
     def log_filter(record):
         """
         This filter applies the logging level and the grep pattern matching.
         Only logs with a level >= the specified level and that match the enable/disable patterns will be logged.
         """
         log_message = f"{record['file']}:{record['line']} ({record['function']})"
-        
+
         # Check if the log should be enabled or disabled based on the grep patterns
         if enable_patterns and not any(re.search(pattern, log_message) for pattern in enable_patterns):
             return False  # If enable_grep is provided, log only if it matches
         if disable_patterns and any(re.search(pattern, log_message) for pattern in disable_patterns):
             return False  # If disable_grep matches, don't log
-        
+
         # Return True if the log level is >= the set level
         return record["level"].no >= logger.level(level).no
 
@@ -226,13 +222,10 @@ def setup_logger(
     logger.add(
         sys.stdout,
         colorize=True,
-        format=(
-            "<level>{level: <8}</level> | <cyan>{file}:{line} ({function})</cyan> - "
-            "<level>{message}</level>"
-        ),
-        filter=log_filter
+        format=("<level>{level: <8}</level> | <cyan>{file}:{line} ({function})</cyan> - " "<level>{message}</level>"),
+        filter=log_filter,
     )
-    
+
     # Handle the "DISABLE" level: if set, disable all logging
     if level.upper() == "DISABLE":
         logger.disable("")  # Disable all logging

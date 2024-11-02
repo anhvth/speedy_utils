@@ -102,7 +102,7 @@ def multi_thread(
             t = time.time()
             counter = 0
             with tqdm(
-                total=len(futures), desc=desc, mininterval=1, disable=not verbose, dynamic_ncols=True, smoothing=0.5
+                total=len(futures), desc=desc, disable=not verbose, dynamic_ncols=True
             ) as pbar:
                 for future in as_completed(futures):
                     if stop_event.is_set():
@@ -136,8 +136,9 @@ def multi_thread(
     finally:
         executor.shutdown(wait=False)
         _log("Cleaning up remaining threads...")
-        print("Multi thread results:")
-        fprint(result_counter, "Result counter", is_notebook=False)
+        if verbose:
+            print("Multi thread results:")
+            fprint(result_counter, "Result counter", is_notebook=False)
 
 
     return results
