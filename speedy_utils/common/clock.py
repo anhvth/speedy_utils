@@ -71,7 +71,7 @@ class Clock:
             raise ValueError("Timer has already been started.")
         self.start_time = time.time()
         self.last_checkpoint = self.start_time
-        logger.opt(depth=2).info(f"Timer started. {id(self)=}")
+        # logger.opt(depth=2).info(f"Timer started. {id(self)=}")
 
     def elapsed_time(self):
         """Return the time elapsed since the timer started."""

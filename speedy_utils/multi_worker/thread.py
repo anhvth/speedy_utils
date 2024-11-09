@@ -37,7 +37,9 @@ class RunErr(Exception):
         return formated
 
 
-def _process_single_task(func: Callable, idx: int, inp: Any, stop_event: threading.Event) -> Tuple[int, Any]:
+def _process_single_task(
+    func: Callable, idx: int, inp: Any, stop_event: threading.Event
+) -> Tuple[int, Any]:
     """Process a single task and handle exceptions."""
     if stop_event.is_set():
         return idx, None
@@ -67,13 +69,14 @@ def _handle_results(
         error_key = f"Error_{result_or_error.error_type}"
         result_counter[error_key] += 1
         if result_counter[error_key] == 1:
-            logger.error(f"First error of type {result_or_error.error_type}: {result_or_error.message}")
+            logger.error(
+                f"First error of type {result_or_error.error_type}: {result_or_error.message}"
+            )
         if stop_on_error:
             stop_event.set()
     else:
         result_counter["SUCCESS"] += 1
 
-    
     # pbar.update()
 
 
@@ -98,17 +101,22 @@ def multi_thread(
 
     try:
         with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = [executor.submit(_process_single_task, func, i, inp, stop_event) for i, inp in enumerate(inputs)]
+            futures = [
+                executor.submit(_process_single_task, func, i, inp, stop_event)
+                for i, inp in enumerate(inputs)
+            ]
             t = time.time()
             counter = 0
             with tqdm(
-                total=len(futures), desc=desc, disable=not verbose, dynamic_ncols=True
+                total=len(futures), desc=desc, disable=not verbose, ncols=120
             ) as pbar:
                 for future in as_completed(futures):
                     if stop_event.is_set():
                         logger.info("Stopping due to error")
                         break
-                    _handle_results(future, results, stop_event, stop_on_error, result_counter, pbar)
+                    _handle_results(
+                        future, results, stop_event, stop_on_error, result_counter, pbar
+                    )
                     last_t = time.time()
                     counter += 1
                     if last_t - t > 0.1:
@@ -126,7 +134,9 @@ def multi_thread(
 
             if not future.done():
                 future.cancel()
-                results[i] = RunErr("KeyboardInterrupt", "Execution was interrupted by the user")
+                results[i] = RunErr(
+                    "KeyboardInterrupt", "Execution was interrupted by the user"
+                )
 
     except Exception as e:
         import traceback
@@ -139,6 +149,5 @@ def multi_thread(
         if verbose:
             print("Multi thread results:")
             fprint(result_counter, "Result counter", is_notebook=False)
-
 
     return results
