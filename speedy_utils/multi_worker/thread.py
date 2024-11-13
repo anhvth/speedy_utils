@@ -77,8 +77,6 @@ def _handle_results(
     else:
         result_counter["SUCCESS"] += 1
 
-    # pbar.update()
-
 
 def multi_thread(
     func: Callable,
@@ -128,15 +126,8 @@ def multi_thread(
                 pbar.update(counter)
 
     except KeyboardInterrupt:
-        _log("\nExecution manually interrupted. Cleaning up...")
+        logger.warning("Execution manually interrupted")
         stop_event.set()
-        for i, future in enumerate(futures):
-
-            if not future.done():
-                future.cancel()
-                results[i] = RunErr(
-                    "KeyboardInterrupt", "Execution was interrupted by the user"
-                )
 
     except Exception as e:
         import traceback
@@ -144,8 +135,6 @@ def multi_thread(
         _log(f"An error occurred during execution: {traceback.format_exc()}")
 
     finally:
-        executor.shutdown(wait=False)
-        _log("Cleaning up remaining threads...")
         if verbose:
             print("Multi thread results:")
             fprint(result_counter, "Result counter", is_notebook=False)

@@ -33,7 +33,7 @@ from loguru import logger
 from openai import BaseModel
 from tabulate import tabulate
 from tqdm import tqdm
-
+import numpy as np
 
 __all__ = [
     "copy",
@@ -78,6 +78,7 @@ __all__ = [
     "BaseModel",
     "tabulate",
     "tqdm",
+    "np",
 ]
 from speedy_utils import *  # noqa: F403
 from speedy_utils import __all__ as all_speedy_utils
