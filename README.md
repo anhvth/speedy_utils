@@ -118,32 +118,6 @@ squares = multi_process(compute_square, numbers, workers=4)
 print(squares)  # [0, 1, 4, 9, ..., 81]
 ```
 
-#### Asynchronous Multi-threading
-
-Combine asynchronous programming with multi-threading for efficient I/O-bound operations.
-
-```python
-import asyncio
-from speedy_utils import async_multi_thread
-
-def fetch_data(url):
-    import requests
-    response = requests.get(url)
-    return response.text
-
-urls = [
-    "https://example.com",
-    "https://openai.com",
-    "https://github.com",
-]
-
-async def main():
-    results = await async_multi_thread(fetch_data, urls, desc="Fetching URLs")
-    for content in results:
-        print(len(content))
-
-asyncio.run(main())
-```
 
 ### File I/O
 
@@ -266,40 +240,42 @@ Ensure all dependencies are installed before running tests:
 pip install -r requirements.txt
 ```
 
-## Deployment
+## Data Arguments
 
-The project is configured to publish releases to [PyPI](https://pypi.org/) using GitHub Actions. To publish a new version:
+Define and parse data arguments using a dataclass:
 
-1. **Create a Git Tag**: Follow semantic versioning (e.g., `v0.1.0`).
-2. **Push to Repository**: Push the tag to trigger the GitHub Actions workflow.
+```python
+from dataclasses import dataclass
+from speedy_utils.common.dataclass_parser import ArgsParser
 
-The workflow defined in `.github/workflows/publish.yml` will handle building and uploading the package to PyPI. Ensure you have set the `PYPI_API_TOKEN` in your repository secrets.
+@dataclass
+class ExampleArgs(ArgsParser):
+    from_peft: str = "./outputs/llm_hn_qw32b/hn_results_r3/"
+    model_name_or_path: str = "Qwen/Qwen2.5-32B-Instruct-AWQ"
+    use_fp16: bool = False
+    batch_size: int = 1
+    max_length: int = 512
+    cache_dir: str = ".cache/run_embeds"
+    output_dir: str = ".cache"
+    input_file: str = ".cache/doc.csv"
+    output_name: str = "qw32b_r3"
 
-## Contributing
+args = ExampleArgs.parse_args()
+print(args)
+```
 
-Contributions are welcome! Please follow these steps to contribute:
+Run the script to parse and display the arguments:
 
-1. **Fork the Repository**: Click the "Fork" button at the top right of the repository page.
-2. **Create a Branch**: 
-    ```bash
-    git checkout -b feature/YourFeature
-    ```
-3. **Commit Changes**: 
-    ```bash
-    git commit -m "Add your feature"
-    ```
-4. **Push to Fork**: 
-    ```bash
-    git push origin feature/YourFeature
-    ```
-5. **Create a Pull Request**: Navigate to the repository and create a pull request from your fork.
+```bash
+python speedy_utils/common/dataclass_parser.py
+```
+
+Example output:
+
+| Field              | Value                                 |
+|--------------------|---------------------------------------|
+| from_peft          | ./outputs/llm_hn_qw32b/hn_results_r3/ |
 
 Please ensure your code adheres to the project's coding standards and includes appropriate tests.
 
-## License
 
-This project is licensed under the [MIT License](LICENSE).
-
----
-
-**Happy Coding! 🚀**
