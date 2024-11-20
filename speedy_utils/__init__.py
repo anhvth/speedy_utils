@@ -1,4 +1,4 @@
-from speedy_utils.common import dataclass_parser
+from speedy_utils.common.dataclass_parser import dataclass_parser
 from .common.clock import Clock, speedy_timer, timef
 from .common.generic import TaskDistributor
 from .common.utils_cache import (
@@ -12,8 +12,19 @@ from .common.utils_cache import (
     memoize_method,
     memoize_v2,
 )
-from .common.utils_io import dump_json_or_pickle, dump_jsonl, load_by_ext, load_json_or_pickle
-from .common.utils_misc import convert_to_builtin_python, flatten_list, get_arg_names, is_interactive, mkdir_or_exist
+from .common.utils_io import (
+    dump_json_or_pickle,
+    dump_jsonl,
+    load_by_ext,
+    load_json_or_pickle,
+)
+from .common.utils_misc import (
+    convert_to_builtin_python,
+    flatten_list,
+    get_arg_names,
+    is_interactive,
+    mkdir_or_exist,
+)
 from .common.utils_print import fprint, print_table, setup_logger
 from .multi_worker.process import multi_process
 from .multi_worker.thread import multi_thread
@@ -46,6 +57,6 @@ __all__ = [
     "speedy_timer",
     "TaskDistributor",
     "setup_logger",
-    "dataclass_parser"
+    "dataclass_parser",
 ]
 __version__ = "0.1.0"
