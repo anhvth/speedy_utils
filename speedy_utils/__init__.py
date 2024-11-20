@@ -1,3 +1,4 @@
+from speedy_utils.common import dataclass_parser
 from .common.clock import Clock, speedy_timer, timef
 from .common.generic import TaskDistributor
 from .common.utils_cache import (
@@ -45,5 +46,6 @@ __all__ = [
     "speedy_timer",
     "TaskDistributor",
     "setup_logger",
+    "dataclass_parser"
 ]
 __version__ = "0.1.0"
