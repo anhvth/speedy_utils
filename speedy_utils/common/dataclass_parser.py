@@ -17,10 +17,12 @@ class ArgsParser:
             arg_name = f"--{field.name}"
             default = field.default
             field_type = field.type
+            # print(field, field_type)
             if field_type is bool:
                 parser.add_argument(arg_name, action="store_true", help=f"Enable {field.name} (default: {default})")
-            elif field_type == list[int]:
-                parser.add_argument(arg_name, type=int, nargs='+', help=f"Override {field.name} with a list of integers (default: {default})")
+            elif 'list' in str(field_type):
+                elem_type = str(field_type).split('[')[1].split(']')[0]
+                parser.add_argument(arg_name, type=eval(elem_type), nargs='+', help=f"Override {field.name} (default: {default})")
             else:
                 parser.add_argument(arg_name, type=field_type, default=None, help=f"Override {field.name} (default: {default})")
         return parser
