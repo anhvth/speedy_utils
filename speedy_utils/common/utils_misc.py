@@ -5,7 +5,7 @@ import os
 import sys
 from typing import Any, Callable, List
 from IPython import get_ipython
-from openai import BaseModel
+from pydantic import BaseModel
 
 
 def mkdir_or_exist(dir_name: str) -> None:
