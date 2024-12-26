@@ -22,7 +22,7 @@ from .common.utils_misc import (
     convert_to_builtin_python,
     flatten_list,
     get_arg_names,
-    is_interactive,
+    is_notebook,
     mkdir_or_exist,
 )
 from .common.utils_print import fprint, print_table, setup_logger
@@ -47,7 +47,7 @@ __all__ = [
     "fprint",
     "get_arg_names",
     "memoize_v2",
-    "is_interactive",
+    "is_notebook",
     "print_table",
     "convert_to_builtin_python",
     "Clock",

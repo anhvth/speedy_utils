@@ -14,7 +14,7 @@ from loguru import logger
 import sys
 from loguru import logger
 
-from .utils_misc import is_interactive
+from .utils_misc import is_notebook
 
 
 def display_pretty_table_html(data: Dict) -> None:
@@ -108,7 +108,7 @@ def fprint(
         elif key_ignore is not None:
             processed_data = remove_keys(processed_data, key_ignore)
 
-        if is_interactive() or is_notebook:
+        if is_notebook() or is_notebook:
             display_pretty_table_html(processed_data)
             return
 

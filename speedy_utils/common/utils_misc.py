@@ -12,23 +12,23 @@ def mkdir_or_exist(dir_name: str) -> None:
     """Create a directory if it doesn't exist."""
     os.makedirs(dir_name, exist_ok=True)
 
+
 def flatten_list(list_of_lists: List[List[Any]]) -> List[Any]:
     """Flatten a list of lists into a single list."""
     return [item for sublist in list_of_lists for item in sublist]
+
 
 def get_arg_names(func: Callable) -> List[str]:
     """Retrieve argument names of a function."""
     return inspect.getfullargspec(func).args
 
 
-
-def is_interactive() -> bool:
-    """Check if the environment is interactive (e.g., Jupyter notebook)."""
+def is_notebook():
     try:
-        get_ipython()
-        return True
+        shell = get_ipython().__class__.__module__.split(".")[0]
+        return shell == "ipykernel"
     except NameError:
-        return len(sys.argv) == 1
+        return False
 
 
 def convert_to_builtin_python(input_data: Any) -> Any:
