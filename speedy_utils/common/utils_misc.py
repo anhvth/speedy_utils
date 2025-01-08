@@ -23,12 +23,16 @@ def get_arg_names(func: Callable) -> List[str]:
     return inspect.getfullargspec(func).args
 
 
-def is_notebook():
+def is_notebook() -> bool:
     try:
-        shell = get_ipython().__class__.__module__.split(".")[0]
-        return shell == "ipykernel"
+        if "get_ipython" in globals().keys():
+            get_ipython = globals()["get_ipython"]
+            shell = get_ipython().__class__.__name__
+            if shell == "ZMQInteractiveShell":
+                return True  # Jupyter notebook or qtconsole
+        return False  # Other type (?)
     except NameError:
-        return False
+        return False  # Probably standard Python interpreter
 
 
 def convert_to_builtin_python(input_data: Any) -> Any:
