@@ -23,6 +23,7 @@ def identify(x: Any) -> str:
     """Return an hex digest of the input."""
     return xxhash.xxh64(pickle.dumps(x), seed=0).hexdigest()
 
+
 def identify_uuid(x: Any) -> str:
     id = identify(x)
     return str(uuid.uuid5(uuid.NAMESPACE_DNS, id))
