@@ -1,15 +1,15 @@
 import inspect
+import os
 import threading
+import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import time
 from typing import Any, Callable, List, Tuple
 
 from loguru import logger
-from tqdm import tqdm
-
 from speedy_utils.common.utils_print import fprint
 from speedy_utils.multi_worker._handle_inputs import handle_inputs
+from tqdm import tqdm
 
 
 def _get_function_info(func: Callable) -> str:
@@ -21,7 +21,7 @@ def _get_function_info(func: Callable) -> str:
         file_line = f"{source_file}:{source_line}"
     except (TypeError, OSError):
         file_line = "Unknown location"
-    return f"Function: `{fn_name}` at {file_line}"
+    return f"Function: `{fn_name}"
 
 
 class RunErr(Exception):
@@ -85,12 +85,17 @@ def multi_thread(
     verbose: bool = None,
     desc: str = None,
     stop_on_error: bool = False,
+    filter_none: bool = False,
 ) -> List[Any]:
+    if bool(int(os.getenv("SPEEDY_DEBUG", "0"))):
+        logger.debug("Running in debug mode, setting workers to 1")
+        workers = 1
+    if workers <= 1:
+        return [func(inp) for inp in tqdm(orig_inputs, desc="Single thread")]
     """Execute tasks in parallel using multiple threads."""
     inputs = handle_inputs(func, orig_inputs)
     verbose = len(inputs) > 1000 if verbose is None else verbose
-    desc = "Multi-thread, " + _get_function_info(func) if desc is None else desc
-    desc = desc[:30] + ".."
+    desc = "MT," + _get_function_info(func) if desc is None else desc
 
     stop_event = threading.Event()
     results = [None] * len(inputs)
@@ -138,5 +143,6 @@ def multi_thread(
         if verbose:
             print("Multi thread results:")
             fprint(result_counter, "Result counter", is_notebook=False)
-
+    if filter_none:
+        results = [r for r in results if r is not None]
     return results
