@@ -11,7 +11,6 @@ from .common.utils_cache import (
     memoize,
     memoize_method,
     memoize_v2,
-    flat_list,,
 )
 from .common.utils_io import (
     dump_json_or_pickle,
