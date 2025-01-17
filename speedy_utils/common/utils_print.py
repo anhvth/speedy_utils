@@ -50,11 +50,17 @@ def fprint(
     table_format: str = "grid",
     str_wrap_width: int = 80,
     grep=None,
-    is_notebook=True,
-) -> None:
+    is_notebook=None,
+    f=print,
+) -> None | str:
     """
     Pretty print structured data.
     """
+    from speedy_utils import is_notebook as is_interactive
+
+    # is_notebook = is_notebook or is_interactive()
+    if is_notebook is None:
+        is_notebook = is_interactive()
     if hasattr(input_data, "toDict"):
         input_data = input_data.toDict()
     if hasattr(input_data, "to_dict"):
@@ -108,13 +114,13 @@ def fprint(
         elif key_ignore is not None:
             processed_data = remove_keys(processed_data, key_ignore)
 
-        if is_notebook() or is_notebook:
+        if is_notebook:
             display_pretty_table_html(processed_data)
             return
 
     if isinstance(processed_data, dict):
         table = [[k, v] for k, v in processed_data.items()]
-        print(
+        f(
             tabulate(
                 table,
                 headers=["Key", "Value"],
@@ -124,7 +130,9 @@ def fprint(
         )
     elif isinstance(processed_data, str):
         wrapped_text = textwrap.fill(processed_data, width=str_wrap_width)
-        print(wrapped_text)
+        f(wrapped_text)
+    elif isinstance(processed_data, list):
+        f(tabulate(processed_data, tablefmt=table_format))
     else:
         printer = pprint.PrettyPrinter(width=max_width, indent=indent, depth=depth)
         printer.pprint(processed_data)
@@ -155,7 +163,9 @@ def print_table(data: Any) -> None:
             rows = list(data.items())
             return tabulate(rows, headers=headers)
 
-        raise TypeError("Input data must be a list of dictionaries, a dictionary, or a JSON string")
+        raise TypeError(
+            "Input data must be a list of dictionaries, a dictionary, or a JSON string"
+        )
 
     table = __get_table(data)
     print(table)
@@ -199,8 +209,12 @@ def setup_logger(level: str = "INFO", enable_grep: str = "", disable_grep: str =
     logger.remove()
 
     # Grep pattern handling
-    enable_patterns = [pattern.strip() for pattern in enable_grep.split(",") if pattern.strip()]
-    disable_patterns = [pattern.strip() for pattern in disable_grep.split(",") if pattern.strip()]
+    enable_patterns = [
+        pattern.strip() for pattern in enable_grep.split(",") if pattern.strip()
+    ]
+    disable_patterns = [
+        pattern.strip() for pattern in disable_grep.split(",") if pattern.strip()
+    ]
 
     def log_filter(record):
         """
@@ -210,9 +224,13 @@ def setup_logger(level: str = "INFO", enable_grep: str = "", disable_grep: str =
         log_message = f"{record['file']}:{record['line']} ({record['function']})"
 
         # Check if the log should be enabled or disabled based on the grep patterns
-        if enable_patterns and not any(re.search(pattern, log_message) for pattern in enable_patterns):
+        if enable_patterns and not any(
+            re.search(pattern, log_message) for pattern in enable_patterns
+        ):
             return False  # If enable_grep is provided, log only if it matches
-        if disable_patterns and any(re.search(pattern, log_message) for pattern in disable_patterns):
+        if disable_patterns and any(
+            re.search(pattern, log_message) for pattern in disable_patterns
+        ):
             return False  # If disable_grep matches, don't log
 
         # Return True if the log level is >= the set level
@@ -222,7 +240,10 @@ def setup_logger(level: str = "INFO", enable_grep: str = "", disable_grep: str =
     logger.add(
         sys.stdout,
         colorize=True,
-        format=("<level>{level: <8}</level> | <cyan>{file}:{line} ({function})</cyan> - " "<level>{message}</level>"),
+        format=(
+            "<level>{level: <8}</level> | <cyan>{file}:{line} ({function})</cyan> - "
+            "<level>{message}</level>"
+        ),
         filter=log_filter,
     )
 

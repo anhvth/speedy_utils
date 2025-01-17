@@ -87,15 +87,20 @@ def multi_thread(
     stop_on_error: bool = False,
     filter_none: bool = False,
 ) -> List[Any]:
+    """Execute tasks in parallel using multiple threads."""
+    if desc:
+        verbose = True
+    else:
+        verbose = False
     if bool(int(os.getenv("SPEEDY_DEBUG", "0"))):
         logger.debug("Running in debug mode, setting workers to 1")
         workers = 1
     if workers <= 1:
         return [func(inp) for inp in tqdm(orig_inputs, desc="Single thread")]
-    """Execute tasks in parallel using multiple threads."""
+
     inputs = handle_inputs(func, orig_inputs)
     verbose = len(inputs) > 1000 if verbose is None else verbose
-    desc = "MT," + _get_function_info(func) if desc is None else desc
+    # desc = "MT," + _get_function_info(func) if desc is None else desc
 
     stop_event = threading.Event()
     results = [None] * len(inputs)
