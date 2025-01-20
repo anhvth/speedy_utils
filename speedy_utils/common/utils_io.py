@@ -31,7 +31,12 @@ def dump_json_or_pickle(
     mkdir_or_exist(osp.abspath(os.path.dirname(osp.abspath(fname))))
     if fname.endswith(".json"):
         with open(fname, "w", encoding="utf-8") as f:
-            json.dump(obj, f, ensure_ascii=ensure_ascii, indent=indent)
+            try:
+                json.dump(obj, f, ensure_ascii=ensure_ascii, indent=indent)
+            # TypeError: Object of type datetime is not JSON serializable
+            except TypeError:
+                print("Error: Object of type datetime is not JSON serializable", str(obj)[:1000])
+                raise
     elif fname.endswith(".jsonl"):
         dump_jsonl(obj, fname)
     elif fname.endswith(".pkl"):
