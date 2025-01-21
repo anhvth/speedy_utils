@@ -90,8 +90,6 @@ def multi_thread(
     """Execute tasks in parallel using multiple threads."""
     if desc:
         verbose = True
-    else:
-        verbose = False
     if bool(int(os.getenv("SPEEDY_DEBUG", "0"))):
         logger.debug("Running in debug mode, setting workers to 1")
         workers = 1
