@@ -28,7 +28,6 @@ def identify_uuid(x: Any) -> str:
     id = identify(x)
     return str(uuid.uuid5(uuid.NAMESPACE_DNS, id))
 
-
 def memoize(
     func: Callable,
     ignore_self: bool = True,
@@ -36,45 +35,73 @@ def memoize(
     cache_type: str = ".pkl",
     verbose: bool = False,
     cache_key: Optional[str] = None,
+    on_memory: bool = True,
 ) -> Callable:
-    """Cache result of function call on disk."""
+    """
+    Cache result of function call on disk. If on_memory is True,
+    also cache in memory by using an LRU or custom memoization approach.
+
+    NOTE: This version preserves the original function's signature.
+    """
+    # Ensure we are dealing with supported cache types
     assert cache_type in [".pkl", ".json"]
+
+    # If environment disables caching, just return the function as-is.
     if os.environ.get("AV_MEMOIZE_DISABLE", "0") == "1":
-        logger.opt(depth=2).info("Memoize is disabled")
+        print("Memoize is disabled by AV_MEMOIZE_DISABLE")
         return func
 
-    @functools.wraps(func)
-    def memoized_func(*args, **kwargs):
+    @functools.wraps(func)   # Wrap the inner function to keep metadata
+    def disk_cache_wrapper(*args, **kwargs):
+        """
+        Wraps the original function to add disk-based caching.
+        """
         try:
             arg_names = inspect.getfullargspec(func).args
+            # For hashing, also include the function's source code to catch changes
             func_source = inspect.getsource(func).replace(" ", "")
-            if cache_key is not None:
-                logger.opt(depth=2).info(f"Use cache_key={kwargs[cache_key]}")
+
+            # Allow custom cache key usage (e.g. from a kwarg), else default
+            if cache_key is not None and cache_key in kwargs:
                 fid = [func_source, kwargs[cache_key]]
-                func_id = identify(fid)
             elif len(arg_names) > 0 and arg_names[0] == "self" and ignore_self:
-                func_id = identify((func_source, args[1:], kwargs))
+                fid = (func_source, args[1:], kwargs)
             else:
-                func_id = identify((func_source, args, kwargs))
+                fid = (func_source, args, kwargs)
+
+            func_id = identify(fid)
 
             cache_path = osp.join(
                 cache_dir, "funcs", func.__name__, f"{func_id}{cache_type}"
             )
             mkdir_or_exist(os.path.dirname(cache_path))
+
             if osp.exists(cache_path):
                 if verbose:
-                    logger.opt(depth=2).info(f"Load from cache file: {cache_path}")
+                    print(f"[memoize] Loading from cache: {cache_path}")
                 result = load_json_or_pickle(cache_path)
             else:
                 result = func(*args, **kwargs)
                 dump_json_or_pickle(result, cache_path)
+
             return result
+
         except Exception as e:
             traceback.print_exc()
-            logger.opt(depth=2).warning(f"Exception: {e}, using default function call")
+            print(f"[memoize] Exception: {e}, falling back to original function call.")
             return func(*args, **kwargs)
 
-    return memoized_func
+    if on_memory:
+        # If also caching in memory, wrap the disk_cache_wrapper with an in-memory layer
+        # then re-wrap metadata from the *original* func:
+        in_memory_cached = imemoize(disk_cache_wrapper)
+        @functools.wraps(func)
+        def final_wrapper(*args, **kwargs):
+            return in_memory_cached(*args, **kwargs)
+        return final_wrapper
+    else:
+        # Otherwise, return disk_cache_wrapper directly (already @wraps(func))
+        return disk_cache_wrapper
 
 
 def imemoize(func: Callable) -> Callable:

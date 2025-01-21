@@ -1,38 +1,52 @@
+import functools
+import inspect
 from collections.abc import Iterable
 from typing import Any, Callable, Dict, List, Union
-
 import pandas as pd
 
 # Example object
-my_object = range(3)
+
+
+def _get_original_func(func):
+    """
+    Recursively unwrap a decorated function to find the actual
+    original function object.
+    """
+    while hasattr(func, "__wrapped__"):
+        func = func.__wrapped__
+    return func
 
 
 def handle_inputs(
     f: Callable, inputs: Union[List[Dict[str, Any]], List[Any], pd.DataFrame]
 ) -> List[Dict[str, Any]]:
-    if isinstance(inputs, range | list | tuple):
+    # 1. Unwrap in case f is decorated (e.g., by @memoize).
+    real_func = _get_original_func(f)
+
+    # 2. Count parameters with inspect.signature.
+    #    This handles normal or annotated arguments, etc.
+    sig = inspect.signature(real_func)
+    num_params = len(sig.parameters)
+
+    # Convert certain input types to list to unify processing
+    if isinstance(inputs, (range, list, tuple)):
         inputs = list(inputs)
 
-    # Check if the object is iterable)
-    if f.__code__.co_argcount == 1:
+    # 3. If exactly 1 parameter, we do the single-arg logic:
+    if num_params == 1:
+        # If the user passed a dataframe, break it into rows
         if isinstance(inputs, pd.DataFrame):
             inputs = [r for _, r in inputs.iterrows()]
-        assert isinstance(inputs, list), "inputs must be a list"
-        arg_name = f.__code__.co_varnames[0]
+
+        # For a single-arg function, turn each item into a dict: {arg_name: item}
+        # so we can later call func(**inp)
+        arg_name = next(iter(sig.parameters))  # name of the single parameter
         inputs = [{arg_name: input_} for input_ in inputs]
+        return inputs
+
     else:
+        # If you really only plan to support single-arg calls, raise an error.
+        # Or you could implement multi-arg logic here if desired.
         raise NotImplementedError(
             "Function has more than one argument, not implemented yet."
         )
-        if isinstance(inputs, pd.DataFrame):
-            # logger.debug("Converting DataFrame to list of dictionaries...")
-            inputs = inputs.to_dict("records")
-        elif isinstance(inputs[0], (list, tuple)):
-            args_names = f.__code__.co_varnames[: f.__code__.co_argcount]
-            inputs = [
-                {argname: i for argname, i in zip(args_names, item)} for item in inputs
-            ]
-
-        assert isinstance(inputs, list), "inputs must be a list"
-
-    return inputs
