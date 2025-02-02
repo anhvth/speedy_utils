@@ -28,6 +28,7 @@ def identify_uuid(x: Any) -> str:
     id = identify(x)
     return str(uuid.uuid5(uuid.NAMESPACE_DNS, id))
 
+
 def memoize(
     func: Callable,
     ignore_self: bool = True,
@@ -35,10 +36,8 @@ def memoize(
     cache_type: str = ".pkl",
     verbose: bool = False,
     cache_key: Optional[str] = None,
-    on_memory: bool = True,
 ) -> Callable:
     """
-    Cache result of function call on disk. If on_memory is True,
     also cache in memory by using an LRU or custom memoization approach.
 
     NOTE: This version preserves the original function's signature.
@@ -51,7 +50,7 @@ def memoize(
         print("Memoize is disabled by AV_MEMOIZE_DISABLE")
         return func
 
-    @functools.wraps(func)   # Wrap the inner function to keep metadata
+    @functools.wraps(func)  # Wrap the inner function to keep metadata
     def disk_cache_wrapper(*args, **kwargs):
         """
         Wraps the original function to add disk-based caching.
@@ -91,17 +90,17 @@ def memoize(
             print(f"[memoize] Exception: {e}, falling back to original function call.")
             return func(*args, **kwargs)
 
-    if on_memory:
-        # If also caching in memory, wrap the disk_cache_wrapper with an in-memory layer
-        # then re-wrap metadata from the *original* func:
-        in_memory_cached = imemoize(disk_cache_wrapper)
-        @functools.wraps(func)
-        def final_wrapper(*args, **kwargs):
-            return in_memory_cached(*args, **kwargs)
-        return final_wrapper
-    else:
-        # Otherwise, return disk_cache_wrapper directly (already @wraps(func))
-        return disk_cache_wrapper
+    # if on_memory:
+    #     # If also caching in memory, wrap the disk_cache_wrapper with an in-memory layer
+    #     # then re-wrap metadata from the *original* func:
+    #     in_memory_cached = imemoize(disk_cache_wrapper)
+    #     @functools.wraps(func)
+    #     def final_wrapper(*args, **kwargs):
+    #         return in_memory_cached(*args, **kwargs)
+    #     return final_wrapper
+    # else:
+    #     # Otherwise, return disk_cache_wrapper directly (already @wraps(func))
+    return disk_cache_wrapper
 
 
 def imemoize(func: Callable) -> Callable:
