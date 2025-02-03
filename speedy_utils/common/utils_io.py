@@ -7,7 +7,7 @@ from pathlib import Path
 import pickle
 from glob import glob
 from typing import Any, List, Dict, Union
-
+import time
 from .utils_misc import mkdir_or_exist
 
 
@@ -35,7 +35,10 @@ def dump_json_or_pickle(
                 json.dump(obj, f, ensure_ascii=ensure_ascii, indent=indent)
             # TypeError: Object of type datetime is not JSON serializable
             except TypeError:
-                print("Error: Object of type datetime is not JSON serializable", str(obj)[:1000])
+                print(
+                    "Error: Object of type datetime is not JSON serializable",
+                    str(obj)[:1000],
+                )
                 raise
     elif fname.endswith(".jsonl"):
         dump_jsonl(obj, fname)
@@ -46,7 +49,7 @@ def dump_json_or_pickle(
         raise NotImplementedError(f"File type {fname} not supported")
 
 
-def load_json_or_pickle(fname: str) -> Any:
+def load_json_or_pickle(fname: str, counter=0) -> Any:
     """
     Load an object from a file, supporting both JSON and pickle formats.
     """
@@ -54,16 +57,26 @@ def load_json_or_pickle(fname: str) -> Any:
         with open(fname, "r", encoding="utf-8") as f:
             return json.load(f)
     else:
-        with open(fname, "rb") as f:
-            return pickle.load(f)
+        try:
+            with open(fname, "rb") as f:
+                return pickle.load(f)
+        # EOFError: Ran out of input
+        except EOFError:
+            time.sleep(1)
+            if counter > 5:
+                print("Error: Ran out of input", fname)
+                raise
+            return load_json_or_pickle(fname, counter + 1)
+        except Exception as e:
+            raise ValueError(f"Error {e} while loading {fname}") from e
+
 
 def load_jsonl(path):
     lines = open(path, "r", encoding="utf-8").read().splitlines()
     return [json.loads(line) for line in lines]
 
-def load_by_ext(
-    fname: Union[str, List[str]], do_memoize: bool = False
-) -> Any:
+
+def load_by_ext(fname: Union[str, List[str]], do_memoize: bool = False) -> Any:
     """
     Load data based on file extension.
     """
@@ -73,8 +86,9 @@ def load_by_ext(
         memoize,
     )  # Adjust import based on your actual multi_worker module
 
-    from speedy_utils import multi_process  # Ensure multi_worker is correctly referenced
-    
+    from speedy_utils import (
+        multi_process,
+    )  # Ensure multi_worker is correctly referenced
 
     try:
         if isinstance(fname, str) and "*" in fname:
