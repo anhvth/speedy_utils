@@ -36,6 +36,11 @@ def fast_serialize(x: Any) -> bytes:
         return pickle.dumps(x, protocol=pickle.HIGHEST_PROTOCOL)
 
 
+def identify(x: Any) -> str:
+    """Return an hex digest of the input."""
+    return xxhash.xxh64_hexdigest(fast_serialize(x), seed=0)
+
+
 def identify_uuid(x: Any) -> str:
     data = fast_serialize(x)
     # Directly compute a 128-bit hash.
