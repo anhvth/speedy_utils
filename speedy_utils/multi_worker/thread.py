@@ -5,23 +5,50 @@ import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable, List, Tuple
-
 from loguru import logger
 from speedy_utils.common.utils_print import fprint
 from speedy_utils.multi_worker._handle_inputs import handle_inputs
 from tqdm import tqdm
+import signal
+import functools
 
 
-def _get_function_info(func: Callable) -> str:
-    """Get function name and location information."""
-    fn_name = func.__name__
-    try:
-        source_file = inspect.getsourcefile(func) or "<string>"
-        source_line = inspect.getsourcelines(func)[1]
-        file_line = f"{source_file}:{source_line}"
-    except (TypeError, OSError):
-        file_line = "Unknown location"
-    return f"Function: `{fn_name}"
+class TimeoutError(Exception):
+    """Custom exception to be raised when a function times out."""
+
+    pass
+
+
+def timeout(t=30, error_message="Function call timed out"):
+    """
+    Decorator that raises a TimeoutError if the decorated function does not finish within 't' seconds.
+
+    Parameters:
+    - t: Timeout duration in seconds (default 30)
+    - error_message: Message to include in the TimeoutError (default "Function call timed out")
+    """
+
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            # Define the handler for the SIGALRM signal.
+            def _handle_timeout(signum, frame):
+                raise TimeoutError(error_message)
+
+            # Set the SIGALRM signal handler to our timeout handler.
+            signal.signal(signal.SIGALRM, _handle_timeout)
+            # Schedule the SIGALRM signal to be sent after t seconds.
+            signal.alarm(t)
+            try:
+                result = func(*args, **kwargs)
+            finally:
+                # Cancel the alarm so it doesn't trigger if the function returned in time.
+                signal.alarm(0)
+            return result
+
+        return wrapper
+
+    return decorator
 
 
 class RunErr(Exception):
@@ -150,6 +177,37 @@ def multi_thread(
 
     log_fn = logger.info if verbose else (lambda x: None)
 
+    __execute_tasks_in_parallel(
+        func,
+        workers,
+        verbose,
+        desc,
+        stop_on_error,
+        inputs,
+        stop_event,
+        results,
+        result_counter,
+        log_fn,
+    )
+
+    if filter_none:
+        results = [r for r in results if r is not None]
+
+    return results
+
+
+def __execute_tasks_in_parallel(
+    func,
+    workers,
+    verbose,
+    desc,
+    stop_on_error,
+    inputs,
+    stop_event,
+    results,
+    result_counter,
+    log_fn,
+):
     try:
         with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = [
@@ -197,10 +255,4 @@ def multi_thread(
 
     finally:
         if verbose:
-            print("Multi-thread results:")
             fprint(result_counter, "Result counter", is_notebook=False)
-
-    if filter_none:
-        results = [r for r in results if r is not None]
-
-    return results

@@ -19,14 +19,29 @@ SPEED_CACHE_DIR = osp.join(osp.expanduser("~"), ".cache/av")
 ICACHE: Dict[str, Any] = {}
 
 
-def identify(x: Any) -> str:
-    """Return an hex digest of the input."""
-    return xxhash.xxh64(pickle.dumps(x), seed=0).hexdigest()
+import pickle
+import uuid
+import xxhash
+import json
+from typing import Any
+
+
+def fast_serialize(x: Any) -> bytes:
+    try:
+        # If x is JSON-serializable, use JSON which can be faster than pickle.
+        # The sort_keys=True ensures that the output is consistent.
+        return json.dumps(x, sort_keys=True).encode("utf-8")
+    except (TypeError, ValueError):
+        # Fallback to pickle with the highest protocol for speed.
+        return pickle.dumps(x, protocol=pickle.HIGHEST_PROTOCOL)
 
 
 def identify_uuid(x: Any) -> str:
-    id = identify(x)
-    return str(uuid.uuid5(uuid.NAMESPACE_DNS, id))
+    data = fast_serialize(x)
+    # Directly compute a 128-bit hash.
+    hash_obj = xxhash.xxh128(data, seed=0)
+    # Convert the 128-bit digest directly into a UUID.
+    return str(uuid.UUID(bytes=hash_obj.digest()))
 
 
 def memoize(
