@@ -110,16 +110,6 @@ def memoize(
             print(f"[memoize] Exception: {e}, falling back to original function call.")
             return func(*args, **kwargs)
 
-    # if on_memory:
-    #     # If also caching in memory, wrap the disk_cache_wrapper with an in-memory layer
-    #     # then re-wrap metadata from the *original* func:
-    #     in_memory_cached = imemoize(disk_cache_wrapper)
-    #     @functools.wraps(func)
-    #     def final_wrapper(*args, **kwargs):
-    #         return in_memory_cached(*args, **kwargs)
-    #     return final_wrapper
-    # else:
-    #     # Otherwise, return disk_cache_wrapper directly (already @wraps(func))
     return disk_cache_wrapper
 
 
