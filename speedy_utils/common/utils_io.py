@@ -65,6 +65,7 @@ def load_json_or_pickle(fname: str, counter=0) -> Any:
             time.sleep(1)
             if counter > 5:
                 print("Error: Ran out of input", fname)
+                os.remove(fname)
                 raise
             return load_json_or_pickle(fname, counter + 1)
         except Exception as e:
