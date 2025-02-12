@@ -155,9 +155,9 @@ def multi_thread(
     """
     if do_memoize:
         # apply memoize on the function, need to make sure the method
-        from speedy_utils import _memoize
+        from speedy_utils import memoize
 
-        func = _memoize(func)
+        func = memoize(func)
     if verbose is None:
         # Default verbosity based on whether a desc is provided
         verbose = bool(desc)
