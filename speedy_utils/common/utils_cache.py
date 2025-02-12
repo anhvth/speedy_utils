@@ -15,6 +15,13 @@ from .utils_misc import mkdir_or_exist
 
 SPEED_CACHE_DIR = osp.join(osp.expanduser("~"), ".cache/av")
 LRU_MEM_CACHE = cachetools.LRUCache(maxsize=128_000)
+from threading import Lock
+
+thread_locker = Lock()
+
+# Add two locks for thread-safe cache access
+disk_lock = Lock()
+mem_lock = Lock()
 
 
 def fast_serialize(x: Any) -> bytes:
@@ -70,27 +77,30 @@ def _compute_func_id(func, args, kwargs, ignore_self, cache_key, keys):
 def _disk_memoize(func, keys, cache_dir, ignore_self, verbose, cache_key):
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        func_source, sub_dir, key_id = _compute_func_id(
-            func, args, kwargs, ignore_self, cache_key, keys
-        )
+        # Compute cache path as before
+        func_source, sub_dir, key_id = _compute_func_id(func, args, kwargs, ignore_self, cache_key, keys)
         if func_source is None:
             return func(*args, **kwargs)
         if sub_dir == "funcs":
             cache_path = osp.join(cache_dir, sub_dir, func.__name__, key_id)
-            mkdir_or_exist(osp.dirname(cache_path))
         else:
             cache_path = osp.join(cache_dir, sub_dir, key_id)
-            mkdir_or_exist(osp.dirname(cache_path))
-
-        if osp.exists(cache_path):
-            logger.debug(f"Cache HIT for {func.__name__}, key={cache_path}")
-            return load_json_or_pickle(cache_path)
-
+        mkdir_or_exist(osp.dirname(cache_path))
+        
+        # First check with disk lock
+        with disk_lock:
+            if osp.exists(cache_path):
+                logger.debug(f"Cache HIT for {func.__name__}, key={cache_path}")
+                return load_json_or_pickle(cache_path)
+        
         result = func(*args, **kwargs)
-        logger.debug(f"Cache MISS for {func.__name__}, key={cache_path}")
-        dump_json_or_pickle(result, cache_path)
+        
+        # Write result under disk lock to avoid race conditions
+        with disk_lock:
+            if not osp.exists(cache_path):
+                logger.debug(f"Cache MISS for {func.__name__}, key={cache_path}")
+                dump_json_or_pickle(result, cache_path)
         return result
-
     return wrapper
 
 
@@ -98,66 +108,70 @@ def _memory_memoize(func, size, keys, ignore_self, cache_key):
     global LRU_MEM_CACHE
     if LRU_MEM_CACHE.maxsize != size:
         LRU_MEM_CACHE = cachetools.LRUCache(maxsize=size)
-
+    
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        func_source, sub_dir, key_id = _compute_func_id(
-            func, args, kwargs, ignore_self, cache_key, keys
-        )
+        func_source, sub_dir, key_id = _compute_func_id(func, args, kwargs, ignore_self, cache_key, keys)
         if func_source is None:
             return func(*args, **kwargs)
         name = identify((func_source, sub_dir, key_id))
-
+        
         if not hasattr(func, "_mem_cache"):
             func._mem_cache = LRU_MEM_CACHE
-        if name in func._mem_cache:
-            logger.debug(f"Cache HIT (memory) for {func.__name__}, key={name}")
-            return func._mem_cache[name]
-
-        logger.debug(f"Cache MISS for {func.__name__}, key={name}")
+        
+        with mem_lock:
+            if name in func._mem_cache:
+                logger.debug(f"Cache HIT (memory) for {func.__name__}, key={name}")
+                return func._mem_cache[name]
+        
         result = func(*args, **kwargs)
-        func._mem_cache[name] = result
+        
+        with mem_lock:
+            if name not in func._mem_cache:
+                func._mem_cache[name] = result
         return result
-
     return wrapper
 
 
 def _both_memoize(func, keys, cache_dir, ignore_self, verbose, cache_key):
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        func_source, sub_dir, key_id = _compute_func_id(
-            func, args, kwargs, ignore_self, cache_key, keys
-        )
+        func_source, sub_dir, key_id = _compute_func_id(func, args, kwargs, ignore_self, cache_key, keys)
         if func_source is None:
             return func(*args, **kwargs)
-
+        
         mem_key = identify((func_source, sub_dir, key_id))
         if not hasattr(func, "_mem_cache"):
             func._mem_cache = LRU_MEM_CACHE
 
-        if mem_key in func._mem_cache:
-            logger.debug(f"Cache HIT (memory) for {func.__name__}, key={mem_key}")
-            return func._mem_cache[mem_key]
+        with mem_lock:
+            if mem_key in func._mem_cache:
+                logger.debug(f"Cache HIT (memory) for {func.__name__}, key={mem_key}")
+                return func._mem_cache[mem_key]
 
         if sub_dir == "funcs":
             cache_path = osp.join(cache_dir, sub_dir, func.__name__, key_id)
-            mkdir_or_exist(osp.dirname(cache_path))
         else:
             cache_path = osp.join(cache_dir, sub_dir, key_id)
-            mkdir_or_exist(osp.dirname(cache_path))
+        mkdir_or_exist(osp.dirname(cache_path))
+        
+        with disk_lock:
+            if osp.exists(cache_path):
+                logger.debug(f"Cache HIT (disk) for {func.__name__}, key={cache_path}")
+                result = load_json_or_pickle(cache_path)
+                with mem_lock:
+                    func._mem_cache[mem_key] = result
+                return result
 
-        if osp.exists(cache_path):
-            logger.debug(f"Cache HIT (disk) for {func.__name__}, key={cache_path}")
-            result = load_json_or_pickle(cache_path)
-            func._mem_cache[mem_key] = result
-            return result
-
-        logger.debug(f"Cache MISS for {func.__name__}, key={cache_path}")
         result = func(*args, **kwargs)
-        dump_json_or_pickle(result, cache_path)
-        func._mem_cache[mem_key] = result
+        
+        with disk_lock:
+            if not osp.exists(cache_path):
+                logger.debug(f"Cache MISS for {func.__name__}, key={cache_path}")
+                dump_json_or_pickle(result, cache_path)
+        with mem_lock:
+            func._mem_cache[mem_key] = result
         return result
-
     return wrapper
 
 
