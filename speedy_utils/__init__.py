@@ -2,15 +2,10 @@ from speedy_utils.common.dataclass_parser import ArgsParser
 from .common.clock import Clock, speedy_timer, timef
 from .common.generic import TaskDistributor
 from .common.utils_cache import (
-    ICACHE,
     SPEED_CACHE_DIR,
     identify,
     identify_uuid,
-    imemoize,
-    imemoize_v2,
     memoize,
-    memoize_method,
-    memoize_v2,
 )
 from .common.utils_io import (
     dump_json_or_pickle,
@@ -31,7 +26,7 @@ from .multi_worker.thread import multi_thread
 
 __all__ = [
     "SPEED_CACHE_DIR",
-    "ICACHE",
+    # "ICACHE",
     "mkdir_or_exist",
     "dump_jsonl",
     "dump_json_or_pickle",
@@ -40,20 +35,16 @@ __all__ = [
     "load_by_ext",
     "identify",
     "identify_uuid",
-    "memoize",
-    "imemoize",
-    "imemoize_v2",
     "flatten_list",
     "fprint",
     "get_arg_names",
-    "memoize_v2",
     "is_notebook",
     "print_table",
     "convert_to_builtin_python",
     "Clock",
     "multi_thread",
     "multi_process",
-    "memoize_method",
+    "memoize",
     "speedy_timer",
     "TaskDistributor",
     "setup_logger",

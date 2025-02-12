@@ -84,7 +84,7 @@ def load_by_ext(fname: Union[str, List[str]], do_memoize: bool = False) -> Any:
     if isinstance(fname, Path):
         fname = str(fname)
     from .utils_cache import (
-        memoize,
+        _memoize,
     )  # Adjust import based on your actual multi_worker module
 
     from speedy_utils import (
@@ -135,7 +135,7 @@ def load_by_ext(fname: Union[str, List[str]], do_memoize: bool = False) -> Any:
             raise NotImplementedError(f"File type {ext} not supported")
 
         if do_memoize:
-            load_fn = memoize(load_fn)
+            load_fn = _memoize(load_fn)
 
         return load_fn(fname)
     except Exception as e:
