@@ -144,7 +144,7 @@ def _both_memoize(func, keys, cache_dir, ignore_self, verbose, cache_key):
 
         with mem_lock:
             if mem_key in func._mem_cache:
-                logger.debug(f"Cache HIT (memory) for {func.__name__}, key={mem_key}")
+                # logger.debug(f"Cache HIT (memory) for {func.__name__}, key={mem_key}")
                 return func._mem_cache[mem_key]
 
         if sub_dir == "funcs":
@@ -155,7 +155,7 @@ def _both_memoize(func, keys, cache_dir, ignore_self, verbose, cache_key):
 
         with disk_lock:
             if osp.exists(cache_path):
-                logger.debug(f"Cache HIT (disk) for {func.__name__}, key={cache_path}")
+                # logger.debug(f"Cache HIT (disk) for {func.__name__}, key={cache_path}")
                 result = load_json_or_pickle(cache_path)
                 with mem_lock:
                     func._mem_cache[mem_key] = result
@@ -165,7 +165,7 @@ def _both_memoize(func, keys, cache_dir, ignore_self, verbose, cache_key):
 
         with disk_lock:
             if not osp.exists(cache_path):
-                logger.debug(f"Cache MISS for {func.__name__}, key={cache_path}")
+                # logger.debug(f"Cache MISS for {func.__name__}, key={cache_path}")
                 dump_json_or_pickle(result, cache_path)
         with mem_lock:
             func._mem_cache[mem_key] = result
