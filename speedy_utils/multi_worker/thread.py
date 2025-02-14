@@ -82,27 +82,27 @@ def _process_single_task(func: Callable, idx: int, inp: Any, stop_event: threadi
         return idx, RunErr(type(e).__name__, traceback.format_exc())
 
 
-def _handle_results(
-    future: Any,
-    results: List[Any],
-    stop_event: threading.Event,
-    stop_on_error: bool,
-    result_counter: defaultdict,
-    pbar: tqdm,
-) -> None:
-    """Handle the results from completed futures."""
-    idx, result_or_error = future.result()
-    results[idx] = result_or_error
+# def _handle_results(
+#     future: Any,
+#     results: List[Any],
+#     stop_event: threading.Event,
+#     stop_on_error: bool,
+#     result_counter: defaultdict,
+#     pbar: tqdm,
+# ) -> None:
+#     """Handle the results from completed futures."""
+#     idx, result_or_error = future.result()
+#     results[idx] = result_or_error
 
-    if isinstance(result_or_error, RunErr):
-        error_key = f"Error_{result_or_error.error_type}"
-        result_counter[error_key] += 1
-        if result_counter[error_key] == 1:
-            logger.error(f"First error of type {result_or_error.error_type}: {result_or_error.message}")
-        if stop_on_error:
-            stop_event.set()
-    else:
-        result_counter["SUCCESS"] += 1
+#     if isinstance(result_or_error, RunErr):
+#         error_key = f"Error_{result_or_error.error_type}"
+#         result_counter[error_key] += 1
+#         if result_counter[error_key] == 1:
+#             logger.error(f"First error of type {result_or_error.error_type}: {result_or_error.message}")
+#         if stop_on_error:
+#             stop_event.set()
+#     else:
+#         result_counter["SUCCESS"] += 1
 
 
 def multi_thread(
@@ -231,10 +231,10 @@ def __execute_tasks_in_parallel(
                     except KeyboardInterrupt:
                         # Catch manual interrupt quickly
                         logger.warning("Execution manually interrupted by user. Canceling tasks...")
-                        stop_event.set()
-                        for f in pending:
-                            f.cancel()
-                        raise
+                        # stop_event.set()
+                        # for f in pending:
+                        #     f.cancel()
+                        raise KeyboardInterrupt
 
                     # Handle the completed futures
                     for future in done:
@@ -270,6 +270,7 @@ def __execute_tasks_in_parallel(
 
     except Exception:
         log_fn(f"An error occurred during execution: {traceback.format_exc()}")
-    finally:
-        if verbose:
-            fprint(result_counter, "Result counter", is_notebook=False)
+    # finally:
+    #     pass
+        # if verbose:
+        #     fprint(result_counter, "Result counter", is_notebook=False)
