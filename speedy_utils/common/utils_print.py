@@ -56,6 +56,11 @@ def fprint(
     """
     Pretty print structured data.
     """
+    if isinstance(input_data, list):
+        for i, item in enumerate(input_data):
+            fprint(item, key_ignore, key_keep, max_width, indent, depth, table_format, str_wrap_width, grep, is_notebook, f)
+            print("\n" + "-" * 100 + "\n")
+
     from speedy_utils import is_notebook as is_interactive
 
     # is_notebook = is_notebook or is_interactive()
@@ -163,9 +168,7 @@ def print_table(data: Any) -> None:
             rows = list(data.items())
             return tabulate(rows, headers=headers)
 
-        raise TypeError(
-            "Input data must be a list of dictionaries, a dictionary, or a JSON string"
-        )
+        raise TypeError("Input data must be a list of dictionaries, a dictionary, or a JSON string")
 
     table = __get_table(data)
     print(table)
@@ -209,12 +212,8 @@ def setup_logger(level: str = "INFO", enable_grep: str = "", disable_grep: str =
     logger.remove()
 
     # Grep pattern handling
-    enable_patterns = [
-        pattern.strip() for pattern in enable_grep.split(",") if pattern.strip()
-    ]
-    disable_patterns = [
-        pattern.strip() for pattern in disable_grep.split(",") if pattern.strip()
-    ]
+    enable_patterns = [pattern.strip() for pattern in enable_grep.split(",") if pattern.strip()]
+    disable_patterns = [pattern.strip() for pattern in disable_grep.split(",") if pattern.strip()]
 
     def log_filter(record):
         """
@@ -224,13 +223,9 @@ def setup_logger(level: str = "INFO", enable_grep: str = "", disable_grep: str =
         log_message = f"{record['file']}:{record['line']} ({record['function']})"
 
         # Check if the log should be enabled or disabled based on the grep patterns
-        if enable_patterns and not any(
-            re.search(pattern, log_message) for pattern in enable_patterns
-        ):
+        if enable_patterns and not any(re.search(pattern, log_message) for pattern in enable_patterns):
             return False  # If enable_grep is provided, log only if it matches
-        if disable_patterns and any(
-            re.search(pattern, log_message) for pattern in disable_patterns
-        ):
+        if disable_patterns and any(re.search(pattern, log_message) for pattern in disable_patterns):
             return False  # If disable_grep matches, don't log
 
         # Return True if the log level is >= the set level
@@ -240,10 +235,7 @@ def setup_logger(level: str = "INFO", enable_grep: str = "", disable_grep: str =
     logger.add(
         sys.stdout,
         colorize=True,
-        format=(
-            "<level>{level: <8}</level> | <cyan>{file}:{line} ({function})</cyan> - "
-            "<level>{message}</level>"
-        ),
+        format=("<level>{level: <8}</level> | <cyan>{file}:{line} ({function})</cyan> - " "<level>{message}</level>"),
         filter=log_filter,
     )
 
