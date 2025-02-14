@@ -10,6 +10,7 @@ import os
 import os.path as osp
 import pickle
 import pprint
+import random
 import re
 import sys
 import textwrap
@@ -25,6 +26,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Callable, Dict, Generic, List, Literal, Optional, TypeVar, Union
 
+import numpy as np
 import pandas as pd
 import xxhash
 from IPython import get_ipython
@@ -33,9 +35,9 @@ from loguru import logger
 from openai import BaseModel
 from tabulate import tabulate
 from tqdm import tqdm
-import numpy as np
 
 __all__ = [
+    "random",
     "copy",
     "functools",
     "gc",
