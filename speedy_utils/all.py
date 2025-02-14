@@ -24,7 +24,7 @@ from glob import glob
 from multiprocessing import Pool
 from pathlib import Path
 from threading import Lock
-from typing import Any, Callable, Dict, Generic, List, Literal, Optional, TypeVar, Union
+from typing import *
 
 import numpy as np
 import pandas as pd
@@ -83,6 +83,6 @@ __all__ = [
     "np",
 ]
 from speedy_utils import *  # noqa: F403
-from speedy_utils import __all__ as all_speedy_utils
+import speedy_utils
 
-__all__ += all_speedy_utils
+__all__ += speedy_utils.__all__
