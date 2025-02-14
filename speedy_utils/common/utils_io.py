@@ -87,9 +87,6 @@ def load_by_ext(fname: Union[str, List[str]], do_memoize: bool = False) -> Any:
         memoize,
     )  # Adjust import based on your actual multi_worker module
 
-    from speedy_utils import (
-        multi_process,
-    )  # Ensure multi_worker is correctly referenced
 
     try:
         if isinstance(fname, str) and "*" in fname:

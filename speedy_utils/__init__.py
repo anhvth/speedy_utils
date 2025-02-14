@@ -1,4 +1,5 @@
 from speedy_utils.common.dataclass_parser import ArgsParser
+from speedy_utils.multi_worker.process import multi_process
 from .common.clock import Clock, speedy_timer, timef
 from .common.generic import TaskDistributor
 from .common.utils_cache import (
@@ -21,12 +22,12 @@ from .common.utils_misc import (
     mkdir_or_exist,
 )
 from .common.utils_print import fprint, print_table, setup_logger
-from .multi_worker.process import multi_process
+
 from .multi_worker.thread import multi_thread
 
 __all__ = [
     "SPEED_CACHE_DIR",
-    # "ICACHE",
+    "multi_process",
     "mkdir_or_exist",
     "dump_jsonl",
     "dump_json_or_pickle",
@@ -43,7 +44,6 @@ __all__ = [
     "convert_to_builtin_python",
     "Clock",
     "multi_thread",
-    "multi_process",
     "memoize",
     "speedy_timer",
     "TaskDistributor",
