@@ -99,6 +99,75 @@ class Result(List[Any]):
             logger.debug(f"Result at index {index} set to {value}")
 
 
+def _execute_tasks_in_parallel(
+    func: Callable[..., Any],
+    workers: int,
+    verbose: bool,
+    desc: Optional[str],
+    stop_on_error: bool,
+    inputs: List[Any],
+    stop_event: threading.Event,
+    results: List[Any],
+    result_counter: defaultdict,
+    max_task_seconds: Optional[int],
+) -> List[Any]:
+    """Spawn threads to execute tasks in parallel, updating a progress bar if requested."""
+    try:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            future_to_index = {}
+            futures = []
+            for i, inp in enumerate(inputs):
+                fut = executor.submit(
+                    _process_single_task, func, i, inp, stop_event, max_task_seconds
+                )
+                futures.append(fut)
+                future_to_index[fut] = i
+
+            pending = set(futures)
+            with tqdm(
+                total=len(futures),
+                desc=desc,
+                disable=not verbose,
+                ncols=88,
+                leave=verbose,
+            ) as pbar:
+                while pending and not stop_event.is_set():
+                    done, pending = wait(
+                        pending, timeout=0.1, return_when="FIRST_EXCEPTION"
+                    )
+                    completed_count = 0
+
+                    for future in done:
+                        idx = future_to_index[future]
+                        _, result_or_error = future.result()
+                        is_error = isinstance(result_or_error, RunErr)
+
+                        results[idx] = result_or_error
+                        completed_count += 1
+                        result_counter["SUCCESS"] += 1
+
+                        if is_error and stop_on_error:
+                            error_msg = f"Error at index {idx}: {result_or_error}"
+                            logger.error(f"{error_msg}")
+                            stop_event.set()
+                            for fut in pending:
+                                fut.cancel()
+                            break
+
+                    if completed_count > 0:
+                        pbar.set_postfix(dict(result_counter))
+                        pbar.update(completed_count)
+        logger.debug(f"All tasks completed. Results: {str(results)[:100]} ...")
+    except:
+        logger.debug("An error occurred during task execution.")
+    finally:
+        # Clear references to help garbage collection
+        logger.debug("Clearing references to futures and indices.")
+        futures.clear()
+        future_to_index.clear()
+        gc.collect()
+
+
 def multi_thread(
     func: Callable[..., Any],
     orig_inputs: List[Any],
@@ -108,7 +177,7 @@ def multi_thread(
     stop_on_error: bool = False,
     filter_none: bool = False,
     do_memoize: bool = False,
-    share_across_processes: bool = True,
+    share_across_processes: bool = False,
     max_task_seconds: Optional[int] = None,
     **kwargs: Any,
 ) -> List[Any]:
@@ -143,6 +212,12 @@ def multi_thread(
     List[Any]
         List of results in the original order. May exclude None if `filter_none=True`.
     """
+
+    from speedy_utils import is_notebook as is_interactive
+
+    if is_interactive():
+        share_across_processes = True
+
     if "n_threads" in kwargs:
         logger.warning(
             "The 'n_threads' argument is deprecated. Please use 'workers' instead."
@@ -180,8 +255,11 @@ def multi_thread(
         shared_result_list: Result = Result([None] * len(inputs))
 
     result_counter = defaultdict(int)
-
-    process = _execute_tasks_in_parallel(
+    if is_interactive():
+        fn = threaded(process=True)(_execute_tasks_in_parallel)
+    else:
+        fn = _execute_tasks_in_parallel
+    process = fn(
         func,
         workers,
         verbose,
@@ -195,13 +273,14 @@ def multi_thread(
     )
 
     # Wait for the background process to finish
-    while process.is_alive():
-        try:
-            time.sleep(0.1)
-        except KeyboardInterrupt:
-            logger.warning("Keyboard interrupt detected. Stopping execution.")
-            stop_event.set()
-            break
+    if is_interactive():
+        while process.is_alive():
+            try:
+                time.sleep(0.1)
+            except KeyboardInterrupt:
+                logger.warning("Keyboard interrupt detected. Stopping execution.")
+                stop_event.set()
+                break
 
     # Optionally filter out None results
     final_results = (
@@ -217,73 +296,3 @@ def multi_thread(
     gc.collect()  # Force a garbage collection sweep
 
     return final_results
-
-
-@threaded(process=True)
-def _execute_tasks_in_parallel(
-    func: Callable[..., Any],
-    workers: int,
-    verbose: bool,
-    desc: Optional[str],
-    stop_on_error: bool,
-    inputs: List[Any],
-    stop_event: threading.Event,
-    results: List[Any],
-    result_counter: defaultdict,
-    max_task_seconds: Optional[int],
-) -> List[Any]:
-    """Spawn threads to execute tasks in parallel, updating a progress bar if requested."""
-    try:
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            future_to_index = {}
-            futures = []
-            for i, inp in enumerate(inputs):
-                fut = executor.submit(
-                    _process_single_task, func, i, inp, stop_event, max_task_seconds
-                )
-                futures.append(fut)
-                future_to_index[fut] = i
-
-            pending = set(futures)
-            with tqdm(
-                total=len(futures),
-                desc=desc,
-                disable=not verbose,
-                ncols=120,
-                leave=verbose,
-            ) as pbar:
-                while pending and not stop_event.is_set():
-                    done, pending = wait(
-                        pending, timeout=0.1, return_when="FIRST_EXCEPTION"
-                    )
-                    completed_count = 0
-
-                    for future in done:
-                        idx = future_to_index[future]
-                        _, result_or_error = future.result()
-                        is_error = isinstance(result_or_error, RunErr)
-
-                        results[idx] = result_or_error
-                        completed_count += 1
-                        result_counter["SUCCESS"] += 1
-
-                        if is_error and stop_on_error:
-                            error_msg = f"Error at index {idx}: {result_or_error}"
-                            logger.error(f"{error_msg}")
-                            stop_event.set()
-                            for fut in pending:
-                                fut.cancel()
-                            break
-
-                    if completed_count > 0:
-                        pbar.set_postfix(dict(result_counter))
-                        pbar.update(completed_count)
-        logger.debug(f"All tasks completed. Results: {str(results)[:100]} ...")
-    except FuturesTimeoutError:
-        logger.error("Timeout error occurred.")
-        stop_event.set()
-    finally:
-        # Clear references to help garbage collection
-        futures.clear()
-        future_to_index.clear()
-        gc.collect()
