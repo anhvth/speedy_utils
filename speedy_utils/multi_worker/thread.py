@@ -150,7 +150,7 @@ def _execute_tasks_in_parallel(
                         if is_error:
                             has_warned = True
                             error_msg = f"Error at index {idx}: {result_or_error}"
-                            logger.error(f"{error_msg}")
+                            logger.opt(1).error(f"{error_msg}")
                             if stop_on_error:
                                 stop_event.set()
                                 for fut in pending:
@@ -160,12 +160,14 @@ def _execute_tasks_in_parallel(
                     if completed_count > 0:
                         pbar.set_postfix(dict(result_counter))
                         pbar.update(completed_count)
-                        
+
         if has_warned:
             logger.warning("Some tasks did not complete.")
-        logger.debug(f"All tasks completed. Results: {str(results)[:100]} ...")
+        logger.success(f"All tasks completed. Results: {str(results)[:100]} ...")
     except:
-        logger.debug("An error occurred during task execution.")
+        logger.warning(
+            "An error occurred during task execution. Next step: cleanup and return."
+        )
     finally:
         # Clear references to help garbage collection
         logger.debug("Clearing references to futures and indices.")
