@@ -181,18 +181,42 @@ import re
 from loguru import logger
 import sys
 import re
+from typing import Annotated
+from typing import Annotated, Literal
 
+def setup_logger(
+    level: Annotated[
+        Literal[
+            "Trace",
+            "Debug",
+            "Info",
+            "Success",
+            "Warning",
+            "Error",
+            "Critical",
+            "Disable",
+            "T",
+            "D",
+            "I",
+            "S",
+            "W",
+            "E",
+            "C"
+        ],
+        "The desired log level"
+    ] = "Info",
+    enable_grep: Annotated[str, "Comma-separated patterns for enabling logs"] = "",
+    disable_grep: Annotated[str, "Comma-separated patterns for disabling logs"] = "",
+) -> None:
+    # """
+    # Setup the logger with the specified level and control logging based on grep patterns.
 
-def setup_logger(level: str = "INFO", enable_grep: str = "", disable_grep: str = ""):
-    """
-    Setup the logger with the specified level and control logging based on grep patterns.
-
-    :param level: The desired log level.
-                  Valid levels: 'T' (TRACE), 'D' (DEBUG), 'I' (INFO), 'S' (SUCCESS),
-                  'W' (WARNING), 'E' (ERROR), 'C' (CRITICAL), 'DISABLE'.
-    :param enable_grep: A comma-separated string of patterns. Only logs matching these patterns will be enabled.
-    :param disable_grep: A comma-separated string of patterns. Logs matching these patterns will be disabled.
-    """
+    # :param level: The desired log level.
+    #               Valid levels: 'T' (TRACE), 'D' (DEBUG), 'I' (INFO), 'S' (SUCCESS),
+    #               'W' (WARNING), 'E' (ERROR), 'C' (CRITICAL), 'DISABLE'.
+    # :param enable_grep: A comma-separated string of patterns. Only logs matching these patterns will be enabled.
+    # :param disable_grep: A comma-separated string of patterns. Logs matching these patterns will be disabled.
+    # """
 
     # Map the shorthand level to the full name
     level_mapping = {
@@ -235,7 +259,10 @@ def setup_logger(level: str = "INFO", enable_grep: str = "", disable_grep: str =
     logger.add(
         sys.stdout,
         colorize=True,
-        format=("<level>{level: <8}</level> | <cyan>{file}:{line} ({function})</cyan> - " "<level>{message}</level>"),
+        format=(
+            "<level>{level: <8}</level> | <cyan>{file}:{line} ({function})</cyan> - "
+            "<level>{message}</level>"
+        ),
         filter=log_filter,
     )
 
