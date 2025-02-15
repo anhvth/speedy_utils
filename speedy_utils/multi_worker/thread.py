@@ -113,6 +113,7 @@ def _execute_tasks_in_parallel(
 ) -> List[Any]:
     """Spawn threads to execute tasks in parallel, updating a progress bar if requested."""
     try:
+        has_warned = False
         with ThreadPoolExecutor(max_workers=workers) as executor:
             future_to_index = {}
             futures = []
@@ -127,7 +128,7 @@ def _execute_tasks_in_parallel(
             with tqdm(
                 total=len(futures),
                 desc=desc,
-                disable=not verbose,
+                # disable=not verbose,
                 ncols=88,
                 leave=verbose,
             ) as pbar:
@@ -146,17 +147,22 @@ def _execute_tasks_in_parallel(
                         completed_count += 1
                         result_counter["SUCCESS"] += 1
 
-                        if is_error and stop_on_error:
+                        if is_error:
+                            has_warned = True
                             error_msg = f"Error at index {idx}: {result_or_error}"
                             logger.error(f"{error_msg}")
-                            stop_event.set()
-                            for fut in pending:
-                                fut.cancel()
-                            break
+                            if stop_on_error:
+                                stop_event.set()
+                                for fut in pending:
+                                    fut.cancel()
+                                break
 
                     if completed_count > 0:
                         pbar.set_postfix(dict(result_counter))
                         pbar.update(completed_count)
+                        
+        if has_warned:
+            logger.warning("Some tasks did not complete.")
         logger.debug(f"All tasks completed. Results: {str(results)[:100]} ...")
     except:
         logger.debug("An error occurred during task execution.")

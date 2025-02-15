@@ -89,7 +89,7 @@ result = compute_sum(5, 7)  # Retrieved from in-memory cache
 
 #### Multi-threading
 
-Execute functions concurrently using multiple threads.
+Execute functions concurrently using multiple threads. This approach is straightforward and automatically handles both notebook and Python script executions. In a notebook environment, it delegates the running thread to a separate process. If interrupted, it immediately stops this process, avoiding thread dependency issues where threads continue running until all tasks are completed.
 
 ```python
 from speedy_utils import multi_thread
@@ -102,22 +102,6 @@ items = [1, 2, 3, 4, 5]
 results = multi_thread(process_item, items, workers=3)
 print(results)  # [2, 4, 6, 8, 10]
 ```
-
-#### Multi-processing
-
-Leverage multiple CPU cores for parallel execution.
-
-```python
-from speedy_utils import multi_process
-
-def compute_square(n):
-    return n * n
-
-numbers = list(range(10))
-squares = multi_process(compute_square, numbers, workers=4)
-print(squares)  # [0, 1, 4, 9, ..., 81]
-```
-
 
 ### File I/O
 
