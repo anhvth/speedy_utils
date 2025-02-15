@@ -38,16 +38,50 @@ class RunErr(Exception):
         return f"RunErr({self.error_type})"
 
 
+def _run_with_timeout(func: Callable, timeout: int, *args, **kwargs) -> Any:
+    """
+    Helper function to run `func(*args, **kwargs)` in a background thread with a time limit.
+    Raises `FuturesTimeoutError` if `func` does not complete within `timeout` seconds.
+    """
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(func, *args, **kwargs)
+        return future.result(timeout=timeout)
+
+
 def _process_single_task(
-    func: Callable, idx: int, inp: Any, stop_event: threading.Event
+    func: Callable,
+    idx: int,
+    inp: Any,
+    stop_event: threading.Event,
+    max_task_seconds: Optional[int] = None,
 ) -> Tuple[int, Any]:
-    """Process a single task and handle exceptions."""
+    """Process a single task and handle exceptions, including a timeout if specified."""
     if stop_event.is_set():
         return idx, None
+
     try:
-        ret = func(inp) if not isinstance(inp, dict) else func(**inp)
+        # If dict, call func with keyword arguments; otherwise just pass inp
+        if max_task_seconds:
+            # Enforce timeout
+            if isinstance(inp, dict):
+                ret = _run_with_timeout(func, max_task_seconds, **inp)
+            else:
+                ret = _run_with_timeout(func, max_task_seconds, inp)
+        else:
+            # No timeout
+            if isinstance(inp, dict):
+                ret = func(**inp)
+            else:
+                ret = func(inp)
+
         return idx, ret
+
+    except FuturesTimeoutError:
+        # Timed out
+        return idx, RunErr(TimeoutError, f"Task exceeded {max_task_seconds} seconds")
+
     except Exception as e:
+        # Any other runtime exception
         return idx, RunErr(type(e).__name__, str(e))
 
 
@@ -75,6 +109,7 @@ def multi_thread(
     filter_none: bool = False,
     do_memoize: bool = False,
     share_across_processes: bool = True,
+    max_task_seconds: Optional[int] = None,
     **kwargs: Any,
 ) -> List[Any]:
     """
@@ -156,6 +191,7 @@ def multi_thread(
         stop_event,
         shared_result_list,
         result_counter,
+        max_task_seconds,
     )
 
     # Wait for the background process to finish
@@ -194,6 +230,7 @@ def _execute_tasks_in_parallel(
     stop_event: threading.Event,
     results: List[Any],
     result_counter: defaultdict,
+    max_task_seconds: Optional[int],
 ) -> List[Any]:
     """Spawn threads to execute tasks in parallel, updating a progress bar if requested."""
     try:
@@ -201,7 +238,9 @@ def _execute_tasks_in_parallel(
             future_to_index = {}
             futures = []
             for i, inp in enumerate(inputs):
-                fut = executor.submit(_process_single_task, func, i, inp, stop_event)
+                fut = executor.submit(
+                    _process_single_task, func, i, inp, stop_event, max_task_seconds
+                )
                 futures.append(fut)
                 future_to_index[fut] = i
 
