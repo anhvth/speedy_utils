@@ -150,7 +150,7 @@ def _execute_tasks_in_parallel(
                         if is_error:
                             has_warned = True
                             error_msg = f"Error at index {idx}: {result_or_error}"
-                            logger.opt(1).error(f"{error_msg}")
+                            logger.opt(depth=1).error(f"{error_msg}")
                             if stop_on_error:
                                 stop_event.set()
                                 for fut in pending:
