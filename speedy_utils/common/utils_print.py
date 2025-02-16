@@ -6,6 +6,8 @@ import pprint
 import re
 import sys
 import textwrap
+import time
+from collections import OrderedDict
 from typing import Annotated, Any, Dict, List, Literal, Optional
 
 from IPython.display import HTML, display
@@ -14,6 +16,25 @@ from tabulate import tabulate
 
 from .utils_misc import is_notebook
 
+
+# A subclass of OrderedDict to automatically evict the oldest item after max_size is exceeded
+class _RateLimitCache(OrderedDict):
+    def __init__(self, max_size: int, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.max_size = max_size
+
+    def __setitem__(self, key, value):
+        # If the key already exists, move it to the end (so it's considered "newer")
+        if key in self:
+            self.move_to_end(key)
+        # Use normal __setitem__
+        super().__setitem__(key, value)
+        # Evict the oldest if we're over capacity
+        if len(self) > self.max_size:
+            self.popitem(last=False)  # pop the *first* item
+
+# Create a global rate-limit cache with, say, 2,000 distinct entries max
+_last_log_times = _RateLimitCache(max_size=2000)
 
 def display_pretty_table_html(data: Dict) -> None:
     """
@@ -197,16 +218,16 @@ def setup_logger(
     ] = "Info",
     enable_grep: Annotated[str, "Comma-separated patterns for enabling logs"] = "",
     disable_grep: Annotated[str, "Comma-separated patterns for disabling logs"] = "",
+    min_interval: float = 2.0,
+    max_cache_entries: int = 2000,
 ) -> None:
-    # """
-    # Setup the logger with the specified level and control logging based on grep patterns.
-
-    # :param level: The desired log level.
-    #               Valid levels: 'T' (TRACE), 'D' (DEBUG), 'I' (INFO), 'S' (SUCCESS),
-    #               'W' (WARNING), 'E' (ERROR), 'C' (CRITICAL), 'DISABLE'.
-    # :param enable_grep: A comma-separated string of patterns. Only logs matching these patterns will be enabled.
-    # :param disable_grep: A comma-separated string of patterns. Logs matching these patterns will be disabled.
-    # """
+    """
+    Setup the logger with a rate-limiting feature:
+    - No more than 1 log from the same file:line within `min_interval` seconds.
+    - Track up to `max_cache_entries` distinct file:line pairs in memory.
+    """
+    # Update the cache size if desired
+    _last_log_times.max_size = max_cache_entries
 
     # Map the shorthand level to the full name
     level_mapping = {
@@ -218,48 +239,60 @@ def setup_logger(
         "E": "ERROR",
         "C": "CRITICAL",
     }
-
-    # Set the level based on the input (or default to INFO)
     level = level_mapping.get(level.upper(), level.upper())
 
     # Remove any existing handlers to avoid duplication
     logger.remove()
 
-    # Grep pattern handling
-    enable_patterns = [pattern.strip() for pattern in enable_grep.split(",") if pattern.strip()]
-    disable_patterns = [pattern.strip() for pattern in disable_grep.split(",") if pattern.strip()]
+    # Prepare grep patterns
+    enable_patterns = [p.strip() for p in enable_grep.split(",") if p.strip()]
+    disable_patterns = [p.strip() for p in disable_grep.split(",") if p.strip()]
 
     def log_filter(record):
         """
-        This filter applies the logging level and the grep pattern matching.
-        Only logs with a level >= the specified level and that match the enable/disable patterns will be logged.
+        1. Filters out messages below the specified log level.
+        2. Applies 'enable'/'disable' grep filters.
+        3. Rate-limits same file:line messages if they occur within `min_interval` seconds.
+        4. Enforces a max size on the (file:line) dictionary.
         """
+        # ---------- 1) Log-level check ----------
+        if record["level"].no < logger.level(level).no:
+            return False
+
+        # ---------- 2) Grep pattern handling ----------
         log_message = f"{record['file']}:{record['line']} ({record['function']})"
+        if enable_patterns and not any(re.search(p, log_message) for p in enable_patterns):
+            return False
+        if disable_patterns and any(re.search(p, log_message) for p in disable_patterns):
+            return False
 
-        # Check if the log should be enabled or disabled based on the grep patterns
-        if enable_patterns and not any(re.search(pattern, log_message) for pattern in enable_patterns):
-            return False  # If enable_grep is provided, log only if it matches
-        if disable_patterns and any(re.search(pattern, log_message) for pattern in disable_patterns):
-            return False  # If disable_grep matches, don't log
+        # ---------- 3) Rate limiting by file:line ----------
+        file_line_key = f"{record['file']}:{record['line']}"
+        now = time.time()
 
-        # Return True if the log level is >= the set level
-        return record["level"].no >= logger.level(level).no
+        last_time = _last_log_times.get(file_line_key)
+        if last_time is not None and (now - last_time < min_interval):
+            return False  # Skip logging within min_interval
 
-    # Add the handler to stdout with the log format and the custom filter
+        # Update the cache with new time (will also handle size eviction)
+        _last_log_times[file_line_key] = now
+        return True
+
+    # Add the handler
     logger.add(
         sys.stdout,
         colorize=True,
         format=(
-            "<level>{level: <8}</level> | <cyan>{file}:{line} ({function})</cyan> - "
-            "<level>{message}</level>"
+            "<level>{level: <8}</level> | "
+            "<cyan>{file}:{line} ({function})</cyan> - <level>{message}</level>"
         ),
         filter=log_filter,
     )
 
-    # Handle the "DISABLE" level: if set, disable all logging
+    # ---------- 4) Handle "DISABLE" level ----------
     if level.upper() == "DISABLE":
-        logger.disable("")  # Disable all logging
+        logger.disable("")
         logger.info("Logging disabled")
     else:
-        logger.enable("")  # Ensure logging is enabled
+        logger.enable("")
         logger.debug(f"Logging set to {level}")

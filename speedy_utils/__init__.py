@@ -1,4 +1,5 @@
 from speedy_utils.common.dataclass_parser import ArgsParser
+from speedy_utils.common.function_decorator import retry_runtime
 from speedy_utils.multi_worker.process import multi_process
 from .common.clock import Clock, speedy_timer, timef
 from .common.generic import TaskDistributor
@@ -49,5 +50,6 @@ __all__ = [
     "TaskDistributor",
     "setup_logger",
     "ArgsParser",
+    "retry_runtime",
 ]
 __version__ = "0.1.0"
