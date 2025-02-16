@@ -18,7 +18,7 @@ import threading
 import time
 import traceback
 import uuid
-from collections import Counter
+from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from glob import glob
 from multiprocessing import Pool
@@ -81,6 +81,7 @@ __all__ = [
     "tabulate",
     "tqdm",
     "np",
+    "defaultdict",
 ]
 from speedy_utils import *  # noqa: F403
 import speedy_utils

@@ -303,6 +303,8 @@ def multi_thread(
             f"[MAIN PROCESS] Keyboard interrupt detected stop `{func.__name__}` execution."
         )
         process.terminate()
+        if stop_on_error:
+            raise KeyboardInterrupt("Execution stopped by user.")
         
 
     # Optionally filter out None results
