@@ -75,13 +75,10 @@ def _process_single_task(
                 ret = func(inp)
 
         return idx, ret
-
     except FuturesTimeoutError:
-        # Timed out
         return idx, RunErr(TimeoutError, f"Task exceeded {max_task_seconds} seconds")
 
     except Exception as e:
-        # Any other runtime exception
         return idx, RunErr(type(e).__name__, str(e))
 
 
@@ -112,7 +109,9 @@ def _execute_tasks_in_parallel(
     max_task_seconds: Optional[int],
 ) -> List[Any]:
     """Spawn threads to execute tasks in parallel, updating a progress bar if requested."""
+
     try:
+        # stop_event = results.pop()
         has_warned = False
         with ThreadPoolExecutor(max_workers=workers) as executor:
             future_to_index = {}
@@ -124,7 +123,7 @@ def _execute_tasks_in_parallel(
                 futures.append(fut)
                 future_to_index[fut] = i
 
-            pending = set(futures)
+            futures = set(futures)
             with tqdm(
                 total=len(futures),
                 desc=desc,
@@ -132,9 +131,9 @@ def _execute_tasks_in_parallel(
                 ncols=88,
                 leave=verbose,
             ) as pbar:
-                while pending and not stop_event.is_set():
-                    done, pending = wait(
-                        pending, timeout=0.1, return_when="FIRST_EXCEPTION"
+                while futures and not stop_event.is_set():
+                    done, futures = wait(
+                        futures, timeout=0.1, return_when="FIRST_EXCEPTION"
                     )
                     completed_count = 0
 
@@ -145,7 +144,6 @@ def _execute_tasks_in_parallel(
 
                         results[idx] = result_or_error
                         completed_count += 1
-                        result_counter["SUCCESS"] += 1
 
                         if is_error:
                             has_warned = True
@@ -153,21 +151,34 @@ def _execute_tasks_in_parallel(
                             logger.opt(depth=1).error(f"{error_msg}")
                             if stop_on_error:
                                 stop_event.set()
-                                for fut in pending:
+                                for fut in futures:
                                     fut.cancel()
                                 break
+                        else:
+                            result_counter["SUCCESS"] += 1
 
                     if completed_count > 0:
                         pbar.set_postfix(dict(result_counter))
                         pbar.update(completed_count)
 
+                if stop_event.is_set():
+                    # check future to cancel
+                    logger.error("Stop event set. Stopping execution.")
+                    for fut in futures:
+                        logger.debug(f"Cancelling future {fut}")
+                        fut.cancel()
         if has_warned:
             logger.warning("Some tasks did not complete.")
-        logger.success(f"All tasks completed. Results: {str(results)[:100]} ...")
+        else:
+            logger.success(f"All tasks completed. Results: {str(results)[:100]} ...")
     except:
-        logger.warning(
-            "An error occurred during task execution. Next step: cleanup and return."
-        )
+        pass
+        # This block only runs after all tasks have run
+        # logger.warning(
+        #     "An error occurred during task execution. Next step: cleanup and return."
+        # )
+        # if stop_on_error:
+        # raise
     finally:
         # Clear references to help garbage collection
         logger.debug("Clearing references to futures and indices.")
@@ -182,10 +193,10 @@ def multi_thread(
     workers: int = 4,
     verbose: Optional[bool] = None,
     desc: Optional[str] = None,
-    stop_on_error: bool = False,
+    stop_on_error: bool = True,
     filter_none: bool = False,
     do_memoize: bool = False,
-    share_across_processes: bool = False,
+    # share_across_processes: bool = False,
     max_task_seconds: Optional[int] = None,
     **kwargs: Any,
 ) -> List[Any]:
@@ -223,8 +234,7 @@ def multi_thread(
 
     from speedy_utils import is_notebook as is_interactive
 
-    if is_interactive():
-        share_across_processes = True
+    share_across_processes = is_interactive()
 
     if "n_threads" in kwargs:
         logger.warning(
@@ -246,28 +256,33 @@ def multi_thread(
         workers = 1
 
     # Run single-threaded if workers <= 1
-    if workers <= 1:
-        return [
-            func(inp)
-            for inp in tqdm(orig_inputs, desc="Single thread", disable=not verbose)
-        ]
+    # if workers <= 1:
+    #     return [
+    #         func(inp)
+    #         for inp in tqdm(orig_inputs, desc="Single thread", disable=not verbose)
+    #     ]
 
     inputs = handle_inputs(func, orig_inputs)
-    stop_event = threading.Event()
 
     # Create results list
     if share_across_processes:
+        # multiprocessing base
         manager = Manager()
-        shared_result_list = manager.list([None] * len(orig_inputs))
+        data = [None] * len(orig_inputs)
+        # data.append(False)
+        shared_result_list = manager.list(data)
+        stop_event = manager.Event()
     else:
+        # thread base
         shared_result_list: Result = Result([None] * len(inputs))
+        stop_event = threading.Event()
 
     result_counter = defaultdict(int)
     if is_interactive():
-        fn = threaded(process=True)(_execute_tasks_in_parallel)
+        _exec_fn = threaded(process=True)(_execute_tasks_in_parallel)
     else:
-        fn = _execute_tasks_in_parallel
-    process = fn(
+        _exec_fn = _execute_tasks_in_parallel
+    process = _exec_fn(
         func,
         workers,
         verbose,
@@ -280,22 +295,24 @@ def multi_thread(
         max_task_seconds,
     )
 
-    # Wait for the background process to finish
-    if is_interactive():
-        while process.is_alive():
-            try:
-                time.sleep(0.1)
-            except KeyboardInterrupt:
-                logger.warning("Keyboard interrupt detected. Stopping execution.")
-                stop_event.set()
-                break
+    try:
+        process.join()
+    except KeyboardInterrupt:
+        stop_event.set()
+        logger.error(
+            f"[MAIN PROCESS] Keyboard interrupt detected stop `{func.__name__}` execution."
+        )
+        process.terminate()
+        
 
     # Optionally filter out None results
-    final_results = (
-        [r for r in shared_result_list if r is not None]
-        if filter_none
-        else list(shared_result_list)
-    )
+    final_results = []
+    for r in shared_result_list:
+        if stop_on_error and isinstance(r, RunErr):
+            raise TimeoutError(r.message + "\n\n" + r.traceback)
+        if filter_none and r is None:
+            continue
+        final_results.append(r)
 
     # Explicitly remove references to the process and manager
     process = None
