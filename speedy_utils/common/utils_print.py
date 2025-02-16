@@ -3,16 +3,14 @@
 import copy
 import json
 import pprint
+import re
+import sys
 import textwrap
-from typing import Any, Dict, List, Literal, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional
 
 from IPython.display import HTML, display
+from loguru import logger
 from tabulate import tabulate
-from loguru import logger
-
-
-import sys
-from loguru import logger
 
 from .utils_misc import is_notebook
 
@@ -174,15 +172,7 @@ def print_table(data: Any) -> None:
     print(table)
 
 
-from loguru import logger
-import sys
-import re
 
-from loguru import logger
-import sys
-import re
-from typing import Annotated
-from typing import Annotated, Literal
 
 def setup_logger(
     level: Annotated[
