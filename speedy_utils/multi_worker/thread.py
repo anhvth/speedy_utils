@@ -85,13 +85,11 @@ def _process_single_task(
 class Result(List[Any]):
     """Custom list class that logs errors and sets a flag to stop on error."""
 
-    should_stop = False
 
     def __setitem__(self, index: int, value: Any) -> None:
         super().__setitem__(index, value)
         if isinstance(value, RunErr):
             logger.error(f"Error at index {index}: {value}")
-            self.should_stop = True
         else:
             logger.debug(f"Result at index {index} set to {value}")
 
@@ -196,7 +194,7 @@ def multi_thread(
     stop_on_error: bool = True,
     filter_none: bool = False,
     do_memoize: bool = False,
-    # share_across_processes: bool = False,
+    use_process: bool = None,
     max_task_seconds: Optional[int] = None,
     **kwargs: Any,
 ) -> List[Any]:
@@ -233,8 +231,8 @@ def multi_thread(
     """
 
     from speedy_utils import is_notebook as is_interactive
-
-    share_across_processes = is_interactive()
+    if use_process is None:
+        use_process = is_interactive()
 
     if "n_threads" in kwargs:
         logger.warning(
@@ -265,7 +263,7 @@ def multi_thread(
     inputs = handle_inputs(func, orig_inputs)
 
     # Create results list
-    if share_across_processes:
+    if use_process:
         # multiprocessing base
         manager = Manager()
         data = [None] * len(orig_inputs)
@@ -278,7 +276,7 @@ def multi_thread(
         stop_event = threading.Event()
 
     result_counter = defaultdict(int)
-    if is_interactive():
+    if use_process:
         _exec_fn = threaded(process=True)(_execute_tasks_in_parallel)
     else:
         _exec_fn = _execute_tasks_in_parallel
@@ -305,20 +303,26 @@ def multi_thread(
         process.terminate()
         if stop_on_error:
             raise KeyboardInterrupt("Execution stopped by user.")
-        
+    except Exception as e:
+        stop_event.set()
+        logger.error(
+            f"[MAIN PROCESS] An error occurred during task execution. Next step: cleanup and return."
+        )
+        if stop_on_error:
+            raise e
 
     # Optionally filter out None results
     final_results = []
     for r in shared_result_list:
         if stop_on_error and isinstance(r, RunErr):
-            raise TimeoutError(r.message + "\n\n" + r.traceback)
+            raise r
         if filter_none and r is None:
             continue
         final_results.append(r)
 
     # Explicitly remove references to the process and manager
     process = None
-    if share_across_processes:
+    if use_process:
         manager.shutdown()
     gc.collect()  # Force a garbage collection sweep
 

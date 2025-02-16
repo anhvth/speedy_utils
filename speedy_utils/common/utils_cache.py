@@ -87,7 +87,12 @@ def _disk_memoize(func, keys, cache_dir, ignore_self, verbose, cache_key):
         with disk_lock:
             if osp.exists(cache_path):
                 logger.debug(f"Cache HIT for {func.__name__}, key={cache_path}")
-                return load_json_or_pickle(cache_path)
+                try:
+                    return load_json_or_pickle(cache_path)
+                except Exception as e:
+                    if osp.exists(cache_path):
+                        os.remove(cache_path)
+                    logger.warning(f"Error loading cache: {str(e)[:100]}, continue to recompute")
 
         result = func(*args, **kwargs)
 
