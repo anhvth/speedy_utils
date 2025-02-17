@@ -10,7 +10,7 @@ def slow_func(x):
     return x
 
 
-results = multi_thread(
+results = multi_thread_in_sub_process(
     func=slow_func,
     orig_inputs=range(10),
     workers=2,

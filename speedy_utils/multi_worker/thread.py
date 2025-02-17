@@ -184,7 +184,7 @@ def _execute_tasks_in_parallel(
         gc.collect()
 
 
-def multi_thread(
+def multi_thread_in_sub_process(
     func: Callable[..., Any],
     orig_inputs: List[Any],
     workers: int = 4,
