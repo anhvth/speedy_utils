@@ -85,7 +85,6 @@ def _process_single_task(
 class Result(List[Any]):
     """Custom list class that logs errors and sets a flag to stop on error."""
 
-
     def __setitem__(self, index: int, value: Any) -> None:
         super().__setitem__(index, value)
         if isinstance(value, RunErr):
@@ -231,6 +230,7 @@ def multi_thread(
     """
 
     from speedy_utils import is_notebook as is_interactive
+
     if use_process is None:
         use_process = is_interactive()
 
@@ -292,24 +292,24 @@ def multi_thread(
         result_counter,
         max_task_seconds,
     )
-
-    try:
-        process.join()
-    except KeyboardInterrupt:
-        stop_event.set()
-        logger.error(
-            f"[MAIN PROCESS] Keyboard interrupt detected stop `{func.__name__}` execution."
-        )
-        process.terminate()
-        if stop_on_error:
-            raise KeyboardInterrupt("Execution stopped by user.")
-    except Exception as e:
-        stop_event.set()
-        logger.error(
-            f"[MAIN PROCESS] An error occurred during task execution. Next step: cleanup and return."
-        )
-        if stop_on_error:
-            raise e
+    if use_process:
+        try:
+            process.join()
+        except KeyboardInterrupt:
+            stop_event.set()
+            logger.error(
+                f"[MAIN PROCESS] Keyboard interrupt detected stop `{func.__name__}` execution."
+            )
+            process.terminate()
+            if stop_on_error:
+                raise KeyboardInterrupt("Execution stopped by user.")
+        except Exception as e:
+            stop_event.set()
+            logger.error(
+                f"[MAIN PROCESS] An error occurred during task execution. Next step: cleanup and return."
+            )
+            if stop_on_error:
+                raise e
 
     # Optionally filter out None results
     final_results = []
