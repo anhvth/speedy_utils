@@ -124,7 +124,6 @@ def _execute_tasks_in_parallel(
             with tqdm(
                 total=len(futures),
                 desc=desc,
-                # disable=not verbose,
                 ncols=88,
                 leave=verbose,
             ) as pbar:
@@ -184,7 +183,7 @@ def _execute_tasks_in_parallel(
         gc.collect()
 
 
-def multi_thread_in_sub_process(
+def multi_thread(
     func: Callable[..., Any],
     orig_inputs: List[Any],
     workers: int = 4,

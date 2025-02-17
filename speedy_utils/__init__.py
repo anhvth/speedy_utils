@@ -24,7 +24,7 @@ from .common.utils_misc import (
 )
 from .common.utils_print import fprint, print_table, setup_logger
 
-from .multi_worker.thread import multi_thread_in_sub_process
+from .multi_worker.thread import multi_thread
 
 __all__ = [
     "SPEED_CACHE_DIR",
@@ -44,7 +44,7 @@ __all__ = [
     "print_table",
     "convert_to_builtin_python",
     "Clock",
-    "multi_thread_in_sub_process",
+    "multi_thread",
     "memoize",
     "speedy_timer",
     "TaskDistributor",
