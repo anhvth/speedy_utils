@@ -190,7 +190,7 @@ def memoize(
     verbose=False,
     cache_key=None,
 ):
-    logger.debug(f"cache_dir: {cache_dir}, cache_type: {cache_type}")
+    # logger.debug(f"cache_dir: {cache_dir}, cache_type: {cache_type}")
 
     def decorator(func):
         if cache_type == "memory":
