@@ -8,6 +8,7 @@ import uuid
 from typing import Any, List, Literal
 from loguru import logger
 import cachetools
+from pydantic import BaseModel
 import xxhash
 
 from .utils_io import dump_json_or_pickle, load_json_or_pickle
@@ -31,8 +32,26 @@ def fast_serialize(x: Any) -> bytes:
         return pickle.dumps(x, protocol=pickle.HIGHEST_PROTOCOL)
 
 
-def identify(x: Any) -> str:
-    return xxhash.xxh64_hexdigest(fast_serialize(x), seed=0)
+def identify(obj: Any) -> str:
+    
+    if isinstance(obj, (list, tuple)):
+        x = [identify(x) for x in obj]
+        x = '\n'.join(x)
+        return identify(x)
+    elif isinstance(obj, BaseModel):
+        obj = obj.model_dump()
+        return identify(obj)
+    elif isinstance(obj, dict):
+        ks = sorted(obj.keys())
+        vs = [identify(obj[k]) for k in ks]
+        return identify([ks, vs])
+    else:
+        # expect to be a primitive type
+        primitive_types = [int, float, str, bool]
+        # if not warning, it is not a primitive type
+        if not type(obj) in primitive_types:
+            logger.warning(f"Unknown type: {type(obj)}")
+        return xxhash.xxh64_hexdigest(fast_serialize(obj), seed=0)
 
 
 def identify_uuid(x: Any) -> str:
@@ -63,7 +82,11 @@ def _compute_func_id(func, args, kwargs, ignore_self, cache_key, keys):
 
     if cache_key and cache_key in kwargs:
         fid = [func_source, kwargs[cache_key]]
-    elif inspect.getfullargspec(func).args and inspect.getfullargspec(func).args[0] == "self" and ignore_self:
+    elif (
+        inspect.getfullargspec(func).args
+        and inspect.getfullargspec(func).args[0] == "self"
+        and ignore_self
+    ):
         fid = (func_source, args[1:], kwargs)
     else:
         fid = (func_source, args, kwargs)
@@ -74,7 +97,9 @@ def _disk_memoize(func, keys, cache_dir, ignore_self, verbose, cache_key):
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         # Compute cache path as before
-        func_source, sub_dir, key_id = _compute_func_id(func, args, kwargs, ignore_self, cache_key, keys)
+        func_source, sub_dir, key_id = _compute_func_id(
+            func, args, kwargs, ignore_self, cache_key, keys
+        )
         if func_source is None:
             return func(*args, **kwargs)
         if sub_dir == "funcs":
@@ -92,7 +117,9 @@ def _disk_memoize(func, keys, cache_dir, ignore_self, verbose, cache_key):
                 except Exception as e:
                     if osp.exists(cache_path):
                         os.remove(cache_path)
-                    logger.warning(f"Error loading cache: {str(e)[:100]}, continue to recompute")
+                    logger.warning(
+                        f"Error loading cache: {str(e)[:100]}, continue to recompute"
+                    )
 
         result = func(*args, **kwargs)
 
@@ -113,7 +140,9 @@ def _memory_memoize(func, size, keys, ignore_self, cache_key):
 
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        func_source, sub_dir, key_id = _compute_func_id(func, args, kwargs, ignore_self, cache_key, keys)
+        func_source, sub_dir, key_id = _compute_func_id(
+            func, args, kwargs, ignore_self, cache_key, keys
+        )
         if func_source is None:
             return func(*args, **kwargs)
         name = identify((func_source, sub_dir, key_id))
@@ -139,7 +168,9 @@ def _memory_memoize(func, size, keys, ignore_self, cache_key):
 def _both_memoize(func, keys, cache_dir, ignore_self, verbose, cache_key):
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        func_source, sub_dir, key_id = _compute_func_id(func, args, kwargs, ignore_self, cache_key, keys)
+        func_source, sub_dir, key_id = _compute_func_id(
+            func, args, kwargs, ignore_self, cache_key, keys
+        )
         if func_source is None:
             return func(*args, **kwargs)
 
