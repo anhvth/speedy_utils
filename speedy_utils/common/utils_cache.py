@@ -45,6 +45,8 @@ def identify(obj: Any) -> str:
         ks = sorted(obj.keys())
         vs = [identify(obj[k]) for k in ks]
         return identify([ks, vs])
+    elif obj is None:
+        return identify("None")
     else:
         # expect to be a primitive type
         primitive_types = [int, float, str, bool]
@@ -221,8 +223,10 @@ def memoize(
     verbose=False,
     cache_key=None,
 ):
-    logger.debug(f"cache_dir: {cache_dir}, cache_type: {cache_type}")
-
+    logger.debug(f"Memoize function: {_func.__name__}")
+    # handle case when _func is a wrapper func, we must return the inner func
+    
+    
     def decorator(func):
         if cache_type == "memory":
             return _memory_memoize(func, size, keys, ignore_self, cache_key)

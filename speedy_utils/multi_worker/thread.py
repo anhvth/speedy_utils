@@ -253,11 +253,11 @@ def multi_thread(
         workers = 1
 
     # Run single-threaded if workers <= 1
-    # if workers <= 1:
-    #     return [
-    #         func(inp)
-    #         for inp in tqdm(orig_inputs, desc="Single thread", disable=not verbose)
-    #     ]
+    if workers <= 1:
+        return [
+            func(inp)
+            for inp in tqdm(orig_inputs, desc="Single thread", disable=not verbose)
+        ]
 
     inputs = handle_inputs(func, orig_inputs)
 
