@@ -259,7 +259,7 @@ def multi_thread(
             for inp in tqdm(orig_inputs, desc="Single thread", disable=not verbose)
         ]
 
-    inputs = handle_inputs(func, orig_inputs)
+    func, inputs = handle_inputs(func, orig_inputs)
 
     # Create results list
     if use_process:
