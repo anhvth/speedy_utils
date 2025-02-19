@@ -302,6 +302,18 @@ webencodings = "*"
 css = ["tinycss2 (>=1.1.0,<1.5)"]
 
 [[package]]
+name = "bump2version"
+version = "1.0.1"
+description = "Version-bump your software with a single command!"
+optional = false
+python-versions = ">=3.5"
+groups = ["main"]
+files = [
+    {file = "bump2version-1.0.1-py2.py3-none-any.whl", hash = "sha256:37f927ea17cde7ae2d7baf832f8e80ce3777624554a653006c9144f8017fe410"},
+    {file = "bump2version-1.0.1.tar.gz", hash = "sha256:762cb2bfad61f4ec8e2bdf452c7c267416f8c70dd9ecb1653fd0bbb01fa936e6"},
+]
+
+[[package]]
 name = "cachetools"
 version = "5.5.1"
 description = "Extensible memoizing collections and decorators"
@@ -4648,4 +4660,4 @@ type = ["pytest-mypy"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.8"
-content-hash = "8062cd9a8d245b090bbcf35d8725c1a6a8a67e60d535bc72b318648b147de42c"
+content-hash = "42e02a5fb18012f4e885cb9695e25642a8b79e5bb9a2b0d51bd6d65566d08840"
