@@ -35,13 +35,14 @@
 You can install **Speedy Utils** via [PyPI](https://pypi.org/project/speedy-utils/) using `pip`:
 
 ```bash
-pip install speedy-utils
+uv pip install speedy-utils
+
 ```
 
 Alternatively, install directly from the repository:
 
 ```bash
-git clone https://github.com/yourusername/speedy-utils.git
+uv pip install git+https://github.com/anhvth/speedy
 cd speedy-utils
 pip install .
 ```

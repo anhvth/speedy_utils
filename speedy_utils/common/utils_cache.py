@@ -38,6 +38,9 @@ def identify(obj: Any) -> str:
         x = [identify(x) for x in obj]
         x = '\n'.join(x)
         return identify(x)
+    # is a callable
+    elif hasattr(obj, "__code__"):
+        return identify(_get_source(obj))
     elif isinstance(obj, BaseModel):
         obj = obj.model_dump()
         return identify(obj)

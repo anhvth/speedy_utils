@@ -42,11 +42,8 @@ def handle_inputs(
         # so we can later call func(**inp)
         arg_name = next(iter(sig.parameters))  # name of the single parameter
         inputs = [{arg_name: input_} for input_ in inputs]
-        return inputs
+        return f, inputs
 
     else:
-        # If you really only plan to support single-arg calls, raise an error.
-        # Or you could implement multi-arg logic here if desired.
-        raise NotImplementedError(
-            "Function has more than one argument, not implemented yet."
-        )
+
+        return lambda x: f(x), inputs
