@@ -83,7 +83,7 @@ __all__ = [
     "np",
     "defaultdict",
 ]
-from speedy_utils import *  # noqa: F403
 import speedy_utils
+from speedy_utils import *  # noqa: F403
 
 __all__ += speedy_utils.__all__
