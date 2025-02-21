@@ -14,7 +14,7 @@ import xxhash
 from .utils_io import dump_json_or_pickle, load_json_or_pickle
 from .utils_misc import mkdir_or_exist
 
-SPEED_CACHE_DIR = osp.join(osp.expanduser("~"), ".cache/av")
+SPEED_CACHE_DIR = osp.join(osp.expanduser("~"), ".cache/multi_thread")
 LRU_MEM_CACHE = cachetools.LRUCache(maxsize=128_000)
 from threading import Lock
 

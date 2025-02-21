@@ -1,6 +1,8 @@
 import gc
+import inspect
 import random
 import time
+import traceback
 from multiprocessing import Manager, Process
 from threading import Thread
 from typing import List
@@ -9,8 +11,37 @@ from fastcore.all import threaded
 from loguru import logger
 from tqdm import tqdm
 
+from speedy_utils.common.clock import Clock
+from speedy_utils.common.report_manager import ReportManager
 from speedy_utils.common.utils_print import setup_logger
 
+
+def _convert_to_dict_input(func, args):
+    """Convert positional arguments to dictionary using function parameter names"""
+    if isinstance(args, dict):
+        return args
+    sig = inspect.signature(func)
+    params = list(sig.parameters.keys())
+    if isinstance(args, (list, tuple)):
+        return dict(zip(params, args))
+    return {params[0]: args}
+
+def _clean_traceback(tb_text: str) -> str:
+    """Remove unnecessary lines from traceback"""
+    lines = tb_text.split('\n')
+    filtered_lines = []
+    skip_next = False
+    for line in lines:
+        if "Traceback (most recent call last):" in line:
+            continue
+        if "speedy_utils/multi_worker/thread.py" in line:
+            skip_next = True
+            continue
+        if skip_next:
+            skip_next = False
+            continue
+        filtered_lines.append(line)
+    return '\n'.join(line for line in filtered_lines if line.strip())
 
 def multi_thread(
     func: callable,
@@ -18,17 +49,10 @@ def multi_thread(
     workers=64,
     verbose=True,
     process=False,
-    show_traceback=True,
     desc="",
+    report=True,
 ):
-    # func must have only one argument if not use a lambda forcing it
-    # num_positional_args = len(func.__code__.co_varnames)
-    # if num_positional_args != 1:
-    #     logger.warning(
-    #         f"Function must have only one argument but has {num_positional_args} now forcing it"
-    #     )
-    #     func = lambda x: func(x)
-
+    clock = Clock()
     manager = Manager()
     errors = manager.list()
     process = False
@@ -40,16 +64,14 @@ def multi_thread(
     @threaded(process=process)
     def f_wrapper_process(i_id, item):
         try:
-            result = func(item)
+            dict_input = _convert_to_dict_input(func, item)
+            result = func(**dict_input)
         except Exception as e:
-            errors.append(e)
-            result = None
-            if show_traceback:
-                import traceback
 
-                logger.error(traceback.format_exc())
-            else:
-                logger.error(f"Error with input {item}: {e}")
+            errors.append(
+                {"error": e, "input": dict_input, "traceback": _clean_traceback(traceback.format_exc())}
+            )
+            result = None
 
         with process_lock:
             share_count.value += 1
@@ -87,34 +109,25 @@ def multi_thread(
     if not results:
         results = [shared_results[i] for i in range(len(inputs))]
     gc.collect()
-    return [results[i] for i in range(len(results))]
+    final_results = [results[i] for i in range(len(results))]
+    if report:
+        metadata = {
+            "workers": workers,
+            "mode": "process" if process else "thread",
+            "total_inputs": len(inputs),
+            "execution_mode": "multi_process" if process else "multi_thread" if workers > 1 else "sequential",
+            "max_workers": workers,
+            "description": desc or func.__name__,  # Use description if provided, otherwise function name
+            "function_name": func.__name__
+        }
+        path = ReportManager().save_report(
+            errors=errors,
+            results=final_results,
+            execution_time=clock.time_since_last_checkpoint(),
+            metadata=metadata
+        )
+        print(f"Report saved at: {path}")
+    return final_results
 
 
-if __name__ == "__main__":
 
-    def f(x):
-        time.sleep(0.1)
-        return x + 1
-
-    class Aclass:
-        def f(self, x, y):
-            time.sleep(0.1)
-            return x
-
-    obj = Aclass()
-    inputs = [(i, i + 1) for i in range(3000)]
-
-    def f2(x):
-        return obj.f(x[0], x[1])
-
-    f3 = lambda x: obj.f(x[0], x[1])
-    from speedy_utils.common.clock import Clock
-
-    clock = Clock()
-    results = multi_thread(f3, inputs, workers=100, verbose=True, process=False)
-    logger.success(f"Results: {results}\nTime: {clock.time_since_last_checkpoint()}")
-    assert results == [i for i in range(3000)]
-    proc_per_sec = len(inputs) / clock.time_since_last_checkpoint()
-    logger.success(
-        f"Results: {results}\nTime: {clock.time_since_last_checkpoint()}\nProcesses per second: {proc_per_sec}"
-    )
