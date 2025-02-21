@@ -30,9 +30,10 @@ def _convert_to_dict_input(func, args, input_type):
         return {params[0]: args} if len(params) == 1 else {}
     return {}
 
+
 def _clean_traceback(tb_text: str) -> str:
     """Remove unnecessary lines from traceback"""
-    lines = tb_text.split('\n')
+    lines = tb_text.split("\n")
     filtered_lines = []
     skip_next = False
     for line in lines:
@@ -45,7 +46,8 @@ def _clean_traceback(tb_text: str) -> str:
             skip_next = False
             continue
         filtered_lines.append(line)
-    return '\n'.join(line for line in filtered_lines if line.strip())
+    return "\n".join(line for line in filtered_lines if line.strip())
+
 
 def multi_thread(
     func: callable,
@@ -55,8 +57,11 @@ def multi_thread(
     process=False,
     desc="",
     report=True,
-    input_type: Literal["single", "tuple", "dict"] = "single"
+    input_type: Literal["single", "tuple", "dict"] = "single",
 ):
+    if workers <= 1:
+        
+        return [func(i) for i in tqdm(inputs, desc=desc)]
     clock = Clock()
     manager = Manager()
     errors = manager.list()
@@ -79,7 +84,11 @@ def multi_thread(
         except Exception as e:
 
             errors.append(
-                {"error": e, "input": dict_input, "traceback": _clean_traceback(traceback.format_exc())}
+                {
+                    "error": e,
+                    "input": dict_input,
+                    "traceback": _clean_traceback(traceback.format_exc()),
+                }
             )
             result = None
 
@@ -125,19 +134,21 @@ def multi_thread(
             "workers": workers,
             "mode": "process" if process else "thread",
             "total_inputs": len(inputs),
-            "execution_mode": "multi_process" if process else "multi_thread" if workers > 1 else "sequential",
+            "execution_mode": (
+                "multi_process"
+                if process
+                else "multi_thread" if workers > 1 else "sequential"
+            ),
             "max_workers": workers,
-            "description": desc or func.__name__,  # Use description if provided, otherwise function name
-            "function_name": func.__name__
+            "description": desc
+            or func.__name__,  # Use description if provided, otherwise function name
+            "function_name": func.__name__,
         }
         path = ReportManager().save_report(
             errors=errors,
             results=final_results,
             execution_time=clock.time_since_last_checkpoint(),
-            metadata=metadata
+            metadata=metadata,
         )
         print(f"Report saved at: {path}")
     return final_results
-
-
-
