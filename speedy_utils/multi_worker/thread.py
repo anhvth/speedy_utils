@@ -5,7 +5,7 @@ import time
 import traceback
 from multiprocessing import Manager, Process
 from threading import Thread
-from typing import List
+from typing import List, Literal
 
 from fastcore.all import threaded
 from loguru import logger
@@ -16,15 +16,19 @@ from speedy_utils.common.report_manager import ReportManager
 from speedy_utils.common.utils_print import setup_logger
 
 
-def _convert_to_dict_input(func, args):
+def _convert_to_dict_input(func, args, input_type):
     """Convert positional arguments to dictionary using function parameter names"""
-    if isinstance(args, dict):
-        return args
-    sig = inspect.signature(func)
-    params = list(sig.parameters.keys())
-    if isinstance(args, (list, tuple)):
-        return dict(zip(params, args))
-    return {params[0]: args}
+    if input_type == "dict":
+        return args if isinstance(args, dict) else {}
+    elif input_type == "tuple":
+        sig = inspect.signature(func)
+        params = list(sig.parameters.keys())
+        return dict(zip(params, args)) if isinstance(args, (list, tuple)) else {}
+    elif input_type == "single":
+        sig = inspect.signature(func)
+        params = list(sig.parameters.keys())
+        return {params[0]: args} if len(params) == 1 else {}
+    return {}
 
 def _clean_traceback(tb_text: str) -> str:
     """Remove unnecessary lines from traceback"""
@@ -51,6 +55,7 @@ def multi_thread(
     process=False,
     desc="",
     report=True,
+    input_type: Literal["single", "tuple", "dict"] = "single"
 ):
     clock = Clock()
     manager = Manager()
@@ -64,8 +69,13 @@ def multi_thread(
     @threaded(process=process)
     def f_wrapper_process(i_id, item):
         try:
-            dict_input = _convert_to_dict_input(func, item)
-            result = func(**dict_input)
+            dict_input = _convert_to_dict_input(func, item, input_type)
+            if input_type == "dict":
+                result = func(**dict_input)
+            elif input_type == "tuple":
+                result = func(*item)
+            else:  # input_type == "single"
+                result = func(item)
         except Exception as e:
 
             errors.append(
