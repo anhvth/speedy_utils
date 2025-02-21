@@ -22,12 +22,12 @@ def multi_thread(
     desc="",
 ):
     # func must have only one argument if not use a lambda forcing it
-    num_positional_args = len(func.__code__.co_varnames)
-    if num_positional_args != 1:
-        logger.warning(
-            f"Function must have only one argument but has {num_positional_args} now forcing it"
-        )
-        func = lambda x: func(x)
+    # num_positional_args = len(func.__code__.co_varnames)
+    # if num_positional_args != 1:
+    #     logger.warning(
+    #         f"Function must have only one argument but has {num_positional_args} now forcing it"
+    #     )
+    #     func = lambda x: func(x)
 
     manager = Manager()
     errors = manager.list()
@@ -79,6 +79,7 @@ def multi_thread(
                     pbar.set_postfix({"running": len(running_f)})
                     to_pop.append(i)
             running_f = [running_f[i] for i in range(len(running_f)) if i not in to_pop]
+    pbar.update(total - pbar.n)
     pbar.close()
 
     for p in running_f:
