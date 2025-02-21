@@ -67,7 +67,7 @@ def multi_thread(
     errors = manager.list()
     process = False
     shared_results = manager.dict()
-    share_count = manager.Value("i", 0)
+    completed_task_count = manager.Value("i", 0)
     process_lock = manager.Lock()
     results = {}
 
@@ -86,14 +86,14 @@ def multi_thread(
             errors.append(
                 {
                     "error": e,
-                    "input": dict_input,
+                    "input": str(dict_input),
                     "traceback": _clean_traceback(traceback.format_exc()),
                 }
             )
             result = None
 
         with process_lock:
-            share_count.value += 1
+            completed_task_count.value += 1
             if process:
                 shared_results[i_id] = result
             else:
@@ -103,8 +103,8 @@ def multi_thread(
     pbar = tqdm(total=len(inputs), disable=not verbose, desc=desc)
     inputs = [(i, inputs[i]) for i in range(len(inputs))]
     total = len(inputs)
-    while share_count.value < total:
-        logger.debug(f"Share count: {share_count.value}/{total}")
+    while completed_task_count.value < total:
+        # logger.debug(f"Share count: {completed_task_count.value}/{total}")
         num_running = len(running_f)
         while num_running < workers and len(inputs) > 0:
             i_id, item = inputs.pop(0)
