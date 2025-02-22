@@ -55,13 +55,13 @@ class ReportManager:
                 md_content.extend([
                     f"\n<details>",
                     f"<summary><b>{error_type}</b> ({len(errs)} occurrences)</summary>\n",
-                    "| Input | Error Message |",
-                    "|-------|---------------|"
+                    "| Index | Input | Error Message |",
+                    "|-------|-------|---------------|"
                 ])
                 
                 for err in errs:
                     md_content.append(
-                        f"| `{err['input']}` | {str(err['error'])} |"
+                        f"| {err['index']} | `{err['input']}` | {str(err['error'])} |"
                     )
                 
                 # Add first traceback as example
@@ -72,6 +72,13 @@ class ReportManager:
                     "```",
                     "</details>"
                 ])
+                
+            # Add a section listing all error indices
+            md_content.extend([
+                "\n## Error Indices",
+                "List of indices for items that encountered errors:",
+                ", ".join(str(err['index']) for err in errors)
+            ])
 
         md_content.extend([
             "\n## Results Summary",

@@ -58,9 +58,11 @@ def multi_thread(
     desc="",
     report=True,
     input_type: Literal["single", "tuple", "dict"] = "single",
+    reducer: Literal["flatten_list", "None"] = "None",
+    filter_none=True,
 ):
     if workers <= 1:
-        
+
         return [func(i) for i in tqdm(inputs, desc=desc)]
     clock = Clock()
     manager = Manager()
@@ -85,6 +87,7 @@ def multi_thread(
 
             errors.append(
                 {
+                    "index": i_id,
                     "error": e,
                     "input": str(dict_input),
                     "traceback": _clean_traceback(traceback.format_exc()),
@@ -100,7 +103,9 @@ def multi_thread(
                 results[i_id] = result
 
     running_f: List[Thread | Process] = []
-    pbar = tqdm(total=len(inputs), disable=not verbose, desc=desc)
+    pbar = tqdm(
+        total=len(inputs), disable=not verbose, desc=desc, smoothing=0.1, colour="green"
+    )
     inputs = [(i, inputs[i]) for i in range(len(inputs))]
     total = len(inputs)
     while completed_task_count.value < total:
@@ -129,6 +134,14 @@ def multi_thread(
         results = [shared_results[i] for i in range(len(inputs))]
     gc.collect()
     final_results = [results[i] for i in range(len(results))]
+
+    if filter_none:
+        logger.debug("Filtering None values from results")
+        final_results = [item for item in final_results if item is not None]
+    if reducer == "flatten_list":
+        logger.debug("Flattening list")
+        final_results = [item for sublist in final_results for item in sublist]
+
     if report:
         metadata = {
             "workers": workers,
@@ -151,4 +164,5 @@ def multi_thread(
             metadata=metadata,
         )
         print(f"Report saved at: {path}")
+
     return final_results
