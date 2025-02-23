@@ -104,12 +104,20 @@ def multi_thread(
 
     running_f: List[Thread | Process] = []
     pbar = tqdm(
-        total=len(inputs), disable=not verbose, desc=desc, smoothing=0.1, colour="green"
+        total=len(inputs),
+        disable=not verbose,
+        desc=desc,
+        smoothing=0.1,
+        colour="green",
+        position=0,
+        mininterval=2,
+        ncols=80,
+        leave=True,
     )
     inputs = [(i, inputs[i]) for i in range(len(inputs))]
     total = len(inputs)
+    # clock = Clock()
     while completed_task_count.value < total:
-        # logger.debug(f"Share count: {completed_task_count.value}/{total}")
         num_running = len(running_f)
         while num_running < workers and len(inputs) > 0:
             i_id, item = inputs.pop(0)
@@ -121,10 +129,19 @@ def multi_thread(
             to_pop = []
             for i, p in enumerate(running_f):
                 if not p.is_alive():
-                    pbar.update(1)
-                    pbar.set_postfix({"running": len(running_f)})
                     to_pop.append(i)
+                    # if len(to_pop) > 0 and len(to_pop) % 1 == 0:
+                    # pbar.set_postfix(
+                    #     {
+                    #         "running": len(running_f),
+                    #     }
+                    # )
+                    pbar.update(1)
+
             running_f = [running_f[i] for i in range(len(running_f)) if i not in to_pop]
+        # if clock.time_since_last_checkpoint() > 0.1:
+        #     pbar.update(len(to_pop))
+        #     clock.tick()
     pbar.update(total - pbar.n)
     pbar.close()
 
@@ -143,26 +160,29 @@ def multi_thread(
         final_results = [item for sublist in final_results for item in sublist]
 
     if report:
-        metadata = {
-            "workers": workers,
-            "mode": "process" if process else "thread",
-            "total_inputs": len(inputs),
-            "execution_mode": (
-                "multi_process"
-                if process
-                else "multi_thread" if workers > 1 else "sequential"
-            ),
-            "max_workers": workers,
-            "description": desc
-            or func.__name__,  # Use description if provided, otherwise function name
-            "function_name": func.__name__,
-        }
-        path = ReportManager().save_report(
-            errors=errors,
-            results=final_results,
-            execution_time=clock.time_since_last_checkpoint(),
-            metadata=metadata,
-        )
-        print(f"Report saved at: {path}")
+        try:
+            metadata = {
+                "workers": workers,
+                "mode": "process" if process else "thread",
+                "total_inputs": len(inputs),
+                "execution_mode": (
+                    "multi_process"
+                    if process
+                    else "multi_thread" if workers > 1 else "sequential"
+                ),
+                "max_workers": workers,
+                "description": desc
+                or func.__name__,  # Use description if provided, otherwise function name
+                "function_name": func.__name__,
+            }
+            ReportManager().save_report(
+                errors=errors,
+                results=final_results,
+                execution_time=clock.time_since_last_checkpoint(),
+                metadata=metadata,
+            )
+
+        except Exception as e:
+            logger.debug(f"Error saving report: {e}")
 
     return final_results
