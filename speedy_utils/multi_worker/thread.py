@@ -130,18 +130,9 @@ def multi_thread(
             for i, p in enumerate(running_f):
                 if not p.is_alive():
                     to_pop.append(i)
-                    # if len(to_pop) > 0 and len(to_pop) % 1 == 0:
-                    # pbar.set_postfix(
-                    #     {
-                    #         "running": len(running_f),
-                    #     }
-                    # )
                     pbar.update(1)
 
             running_f = [running_f[i] for i in range(len(running_f)) if i not in to_pop]
-        # if clock.time_since_last_checkpoint() > 0.1:
-        #     pbar.update(len(to_pop))
-        #     clock.tick()
     pbar.update(total - pbar.n)
     pbar.close()
 
