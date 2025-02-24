@@ -57,10 +57,13 @@ def multi_thread(
     process=False,
     desc="",
     report=True,
-    input_type: Literal["single", "tuple", "dict"] = "single",
+    input_type: Literal["single", "tuple", "dict", "df"] = "single",
     reducer: Literal["flatten_list", "None"] = "None",
-    filter_none=True,
+    filter_none=False,
 ):
+    if input_type == "df":
+        inputs = inputs.to_dict(orient="records")
+        input_type = "dict"
     if workers <= 1:
 
         return [func(i) for i in tqdm(inputs, desc=desc)]
