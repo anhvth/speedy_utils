@@ -7,8 +7,6 @@ class ReportManager:
         self.cache_dir = os.path.expanduser("~/.cache/speedy_utils")
         os.makedirs(self.cache_dir, exist_ok=True)
     def save_report(self, errors, results, execution_time=None, metadata=None):
-        @threaded
-        def _f():
             report_path = os.path.join(
                 self.cache_dir,
                 f"report_{datetime.now().strftime('%m%d_%H%M')}.md"
