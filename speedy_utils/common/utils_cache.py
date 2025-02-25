@@ -226,7 +226,7 @@ def memoize(
     verbose=False,
     cache_key=None,
 ):
-    logger.debug(f"Memoize function: {_func.__name__}")
+    # logger.debug(f"Memoize function: {_func.__name__}")
     # handle case when _func is a wrapper func, we must return the inner func
     
     
