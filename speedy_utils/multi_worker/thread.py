@@ -180,3 +180,11 @@ def multi_thread(
             logger.debug(f"Error saving report: {e}")
 
     return final_results
+
+
+if __name__ == '__main__':
+    def f(x):
+        time.sleep(random.random())
+        return x * x
+    inputs = list(range(100))
+    results = multi_thread(f, inputs, workers=4, verbose=True)
