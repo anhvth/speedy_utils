@@ -17,45 +17,79 @@ from speedy_utils.common.utils_print import setup_logger
 def multi_process(
     func: callable,
     inputs: List[any],
-    workers=4,
-    verbose=True,
-    show_traceback=True,
-    desc="",
-):
-    # Function wrapper to handle errors
-    def func_wrapper(idx, item):
-        try:
-            return idx, func(item)
-        except Exception as e:
-            if show_traceback:
-                import traceback
-                logger.error(traceback.format_exc())
-            else:
-                logger.error(f"Error with input {item}: {e}")
-            return idx, None
-    
-    # Process inputs with joblib in batches to update tqdm
+    workers: int = 4,
+    verbose: bool = True,
+    show_traceback: bool = True,
+    desc: str = "",
+) -> List[any]:
+    """
+    Process inputs in parallel using multiple processes.
+
+    Args:
+        func: Function to apply to each input
+        inputs: List of inputs to process
+        workers: Number of worker processes
+        verbose: Whether to show progress bar
+        show_traceback: Whether to show full traceback on errors
+        desc: Description for the progress bar
+
+    Returns:
+        List of results in the same order as inputs
+    """
+    from multiprocessing import Process, Queue
+    from queue import Empty
+
+    def worker(input_queue, output_queue, func):
+        while True:
+            try:
+                idx, item = input_queue.get_nowait()
+                try:
+                    result = func(item)
+                    output_queue.put((idx, result))
+                except Exception as e:
+                    if show_traceback:
+                        import traceback
+
+                        logger.error(traceback.format_exc())
+                    else:
+                        logger.error(f"Error with input {item}: {e}")
+                    output_queue.put((idx, None))
+            except Empty:
+                break
+
+    # Initialize queues
+    input_queue = Queue()
+    output_queue = Queue()
+
+    # Fill input queue
+    for i, item in enumerate(inputs):
+        input_queue.put((i, item))
+
+    # Start workers
+    processes = []
+    for _ in range(min(workers, len(inputs))):
+        p = Process(target=worker, args=(input_queue, output_queue, func))
+        p.start()
+        processes.append(p)
+
+    # Collect results
     results = {}
     total_inputs = len(inputs)
-    
-    # Determine a reasonable batch size for progress updates
-    batch_size = max(1, min(100, total_inputs // max(1, workers * 2)))
-    
-    with tqdm(total=total_inputs, disable=not verbose, desc=desc) as pbar:
-        for i in range(0, total_inputs, batch_size):
-            batch_end = min(i + batch_size, total_inputs)
-            batch_inputs = [(j, inputs[j]) for j in range(i, batch_end)]
-            
-            # Process batch in parallel using joblib
-            batch_results = joblib.Parallel(n_jobs=workers, verbose=0)(
-                joblib.delayed(func_wrapper)(idx, item) for idx, item in batch_inputs
-            )
-            
-            # Store results and update progress
-            for idx, result in batch_results:
-                results[idx] = result
-            pbar.update(len(batch_inputs))
-    
-    gc.collect()
-    return [results[i] for i in range(total_inputs)]
 
+    with tqdm(total=total_inputs, disable=not verbose, desc=desc) as pbar:
+        while len(results) < total_inputs:
+            idx, result = output_queue.get()
+            results[idx] = result
+            pbar.update(1)
+
+    # Wait for all processes to complete
+    for p in processes:
+        p.join()
+
+    # Clean up
+    input_queue.close()
+    output_queue.close()
+    gc.collect()
+
+    # Return results in original order
+    return [results[i] for i in range(total_inputs)]
