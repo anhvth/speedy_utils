@@ -117,3 +117,4 @@ dmypy.json
 
 # pytype static type analyzer
 .pytype/
+./cachedir

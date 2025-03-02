@@ -162,9 +162,9 @@ def fprint(
         printer.pprint(processed_data)
 
 
-def print_table(data: Any) -> None:
+def print_table(data: Any, use_html: bool = True) -> None:
     """
-    Print data as a table.
+    Print data as a table. If use_html is True, display using IPython HTML.
     """
 
     def __get_table(data: Any) -> str:
@@ -178,19 +178,22 @@ def print_table(data: Any) -> None:
             if all(isinstance(item, dict) for item in data):
                 headers = list(data[0].keys())
                 rows = [list(item.values()) for item in data]
-                return tabulate(rows, headers=headers)
+                return tabulate(rows, headers=headers, tablefmt="html" if use_html else "grid")
             else:
                 raise ValueError("List must contain dictionaries")
 
         if isinstance(data, dict):
             headers = ["Key", "Value"]
             rows = list(data.items())
-            return tabulate(rows, headers=headers)
+            return tabulate(rows, headers=headers, tablefmt="html" if use_html else "grid")
 
         raise TypeError("Input data must be a list of dictionaries, a dictionary, or a JSON string")
 
     table = __get_table(data)
-    print(table)
+    if use_html:
+        display(HTML(table))
+    else:
+        print(table)
 
 
 

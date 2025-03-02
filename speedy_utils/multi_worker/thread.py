@@ -13,7 +13,6 @@ from tqdm import tqdm
 
 from speedy_utils.common.clock import Clock
 from speedy_utils.common.report_manager import ReportManager
-from speedy_utils.common.utils_print import setup_logger
 
 
 def _convert_to_dict_input(func, args, input_type):
@@ -60,7 +59,10 @@ def multi_thread(
     input_type: Literal["single", "tuple", "dict", "df"] = "single",
     reducer: Literal["flatten_list", "None"] = "None",
     filter_none=False,
+    **kwargs,
 ):
+    if "num_threads" in kwargs:
+        workers = kwargs.pop("num_threads")
     if input_type == "df":
         inputs = inputs.to_dict(orient="records")
         input_type = "dict"

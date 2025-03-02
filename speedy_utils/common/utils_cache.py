@@ -14,7 +14,7 @@ import xxhash
 from .utils_io import dump_json_or_pickle, load_json_or_pickle
 from .utils_misc import mkdir_or_exist
 
-SPEED_CACHE_DIR = osp.join(osp.expanduser("~"), ".cache/multi_thread")
+SPEED_CACHE_DIR = osp.join(osp.expanduser("~"), ".cache/speedy_cache")
 LRU_MEM_CACHE = cachetools.LRUCache(maxsize=128_000)
 from threading import Lock
 
@@ -32,28 +32,27 @@ def fast_serialize(x: Any) -> bytes:
         return pickle.dumps(x, protocol=pickle.HIGHEST_PROTOCOL)
 
 
-def identify(obj: Any) -> str:
+def identify(obj: Any, depth=0, max_depth=2) -> str:
+    if depth > max_depth:
+        obj = str(obj)
     
     if isinstance(obj, (list, tuple)):
-        x = [identify(x) for x in obj]
+        x = [identify(x, depth + 1, max_depth) for x in obj]
         x = '\n'.join(x)
-        return identify(x)
-    # is a callable
+        return identify(x, depth + 1, max_depth)
     elif hasattr(obj, "__code__"):
-        return identify(_get_source(obj))
+        return identify(_get_source(obj), depth + 1, max_depth)
     elif isinstance(obj, BaseModel):
         obj = obj.model_dump()
-        return identify(obj)
+        return identify(obj, depth + 1, max_depth)
     elif isinstance(obj, dict):
         ks = sorted(obj.keys())
-        vs = [identify(obj[k]) for k in ks]
-        return identify([ks, vs])
+        vs = [identify(obj[k], depth + 1, max_depth) for k in ks]
+        return identify([ks, vs], depth + 1, max_depth)
     elif obj is None:
-        return identify("None")
+        return identify("None", depth + 1, max_depth)
     else:
-        # expect to be a primitive type
         primitive_types = [int, float, str, bool]
-        # if not warning, it is not a primitive type
         if not type(obj) in primitive_types:
             logger.warning(f"Unknown type: {type(obj)}")
         return xxhash.xxh64_hexdigest(fast_serialize(obj), seed=0)
@@ -72,7 +71,7 @@ def _get_source(func):
     return code
 
 
-def _compute_func_id(func, args, kwargs, ignore_self, cache_key, keys):
+def _compute_func_id(func, args, kwargs, ignore_self, keys):
     func_source = _get_source(func)
     if keys:
         arg_spec = inspect.getfullargspec(func).args
@@ -80,14 +79,13 @@ def _compute_func_id(func, args, kwargs, ignore_self, cache_key, keys):
         used_args.update(kwargs)
         values = [used_args[k] for k in keys if k in used_args]
         if not values:
-            return None, None, None
+            raise ValueError(f"Keys {keys} not found in function arguments")
+        param_hash = identify(values)
         dir_path = f"{func.__name__}_{identify(func_source)}"
-        key_id = f"{'_'.join(keys)}_{identify(values)}.pkl"
+        key_id = f"{'_'.join(keys)}_{param_hash}.pkl"
         return func_source, dir_path, key_id
 
-    if cache_key and cache_key in kwargs:
-        fid = [func_source, kwargs[cache_key]]
-    elif (
+    if (
         inspect.getfullargspec(func).args
         and inspect.getfullargspec(func).args[0] == "self"
         and ignore_self
@@ -98,12 +96,12 @@ def _compute_func_id(func, args, kwargs, ignore_self, cache_key, keys):
     return func_source, "funcs", f"{identify(fid)}.pkl"
 
 
-def _disk_memoize(func, keys, cache_dir, ignore_self, verbose, cache_key):
+def _disk_memoize(func, keys, cache_dir, ignore_self, verbose):
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         # Compute cache path as before
         func_source, sub_dir, key_id = _compute_func_id(
-            func, args, kwargs, ignore_self, cache_key, keys
+            func, args, kwargs, ignore_self, keys
         )
         if func_source is None:
             return func(*args, **kwargs)
@@ -138,7 +136,7 @@ def _disk_memoize(func, keys, cache_dir, ignore_self, verbose, cache_key):
     return wrapper
 
 
-def _memory_memoize(func, size, keys, ignore_self, cache_key):
+def _memory_memoize(func, size, keys, ignore_self):
     global LRU_MEM_CACHE
     if LRU_MEM_CACHE.maxsize != size:
         LRU_MEM_CACHE = cachetools.LRUCache(maxsize=size)
@@ -146,7 +144,7 @@ def _memory_memoize(func, size, keys, ignore_self, cache_key):
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         func_source, sub_dir, key_id = _compute_func_id(
-            func, args, kwargs, ignore_self, cache_key, keys
+            func, args, kwargs, ignore_self, keys
         )
         if func_source is None:
             return func(*args, **kwargs)
@@ -170,11 +168,11 @@ def _memory_memoize(func, size, keys, ignore_self, cache_key):
     return wrapper
 
 
-def _both_memoize(func, keys, cache_dir, ignore_self, verbose, cache_key):
+def _both_memoize(func, keys, cache_dir, ignore_self, verbose, ):
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         func_source, sub_dir, key_id = _compute_func_id(
-            func, args, kwargs, ignore_self, cache_key, keys
+            func, args, kwargs, ignore_self, keys
         )
         if func_source is None:
             return func(*args, **kwargs)
@@ -201,12 +199,11 @@ def _both_memoize(func, keys, cache_dir, ignore_self, verbose, cache_key):
                 with mem_lock:
                     func._mem_cache[mem_key] = result
                 return result
-
+        logger.debug(f"Cache MISS for {func.__name__}, key={cache_path}")
         result = func(*args, **kwargs)
 
         with disk_lock:
             if not osp.exists(cache_path):
-                # logger.debug(f"Cache MISS for {func.__name__}, key={cache_path}")
                 dump_json_or_pickle(result, cache_path)
         with mem_lock:
             func._mem_cache[mem_key] = result
@@ -224,7 +221,6 @@ def memoize(
     size=10240,
     ignore_self=True,
     verbose=False,
-    cache_key=None,
 ):
     # logger.debug(f"Memoize function: {_func.__name__}")
     # handle case when _func is a wrapper func, we must return the inner func
@@ -232,10 +228,10 @@ def memoize(
     
     def decorator(func):
         if cache_type == "memory":
-            return _memory_memoize(func, size, keys, ignore_self, cache_key)
+            return _memory_memoize(func, size, keys, ignore_self,)
         elif cache_type == "disk":
-            return _disk_memoize(func, keys, cache_dir, ignore_self, verbose, cache_key)
-        return _both_memoize(func, keys, cache_dir, ignore_self, verbose, cache_key)
+            return _disk_memoize(func, keys, cache_dir, ignore_self, verbose, )
+        return _both_memoize(func, keys, cache_dir, ignore_self, verbose, )
 
     if _func is None:
         return decorator
