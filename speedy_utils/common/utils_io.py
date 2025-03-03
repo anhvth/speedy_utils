@@ -9,7 +9,7 @@ from glob import glob
 from typing import Any, List, Dict, Union
 import time
 from .utils_misc import mkdir_or_exist
-
+import json_repair
 
 def dump_jsonl(list_dictionaries: List[Dict], file_name: str = "output.jsonl") -> None:
     """
@@ -137,3 +137,6 @@ def load_by_ext(fname: Union[str, List[str]], do_memoize: bool = False) -> Any:
         return load_fn(fname)
     except Exception as e:
         raise ValueError(f"Error {e} while loading {fname}") from e
+
+
+jloads = json_repair.loads
