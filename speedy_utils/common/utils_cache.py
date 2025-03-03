@@ -224,6 +224,8 @@ def memoize(
 ):
     # logger.debug(f"Memoize function: {_func.__name__}")
     # handle case when _func is a wrapper func, we must return the inner func
+    if '~/' in cache_dir:
+        cache_dir = osp.expanduser(cache_dir)
     
     
     def decorator(func):

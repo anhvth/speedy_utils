@@ -69,7 +69,8 @@ def multi_thread(
         inputs = inputs.to_dict(orient="records")
         input_type = "dict"
     if workers <= 1:
-        return [func(i) for i in tqdm(inputs, desc=desc)]
+        pbar = tqdm(inputs, desc=desc) if verbose else inputs
+        return [func(i) for i in pbar]
     clock = Clock()
     manager = Manager()
     errors = manager.list()
