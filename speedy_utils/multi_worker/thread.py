@@ -14,6 +14,8 @@ from tqdm import tqdm
 from speedy_utils.common.clock import Clock
 from speedy_utils.common.report_manager import ReportManager
 
+THREADS = []  # Add a global variable to store threads
+
 
 def _convert_to_dict_input(func, args, input_type):
     """Convert positional arguments to dictionary using function parameter names"""
@@ -67,7 +69,6 @@ def multi_thread(
         inputs = inputs.to_dict(orient="records")
         input_type = "dict"
     if workers <= 1:
-
         return [func(i) for i in tqdm(inputs, desc=desc)]
     clock = Clock()
     manager = Manager()
@@ -89,7 +90,6 @@ def multi_thread(
             else:  # input_type == "single"
                 result = func(item)
         except Exception as e:
-
             errors.append(
                 {
                     "index": i_id,
@@ -121,13 +121,13 @@ def multi_thread(
     )
     inputs = [(i, inputs[i]) for i in range(len(inputs))]
     total = len(inputs)
-    # clock = Clock()
     while completed_task_count.value < total:
         num_running = len(running_f)
         while num_running < workers and len(inputs) > 0:
             i_id, item = inputs.pop(0)
             process_or_thread = f_wrapper_process(i_id, item)
             running_f.append(process_or_thread)
+            THREADS.append(process_or_thread)  # Store thread to THREADS
             num_running = len(running_f)
 
         with process_lock:
@@ -184,9 +184,11 @@ def multi_thread(
     return final_results
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
+
     def f(x):
         time.sleep(random.random())
         return x * x
+
     inputs = list(range(100))
     results = multi_thread(f, inputs, workers=4, verbose=True)

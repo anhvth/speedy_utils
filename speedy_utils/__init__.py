@@ -1,30 +1,16 @@
 from speedy_utils.common.dataclass_parser import ArgsParser
 from speedy_utils.common.function_decorator import retry_runtime
 from speedy_utils.multi_worker.process import multi_process
+
 from .common.clock import Clock, speedy_timer, timef
 from .common.generic import TaskDistributor
-from .common.utils_io import jloads
-from .common.utils_cache import (
-    SPEED_CACHE_DIR,
-    identify,
-    identify_uuid,
-    memoize,
-)
-from .common.utils_io import (
-    dump_json_or_pickle,
-    dump_jsonl,
-    load_by_ext,
-    load_json_or_pickle,
-)
-from .common.utils_misc import (
-    convert_to_builtin_python,
-    flatten_list,
-    get_arg_names,
-    is_notebook,
-    mkdir_or_exist,
-)
+from .common.utils_cache import (SPEED_CACHE_DIR, identify, identify_uuid,
+                                 memoize)
+from .common.utils_io import (dump_json_or_pickle, dump_jsonl, jdumps, jloads,
+                              load_by_ext, load_json_or_pickle)
+from .common.utils_misc import (convert_to_builtin_python, flatten_list,
+                                get_arg_names, is_notebook, mkdir_or_exist)
 from .common.utils_print import fprint, print_table, setup_logger
-
 from .multi_worker.thread import multi_thread
 
 __all__ = [
@@ -53,4 +39,5 @@ __all__ = [
     "ArgsParser",
     "retry_runtime",
     "jloads",
+    "jdumps",
 ]

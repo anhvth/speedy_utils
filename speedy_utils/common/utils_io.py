@@ -3,13 +3,14 @@
 import json
 import os
 import os.path as osp
-from pathlib import Path
 import pickle
-from glob import glob
-from typing import Any, List, Dict, Union
 import time
+from glob import glob
+from pathlib import Path
+from typing import Any, Dict, List, Union
+from json_repair import loads as jloads
 from .utils_misc import mkdir_or_exist
-import json_repair
+
 
 def dump_jsonl(list_dictionaries: List[Dict], file_name: str = "output.jsonl") -> None:
     """
@@ -83,11 +84,12 @@ def load_by_ext(fname: Union[str, List[str]], do_memoize: bool = False) -> Any:
     """
     if isinstance(fname, Path):
         fname = str(fname)
+    from speedy_utils import multi_process
+
     from .utils_cache import (
         memoize,
     )  # Adjust import based on your actual multi_worker module
 
-    from speedy_utils import multi_process
     try:
         if isinstance(fname, str) and "*" in fname:
             paths = glob(fname)
@@ -139,4 +141,15 @@ def load_by_ext(fname: Union[str, List[str]], do_memoize: bool = False) -> Any:
         raise ValueError(f"Error {e} while loading {fname}") from e
 
 
-jloads = json_repair.loads
+def jdumps(obj, ensure_ascii=False, indent=None, **kwargs):
+    return json.dumps(obj, ensure_ascii=ensure_ascii, indent=indent, **kwargs)
+
+
+__all__ = [
+    "dump_json_or_pickle",
+    "dump_jsonl",
+    "load_by_ext",
+    "load_json_or_pickle",
+    "jdumps",
+    "jloads",
+]
