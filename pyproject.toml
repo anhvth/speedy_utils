@@ -11,23 +11,22 @@ requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.poetry.dependencies]
-python = "^3.8"          # Allows any Python 3.8.x or higher (but <4.0)
-numpy = "^1.23"          # Any version 1.23.x or higher but <2.0
-requests = "^2.26"       # Any 2.26.x but not 3.0
-xxhash = "^3.4"          # Any 3.4.x but not 4.0
-loguru = "^0.7.0"        # Any 0.7.x but not 1.0
-fastcore = "^1.5.29"     # Any 1.5.x but not 2.0
-debugpy = "^1.6"         # Any 1.6.x but not 2.0
-ipywidgets = "^8.0.4"    # Any 8.0.x but not 9.0
-jupyterlab = "^4.0"      # Any 4.x.x but not 5.0
-ipdb = "^0.13"          # Any 0.13.x but not 1.0
-scikit-learn = "^1.3"    # Any 1.3.x but not 2.0
-matplotlib = "^3.7"      # Any 3.7.x but not 4.0
-pandas = "^1.5"         # Any 1.5.x but not 2.0
-tabulate = "^0.9"        # Any 0.9.x but not 1.0
-pydantic = "^2.0"       # Any 2.0.x but not 3.0
-tqdm = "^4.67.1"
-dill = "^0.3.9"
-cachetools = "^5.5.1"
-openai = "^1.63.2"
-bump2version = "^1.0.1"
+python = ">=3.8,<4.0"          # Allows any Python 3.8.x or higher (but <4.0)
+numpy = ">=1.23,<2.0"          # Any version 1.23.x or higher but <2.0
+requests = ">=2.26,<3.0"       # Any 2.26.x but not 3.0
+xxhash = ">=3.4,<4.0"          # Any 3.4.x but not 4.0
+loguru = ">=0.7.0,<1.0"        # Any 0.7.x but not 1.0
+fastcore = ">=1.5.29,<2.0"     # Any 1.5.x but not 2.0
+debugpy = ">=1.6,<2.0"         # Any 1.6.x but not 2.0
+ipywidgets = ">=8.0.4,<9.0"    # Any 8.0.x but not 9.0
+jupyterlab = ">=4.0,<5.0"      # Any 4.x.x but not 5.0
+ipdb = ">=0.13,<1.0"           # Any 0.13.x but not 1.0
+scikit-learn = ">=1.3,<2.0"    # Any 1.3.x but not 2.0
+matplotlib = ">=3.7,<4.0"      # Any 3.7.x but not 4.0
+pandas = ">=1.5,<2.0"          # Any 1.5.x but not 2.0
+tabulate = ">=0.9,<1.0"        # Any 0.9.x but not 1.0
+pydantic = ">=2.0,<3.0"        # Any 2.0.x but not 3.0
+tqdm = ">=4.67.1,<5.0"
+dill = ">=0.3.9,<1.0"
+cachetools = ">=5.5.1,<6.0"
+bump2version = ">=1.0.1,<2.0"

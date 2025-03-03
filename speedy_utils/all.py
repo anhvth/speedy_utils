@@ -32,7 +32,7 @@ import xxhash
 from IPython import get_ipython
 from IPython.display import HTML, display
 from loguru import logger
-from openai import BaseModel
+from pydantic import BaseModel
 from tabulate import tabulate
 from tqdm import tqdm
 
