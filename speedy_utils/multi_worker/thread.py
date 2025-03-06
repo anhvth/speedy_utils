@@ -3,11 +3,12 @@ import inspect
 import random
 import time
 import traceback
+import dill
 from multiprocessing import Manager, Process
 from threading import Thread
 from typing import List, Literal
 
-from fastcore.all import threaded
+from fastcore.all import threaded, parallel
 from loguru import logger
 from tqdm import tqdm
 
@@ -55,126 +56,60 @@ def multi_thread(
     inputs: List[any],
     workers=64,
     verbose=True,
-    process=False,
-    desc="",
     report=True,
     input_type: Literal["single", "tuple", "dict", "df"] = "single",
-    reducer: Literal["flatten_list", "None"] = "None",
-    filter_none=False,
+    stop_on_error=True,
     **kwargs,
 ):
-    if "num_threads" in kwargs:
-        workers = kwargs.pop("num_threads")
+
     if input_type == "df":
         inputs = inputs.to_dict(orient="records")
         input_type = "dict"
-    if workers <= 1:
-        pbar = tqdm(inputs, desc=desc) if verbose else inputs
-        return [func(i) for i in pbar]
     clock = Clock()
-    manager = Manager()
-    errors = manager.list()
-    process = False
-    shared_results = manager.dict()
-    completed_task_count = manager.Value("i", 0)
-    process_lock = manager.Lock()
-    results = {}
+    errors = []
+    results = []
 
-    @threaded(process=process)
-    def f_wrapper_process(i_id, item):
+    def f_wrapper(item):
         try:
             dict_input = _convert_to_dict_input(func, item, input_type)
             if input_type == "dict":
-                result = func(**dict_input)
+                return func(**dict_input, **kwargs)
             elif input_type == "tuple":
-                result = func(*item)
-            else:  # input_type == "single"
-                result = func(item)
+                return func(*item,**kwargs)
+            else:
+                return func(item,**kwargs)
         except Exception as e:
             errors.append(
                 {
-                    "index": i_id,
                     "error": e,
                     "input": str(dict_input),
                     "traceback": _clean_traceback(traceback.format_exc()),
                 }
             )
-            result = None
+            if stop_on_error:
+                raise e
 
-        with process_lock:
-            completed_task_count.value += 1
-            if process:
-                shared_results[i_id] = result
-            else:
-                results[i_id] = result
-
-    running_f: List[Thread | Process] = []
-    pbar = tqdm(
-        total=len(inputs),
-        disable=not verbose,
-        desc=desc,
-        smoothing=0.1,
-        colour="green",
-        position=0,
-        mininterval=2,
-        ncols=80,
-        leave=True,
+    results = parallel(
+        f_wrapper,
+        inputs,
+        n_workers=workers,
+        progress=verbose,
+        threadpool=True,
     )
-    inputs = [(i, inputs[i]) for i in range(len(inputs))]
-    total = len(inputs)
-    while completed_task_count.value < total:
-        num_running = len(running_f)
-        while num_running < workers and len(inputs) > 0:
-            i_id, item = inputs.pop(0)
-            process_or_thread = f_wrapper_process(i_id, item)
-            running_f.append(process_or_thread)
-            THREADS.append(process_or_thread)  # Store thread to THREADS
-            num_running = len(running_f)
-
-        with process_lock:
-            to_pop = []
-            for i, p in enumerate(running_f):
-                if not p.is_alive():
-                    to_pop.append(i)
-                    pbar.update(1)
-
-            running_f = [running_f[i] for i in range(len(running_f)) if i not in to_pop]
-    pbar.update(total - pbar.n)
-    pbar.close()
-
-    for p in running_f:
-        p.join()
-    if not results:
-        results = [shared_results[i] for i in range(len(inputs))]
-    gc.collect()
-    final_results = [results[i] for i in range(len(results))]
-
-    if filter_none:
-        logger.debug("Filtering None values from results")
-        final_results = [item for item in final_results if item is not None]
-    if reducer == "flatten_list":
-        logger.debug("Flattening list")
-        final_results = [item for sublist in final_results for item in sublist]
 
     if report:
         try:
             metadata = {
+                "mode": "multi_thread",
                 "workers": workers,
-                "mode": "process" if process else "thread",
                 "total_inputs": len(inputs),
-                "execution_mode": (
-                    "multi_process"
-                    if process
-                    else "multi_thread" if workers > 1 else "sequential"
-                ),
+                "execution_mode": "multi_thread",
                 "max_workers": workers,
-                "description": desc
-                or func.__name__,  # Use description if provided, otherwise function name
                 "function_name": func.__name__,
             }
             ReportManager().save_report(
                 errors=errors,
-                results=final_results,
+                results=results,
                 execution_time=clock.time_since_last_checkpoint(),
                 metadata=metadata,
             )
@@ -182,7 +117,7 @@ def multi_thread(
         except Exception as e:
             logger.debug(f"Error saving report: {e}")
 
-    return final_results
+    return results
 
 
 if __name__ == "__main__":

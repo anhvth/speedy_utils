@@ -56,7 +56,7 @@ def test_multi_process_success():
     inputs = range(5)
     results = multi_process(
         func=lambda x: multiply(x, factor=3),
-        inputs=inputs,
+        items=inputs,
         workers=2,
         verbose=False
     )
