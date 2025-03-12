@@ -25,54 +25,8 @@ disk_lock = Lock()
 mem_lock = Lock()
 
 
-def fast_serialize(x: Any) -> bytes:
-    try:
-        return json.dumps(x, sort_keys=True).encode("utf-8")
-    except (TypeError, ValueError):
-        return pickle.dumps(x, protocol=pickle.HIGHEST_PROTOCOL)
-
-
-def identify(obj: Any, depth=0, max_depth=2) -> str:
-    if depth > max_depth:
-        obj = str(obj)
-    
-    if isinstance(obj, (list, tuple)):
-        x = [identify(x, depth + 1, max_depth) for x in obj]
-        x = '\n'.join(x)
-        return identify(x, depth + 1, max_depth)
-    elif hasattr(obj, "__code__"):
-        return identify(_get_source(obj), depth + 1, max_depth)
-    elif isinstance(obj, BaseModel):
-        obj = obj.model_dump()
-        return identify(obj, depth + 1, max_depth)
-    elif isinstance(obj, dict):
-        ks = sorted(obj.keys())
-        vs = [identify(obj[k], depth + 1, max_depth) for k in ks]
-        return identify([ks, vs], depth + 1, max_depth)
-    elif obj is None:
-        return identify("None", depth + 1, max_depth)
-    else:
-        primitive_types = [int, float, str, bool]
-        if not type(obj) in primitive_types:
-            logger.warning(f"Unknown type: {type(obj)}")
-        return xxhash.xxh64_hexdigest(fast_serialize(obj), seed=0)
-
-
-def identify_uuid(x: Any) -> str:
-    data = fast_serialize(x)
-    hash_obj = xxhash.xxh128(data, seed=0)
-    return str(uuid.UUID(bytes=hash_obj.digest()))
-
-
-def _get_source(func):
-    code = inspect.getsource(func)
-    for r in [" ", "\n", "\t", "\r"]:
-        code = code.replace(r, "")
-    return code
-
-
-def _compute_func_id(func, args, kwargs, ignore_self, keys):
-    func_source = _get_source(func)
+def compute_func_id(func, args, kwargs, ignore_self, keys):
+    func_source = get_source(func)
     if keys:
         arg_spec = inspect.getfullargspec(func).args
         used_args = {arg_spec[i]: arg for i, arg in enumerate(args)}
@@ -96,11 +50,57 @@ def _compute_func_id(func, args, kwargs, ignore_self, keys):
     return func_source, "funcs", f"{identify(fid)}.pkl"
 
 
+def fast_serialize(x: Any) -> bytes:
+    try:
+        return json.dumps(x, sort_keys=True).encode("utf-8")
+    except (TypeError, ValueError):
+        return pickle.dumps(x, protocol=pickle.HIGHEST_PROTOCOL)
+
+
+def identify(obj: Any, depth=0, max_depth=2) -> str:
+    if depth > max_depth:
+        obj = str(obj)
+
+    if isinstance(obj, (list, tuple)):
+        x = [identify(x, depth + 1, max_depth) for x in obj]
+        x = "\n".join(x)
+        return identify(x, depth + 1, max_depth)
+    elif hasattr(obj, "__code__"):
+        return identify(get_source(obj), depth + 1, max_depth)
+    elif isinstance(obj, BaseModel):
+        obj = obj.model_dump()
+        return identify(obj, depth + 1, max_depth)
+    elif isinstance(obj, dict):
+        ks = sorted(obj.keys())
+        vs = [identify(obj[k], depth + 1, max_depth) for k in ks]
+        return identify([ks, vs], depth + 1, max_depth)
+    elif obj is None:
+        return identify("None", depth + 1, max_depth)
+    else:
+        primitive_types = [int, float, str, bool]
+        if not type(obj) in primitive_types:
+            logger.warning(f"Unknown type: {type(obj)}")
+        return xxhash.xxh64_hexdigest(fast_serialize(obj), seed=0)
+
+
+def identify_uuid(x: Any) -> str:
+    data = fast_serialize(x)
+    hash_obj = xxhash.xxh128(data, seed=0)
+    return str(uuid.UUID(bytes=hash_obj.digest()))
+
+
+def get_source(func):
+    code = inspect.getsource(func)
+    for r in [" ", "\n", "\t", "\r"]:
+        code = code.replace(r, "")
+    return code
+
+
 def _disk_memoize(func, keys, cache_dir, ignore_self, verbose):
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         # Compute cache path as before
-        func_source, sub_dir, key_id = _compute_func_id(
+        func_source, sub_dir, key_id = compute_func_id(
             func, args, kwargs, ignore_self, keys
         )
         if func_source is None:
@@ -143,7 +143,7 @@ def _memory_memoize(func, size, keys, ignore_self):
 
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        func_source, sub_dir, key_id = _compute_func_id(
+        func_source, sub_dir, key_id = compute_func_id(
             func, args, kwargs, ignore_self, keys
         )
         if func_source is None:
@@ -168,10 +168,10 @@ def _memory_memoize(func, size, keys, ignore_self):
     return wrapper
 
 
-def _both_memoize(func, keys, cache_dir, ignore_self, verbose, ):
+def both_memoize(func, keys, cache_dir, ignore_self):
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        func_source, sub_dir, key_id = _compute_func_id(
+        func_source, sub_dir, key_id = compute_func_id(
             func, args, kwargs, ignore_self, keys
         )
         if func_source is None:
@@ -217,27 +217,40 @@ def memoize(
     *,
     keys=None,
     cache_dir=SPEED_CACHE_DIR,
-    cache_type: Literal["memory", "disk", "both"] = "both",
+    cache_type: Literal["memory", "disk", "both"] = "disk",
     size=10240,
     ignore_self=True,
     verbose=False,
 ):
-    # logger.debug(f"Memoize function: {_func.__name__}")
-    # handle case when _func is a wrapper func, we must return the inner func
-    if '~/' in cache_dir:
+    if "~/" in cache_dir:
         cache_dir = osp.expanduser(cache_dir)
-    
-    
+
     def decorator(func):
         if cache_type == "memory":
-            return _memory_memoize(func, size, keys, ignore_self,)
+            return _memory_memoize(
+                func,
+                size,
+                keys,
+                ignore_self,
+            )
         elif cache_type == "disk":
-            return _disk_memoize(func, keys, cache_dir, ignore_self, verbose, )
-        return _both_memoize(func, keys, cache_dir, ignore_self, verbose, )
+            return _disk_memoize(
+                func,
+                keys,
+                cache_dir,
+                ignore_self,
+                verbose,
+            )
+        return both_memoize(
+            func,
+            keys,
+            cache_dir,
+            verbose,
+        )
 
     if _func is None:
         return decorator
     return decorator(_func)
 
 
-__all__ = ["memoize", "identify", "identify_uuid"]
+__all__ = ["memoize"]

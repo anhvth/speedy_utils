@@ -141,7 +141,7 @@ def load_by_ext(fname: Union[str, List[str]], do_memoize: bool = False) -> Any:
         raise ValueError(f"Error {e} while loading {fname}") from e
 
 
-def jdumps(obj, ensure_ascii=False, indent=None, **kwargs):
+def jdumps(obj, ensure_ascii=False, indent=2, **kwargs):
     return json.dumps(obj, ensure_ascii=ensure_ascii, indent=indent, **kwargs)
 
 
