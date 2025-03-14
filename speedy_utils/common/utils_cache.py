@@ -99,39 +99,42 @@ def get_source(func):
 def _disk_memoize(func, keys, cache_dir, ignore_self, verbose):
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        # Compute cache path as before
-        func_source, sub_dir, key_id = compute_func_id(
-            func, args, kwargs, ignore_self, keys
-        )
-        if func_source is None:
+        try:
+            # Compute cache path as before
+            func_source, sub_dir, key_id = compute_func_id(
+                func, args, kwargs, ignore_self, keys
+            )
+            if func_source is None:
+                return func(*args, **kwargs)
+            if sub_dir == "funcs":
+                cache_path = osp.join(cache_dir, sub_dir, func.__name__, key_id)
+            else:
+                cache_path = osp.join(cache_dir, sub_dir, key_id)
+            mkdir_or_exist(osp.dirname(cache_path))
+
+            # First check with disk lock
+            with disk_lock:
+                if osp.exists(cache_path):
+                    logger.debug(f"Cache HIT for {func.__name__}, key={cache_path}")
+                    try:
+                        return load_json_or_pickle(cache_path)
+                    except Exception as e:
+                        if osp.exists(cache_path):
+                            os.remove(cache_path)
+                        logger.warning(
+                            f"Error loading cache: {str(e)[:100]}, continue to recompute"
+                        )
+
+            result = func(*args, **kwargs)
+
+            # Write result under disk lock to avoid race conditions
+            with disk_lock:
+                if not osp.exists(cache_path):
+                    dump_json_or_pickle(result, cache_path)
+            return result
+        except Exception as e:
+            logger.warning(f"Failed to cache {func.__name__}: {e}, continue to recompute without cache")
             return func(*args, **kwargs)
-        if sub_dir == "funcs":
-            cache_path = osp.join(cache_dir, sub_dir, func.__name__, key_id)
-        else:
-            cache_path = osp.join(cache_dir, sub_dir, key_id)
-        mkdir_or_exist(osp.dirname(cache_path))
-
-        # First check with disk lock
-        with disk_lock:
-            if osp.exists(cache_path):
-                logger.debug(f"Cache HIT for {func.__name__}, key={cache_path}")
-                try:
-                    return load_json_or_pickle(cache_path)
-                except Exception as e:
-                    if osp.exists(cache_path):
-                        os.remove(cache_path)
-                    logger.warning(
-                        f"Error loading cache: {str(e)[:100]}, continue to recompute"
-                    )
-
-        result = func(*args, **kwargs)
-
-        # Write result under disk lock to avoid race conditions
-        with disk_lock:
-            if not osp.exists(cache_path):
-                logger.debug(f"Cache MISS for {func.__name__}, key={cache_path}")
-                dump_json_or_pickle(result, cache_path)
-        return result
 
     return wrapper
 
