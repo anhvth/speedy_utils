@@ -55,11 +55,12 @@ def multi_thread(
     func: callable,
     inputs: List[any],
     workers=64,
-    verbose=True,
+    progress=True,
     report=True,
     input_type: Literal["single", "tuple", "dict", "df"] = "single",
     stop_on_error=True,
     pause=0.0,
+    chunk_size=1,
     **kwargs,
 ):
 
@@ -94,9 +95,10 @@ def multi_thread(
         f_wrapper,
         inputs,
         n_workers=workers,
-        progress=verbose,
+        progress=progress,
         threadpool=True,
-        pause=pause
+        pause=pause,
+        chunksize=chunk_size
     )
 
     if report:
@@ -129,4 +131,4 @@ if __name__ == "__main__":
         return x * x
 
     inputs = list(range(100))
-    results = multi_thread(f, inputs, workers=4, verbose=True)
+    results = multi_thread(f, inputs, workers=4, progress=True)
