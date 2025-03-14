@@ -59,6 +59,8 @@ def multi_thread(
     report=True,
     input_type: Literal["single", "tuple", "dict", "df"] = "single",
     stop_on_error=True,
+    timeout=None,
+    pause=0,
     **kwargs,
 ):
 
@@ -95,6 +97,8 @@ def multi_thread(
         n_workers=workers,
         progress=verbose,
         threadpool=True,
+        timeout=timeout,
+        pause=pause,
     )
 
     if report:

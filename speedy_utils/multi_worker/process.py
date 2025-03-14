@@ -11,6 +11,7 @@ def multi_process(
     workers: int = None,
     progress: bool = True,
     chunksize: int = None,  # Optional chunksize
+    pause=0,
     **kwargs,
 ) -> List[Any]:
     """
@@ -49,6 +50,7 @@ def multi_process(
         n_workers=workers,
         threadpool=False,
         progress=progress,
+        pause=pause,
         # method="fork",  # "fork" is faster but might not work on Windows
         chunksize=chunksize,  # Auto-computed chunksize
         **kwargs,
