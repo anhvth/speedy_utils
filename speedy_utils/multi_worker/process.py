@@ -1,30 +1,15 @@
-import gc
-import inspect
-import random
-import time
-import traceback
-import dill
-from multiprocessing import Manager, Process
-from threading import Thread
-from typing import List, Literal
-
-from fastcore.all import threaded, parallel, defaults
-from loguru import logger
-from tqdm import tqdm
-
-from speedy_utils.common.clock import Clock
-from speedy_utils.common.report_manager import ReportManager
-
-
-from fastcore.parallel import parallel
-from typing import List, Callable, Any
 import math
+from typing import Any, Callable, List
+
+from fastcore.all import parallel
+from fastcore.parallel import parallel
+
 
 def multi_process(
-    func: Callable[[Any], Any], 
-    items: List[Any], 
-    workers: int = None, 
-    progress: bool = True, 
+    func: Callable[[Any], Any],
+    items: List[Any],
+    workers: int = None,
+    progress: bool = True,
     chunksize: int = None,  # Optional chunksize
     **kwargs,
 ) -> List[Any]:
@@ -48,6 +33,7 @@ def multi_process(
     # Set workers dynamically if not provided
     if workers is None:
         from fastcore.foundation import defaults
+
         workers = defaults.cpus  # Default to available CPUs
 
     # Ensure we don't assign more workers than tasks
