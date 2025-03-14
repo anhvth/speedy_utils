@@ -121,7 +121,7 @@ def multi_thread(
         except Exception as e:
             logger.debug(f"Error saving report: {e}")
 
-    return results
+    return list(results)
 
 
 if __name__ == "__main__":
