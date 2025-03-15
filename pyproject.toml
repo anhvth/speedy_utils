@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "speedy-utils"
-version = "0.1.18"
+version = "0.1.19"
 description = "Fast and easy-to-use package for data science"
 authors = ["AnhVTH <anhvth.226@gmail.com>"]
 readme = "README.md"
@@ -27,7 +27,6 @@ pandas = ">=1.5,<3.0"          # Any 1.5.x but not 2.0
 tabulate = ">=0.9,<1.0"        # Any 0.9.x but not 1.0
 pydantic = ">=2.0,<3.0"        # Any 2.0.x but not 3.0
 tqdm = ">=4.67.1,<6.0"
-dill = ">=0.3.9,<3.0"
 cachetools = ">=5.5.1,<6.0"
 bump2version = ">=1.0.1,<2.0"
 json-repair = {version = "^0.39.1", python = "^3.9"}
