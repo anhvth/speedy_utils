@@ -56,7 +56,7 @@ def multi_thread(
     inputs: List[any],
     workers=64,
     verbose=True,
-    report=True,
+    report=False,
     input_type: Literal["single", "tuple", "dict", "df"] = "single",
     stop_on_error=True,
     timeout=None,
