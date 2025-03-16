@@ -59,10 +59,13 @@ def multi_thread(
     stop_on_error=True,
     timeout=None,
     progress=True,
+    # verbose=None,
     pause=0,
     **kwargs,
 ):
-
+    if kwargs.get("verbose"):
+        # use progress instead of verbose
+        progress = kwargs.get("verbose")
     if input_type == "df":
         inputs = inputs.to_dict(orient="records")
         input_type = "dict"
