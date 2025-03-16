@@ -54,11 +54,11 @@ def multi_thread(
     func: callable,
     inputs: List[any],
     workers=64,
-    verbose=True,
     report=False,
     input_type: Literal["single", "tuple", "dict", "df"] = "single",
     stop_on_error=True,
     timeout=None,
+    progress=True,
     pause=0,
     **kwargs,
 ):
@@ -76,9 +76,9 @@ def multi_thread(
             if input_type == "dict":
                 return func(**dict_input, **kwargs)
             elif input_type == "tuple":
-                return func(*item,**kwargs)
+                return func(*item, **kwargs)
             else:
-                return func(item,**kwargs)
+                return func(item, **kwargs)
         except Exception as e:
             errors.append(
                 {
@@ -94,7 +94,7 @@ def multi_thread(
         f_wrapper,
         inputs,
         n_workers=workers,
-        progress=verbose,
+        progress=progress,
         threadpool=True,
         timeout=timeout,
         pause=pause,
@@ -120,7 +120,7 @@ def multi_thread(
         except Exception as e:
             logger.debug(f"Error saving report: {e}")
 
-    return results
+    return list(results)
 
 
 if __name__ == "__main__":
@@ -130,4 +130,4 @@ if __name__ == "__main__":
         return x * x
 
     inputs = list(range(100))
-    results = multi_thread(f, inputs, workers=4, verbose=True)
+    results = multi_thread(f, inputs, workers=4, progress=True)
