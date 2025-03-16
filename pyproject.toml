@@ -11,7 +11,7 @@ requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.poetry.dependencies]
-python = ">=3.8,<4.0"          # Allows any Python 3.8.x or higher (but <4.0)
+python = ">=3.6,<4.0"          # Allows any Python 3.8.x or higher (but <4.0)
 numpy = ">=1.23,<2.0"          # Any version 1.23.x or higher but <2.0
 requests = ">=2.26,<3.0"       # Any 2.26.x but not 3.0
 xxhash = ">=3.4,<4.0"          # Any 3.4.x but not 4.0
