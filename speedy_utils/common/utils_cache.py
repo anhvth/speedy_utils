@@ -59,7 +59,6 @@ def fast_serialize(x: Any) -> bytes:
 
 def identify(obj: Any, depth=0, max_depth=2) -> str:
     # if depth > max_depth:
-    return fast_serialize(str(obj))
     # Type aware is unstable for now disable it
     if isinstance(obj, (list, tuple)):
         x = [identify(x, depth + 1, max_depth) for x in obj]
