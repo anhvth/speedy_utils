@@ -59,8 +59,8 @@ def multi_thread(
     stop_on_error=True,
     timeout=None,
     progress=True,
-    # verbose=None,
     pause=0,
+    chunksize=1,
     **kwargs,
 ):
     if kwargs.get("verbose"):
@@ -101,6 +101,7 @@ def multi_thread(
         threadpool=True,
         timeout=timeout,
         pause=pause,
+        chunksize=chunksize
     )
 
     if report:
