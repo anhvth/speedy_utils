@@ -179,7 +179,7 @@ class Clock:
                     [
                         task_name,
                         file_lineno,
-                        depth,
+                        # depth,
                         f"{time_spent:.2f} s",
                         colored_percentage,
                     ]
@@ -188,13 +188,13 @@ class Clock:
             # Add headers and log using tabulate
             table = tabulate(
                 table_data,
-                headers=["Task", "File:Line", "Depth", "Time (s)", "Percentage (%)"],
+                headers=["Task", "File:Line", "Time (s)", "Percentage (%)"],
                 tablefmt="grid",
             )
 
             self.last_print_time = current_time
-            total_time_str = f"\nTotal time elapsed: {total_time:.2f} seconds."
-            logger.opt(depth=2).info(f"\n{table}\n{total_time_str}")
+            # total_time_str = f"\nTotal time elapsed: {total_time:.2f} seconds."
+            logger.opt(depth=2).info(f"\n{table}")
 
 
 # Example of how to instantiate the Timer
