@@ -1,6 +1,7 @@
 # utils/utils_print.py
 
 import copy
+import inspect
 import json
 import pprint
 import re
@@ -299,3 +300,40 @@ def setup_logger(
     else:
         logger.enable("")
         logger.debug(f"Logging set to {level}")
+        
+        
+
+
+# Stores identifiers of already-logged messages
+_logged_once_set = set()
+
+def _get_call_site_id():
+    """
+    Generate a unique identifier for the call site based on filename and line number.
+    """
+    frame = inspect.stack()[2]  # [0] is this function, [1] is log_*_once, [2] is actual caller
+    return f"{frame.filename}:{frame.lineno}"
+
+def _log_once(level_func, msg: str) -> None:
+    """
+    Core function that logs a message only once per call site.
+    """
+    identifier = _get_call_site_id()
+    if identifier not in _logged_once_set:
+        level_func(msg)
+        _logged_once_set.add(identifier)
+
+def log_warning_once(msg: str) -> None:
+    _log_once(logger.warning, msg)
+
+def log_info_once(msg: str) -> None:
+    _log_once(logger.info, msg)
+
+def log_error_once(msg: str) -> None:
+    _log_once(logger.error, msg)
+
+def log_critical_once(msg: str) -> None:
+    _log_once(logger.critical, msg)
+
+def log_success_once(msg: str) -> None:
+    _log_once(logger.success, msg)
