@@ -34,8 +34,10 @@ class _RateLimitCache(OrderedDict):
         if len(self) > self.max_size:
             self.popitem(last=False)  # pop the *first* item
 
+
 # Create a global rate-limit cache with, say, 2,000 distinct entries max
 _last_log_times = _RateLimitCache(max_size=2000)
+
 
 def display_pretty_table_html(data: Dict) -> None:
     """
@@ -78,7 +80,19 @@ def fprint(
     """
     if isinstance(input_data, list):
         for i, item in enumerate(input_data):
-            fprint(item, key_ignore, key_keep, max_width, indent, depth, table_format, str_wrap_width, grep, is_notebook, f)
+            fprint(
+                item,
+                key_ignore,
+                key_keep,
+                max_width,
+                indent,
+                depth,
+                table_format,
+                str_wrap_width,
+                grep,
+                is_notebook,
+                f,
+            )
             print("\n" + "-" * 100 + "\n")
 
     from speedy_utils import is_notebook as is_interactive
@@ -179,24 +193,28 @@ def print_table(data: Any, use_html: bool = True) -> None:
             if all(isinstance(item, dict) for item in data):
                 headers = list(data[0].keys())
                 rows = [list(item.values()) for item in data]
-                return tabulate(rows, headers=headers, tablefmt="html" if use_html else "grid")
+                return tabulate(
+                    rows, headers=headers, tablefmt="html" if use_html else "grid"
+                )
             else:
                 raise ValueError("List must contain dictionaries")
 
         if isinstance(data, dict):
             headers = ["Key", "Value"]
             rows = list(data.items())
-            return tabulate(rows, headers=headers, tablefmt="html" if use_html else "grid")
+            return tabulate(
+                rows, headers=headers, tablefmt="html" if use_html else "grid"
+            )
 
-        raise TypeError("Input data must be a list of dictionaries, a dictionary, or a JSON string")
+        raise TypeError(
+            "Input data must be a list of dictionaries, a dictionary, or a JSON string"
+        )
 
     table = __get_table(data)
     if use_html:
         display(HTML(table))
     else:
         print(table)
-
-
 
 
 def setup_logger(
@@ -216,9 +234,9 @@ def setup_logger(
             "S",
             "W",
             "E",
-            "C"
+            "C",
         ],
-        "The desired log level"
+        "The desired log level",
     ] = "Info",
     enable_grep: Annotated[str, "Comma-separated patterns for enabling logs"] = "",
     disable_grep: Annotated[str, "Comma-separated patterns for disabling logs"] = "",
@@ -265,9 +283,13 @@ def setup_logger(
 
         # ---------- 2) Grep pattern handling ----------
         log_message = f"{record['file']}:{record['line']} ({record['function']})"
-        if enable_patterns and not any(re.search(p, log_message) for p in enable_patterns):
+        if enable_patterns and not any(
+            re.search(p, log_message) for p in enable_patterns
+        ):
             return False
-        if disable_patterns and any(re.search(p, log_message) for p in disable_patterns):
+        if disable_patterns and any(
+            re.search(p, log_message) for p in disable_patterns
+        ):
             return False
 
         # ---------- 3) Rate limiting by file:line ----------
@@ -300,40 +322,59 @@ def setup_logger(
     else:
         logger.enable("")
         logger.debug(f"Logging set to {level}")
-        
-        
 
 
-# Stores identifiers of already-logged messages
+
+
 _logged_once_set = set()
+_last_log_intervals = {}
 
-def _get_call_site_id():
+def _get_call_site_id(depth=2) -> str:
     """
     Generate a unique identifier for the call site based on filename and line number.
     """
-    frame = inspect.stack()[2]  # [0] is this function, [1] is log_*_once, [2] is actual caller
+    frame = inspect.stack()[depth]
     return f"{frame.filename}:{frame.lineno}"
 
-def _log_once(level_func, msg: str) -> None:
+def log(
+    msg: str,
+    *,
+    level: Literal["info", "warning", "error", "critical", "success"] = "info",
+    once: bool = False,
+    interval: Optional[float] = None,
+) -> None:
     """
-    Core function that logs a message only once per call site.
+    Log a message using loguru with optional `once` and `interval` control.
+
+    Args:
+        msg (str): The log message.
+        level (str): Log level (e.g., "info", "warning").
+        once (bool): If True, log only once per call site.
+        interval (float): If set, log only once every `interval` seconds per call site.
     """
-    identifier = _get_call_site_id()
-    if identifier not in _logged_once_set:
-        level_func(msg)
+    identifier = _get_call_site_id(depth=2)
+    fn = getattr(logger.opt(depth=1), level)
+
+    if once:
+        if identifier in _logged_once_set:
+            return
         _logged_once_set.add(identifier)
 
-def log_warning_once(msg: str) -> None:
-    _log_once(logger.warning, msg)
+    if interval is not None:
+        now = time.time()
+        last = _last_log_intervals.get(identifier)
+        if last is not None and now - last < interval:
+            return
+        _last_log_intervals[identifier] = now
 
-def log_info_once(msg: str) -> None:
-    _log_once(logger.info, msg)
+    fn(msg)
 
-def log_error_once(msg: str) -> None:
-    _log_once(logger.error, msg)
 
-def log_critical_once(msg: str) -> None:
-    _log_once(logger.critical, msg)
-
-def log_success_once(msg: str) -> None:
-    _log_once(logger.success, msg)
+__all__ = [
+    "display_pretty_table_html",
+    "flatten_dict",
+    "fprint",
+    "print_table",
+    "setup_logger",
+    "log",
+]
