@@ -29,3 +29,6 @@ __all__ += function_decorator.__all__
 __all__ += process.__all__
 __all__ += thread.__all__
 __all__ += utils_print.__all__
+
+setup_logger('D')
+log(f'[SPEEDY_UTIL] Imported {__all__}', 'D')
