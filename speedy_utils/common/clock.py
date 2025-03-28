@@ -199,3 +199,7 @@ class Clock:
 
 # Example of how to instantiate the Timer
 speedy_timer = Clock(start_now=False)
+
+
+# Clock, speedy_timer, timef
+__all__ = ["Clock", "speedy_timer", "timef"]

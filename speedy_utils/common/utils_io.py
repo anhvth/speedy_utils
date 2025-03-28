@@ -144,7 +144,6 @@ def load_by_ext(fname: Union[str, List[str]], do_memoize: bool = False) -> Any:
 def jdumps(obj, ensure_ascii=False, indent=2, **kwargs):
     return json.dumps(obj, ensure_ascii=ensure_ascii, indent=indent, **kwargs)
 
-
 __all__ = [
     "dump_json_or_pickle",
     "dump_jsonl",
@@ -153,3 +152,4 @@ __all__ = [
     "jdumps",
     "jloads",
 ]
+

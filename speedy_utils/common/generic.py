@@ -3,7 +3,12 @@ from typing import List, TypeVar, Generic, Callable, Any
 from threading import Lock
 from loguru import logger
 
+
 T = TypeVar('T')
+
+from loguru import logger
+# add depricated
+logger.warning("This module is deprecated. Please use speedy_utils.common.dataclass_parser instead.")
 
 class TaskDistributor(Generic[T]):
     """Generic class for distributing tasks across multiple workers."""

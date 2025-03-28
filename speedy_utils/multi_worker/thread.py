@@ -126,7 +126,7 @@ def multi_thread(
 
     return list(results)
 
-
+__all__ = ["multi_thread"]
 if __name__ == "__main__":
 
     def f(x):

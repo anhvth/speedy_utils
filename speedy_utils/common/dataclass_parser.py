@@ -4,6 +4,10 @@ from dataclasses import dataclass, fields, is_dataclass
 from typing import Type, TypeVar, Any, Dict
 from tabulate import tabulate
 
+from loguru import logger
+# add depricated
+logger.warning("This module is deprecated. Please use speedy_utils.common.dataclass_parser instead.")
+
 T = TypeVar("T")
 
 class ArgsParser:
