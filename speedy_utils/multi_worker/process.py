@@ -28,6 +28,8 @@ def multi_process(
     Returns:
         List[Any]: Processed results.
     """
+    # if hasattr(func, "__call__"):
+        # func = func.__call__
     if not items:
         return []  # Handle empty input list
 
@@ -43,6 +45,8 @@ def multi_process(
     # Compute optimal chunksize dynamically if not provided
     if chunksize is None:
         chunksize = max(1, math.ceil(len(items) / (workers * 4)))
+        print(f"Auto-computed chunksize: {chunksize}")
+
 
     results = parallel(
         func,
