@@ -1,65 +1,74 @@
 """
-multi_thread.py ― fast, low‑overhead threaded map helper
+multi_thread.py — fast, low‑overhead threaded map helper
 ========================================================
-• Streams results internally, but finally **returns a list** to match the
-  original signature.
-• Batch very small tasks (``batch``) to remove micro‑task overhead.
-• Sane default worker count, optional ordering, optional tqdm progress bar.
+
+Highlights
+----------
+• **Single helper set** – no duplicate definitions.
+• **Automatic batching hint** for micro‑tasks.
+• **Zero‑copy ordered mode** – pre‑allocates result list when length is known.
+• **`as_completed` loop** – lighter than `wait(..., FIRST_COMPLETED)`.
+• **Progress bar redraw ≈ free** – updates every `progress_update` items.
+• **Streams inputs** – never forces a generator into a list unless needed.
+
+Public API is **unchanged**: ``multi_thread(func, inputs, …) → list``.
 """
+
 from __future__ import annotations
 
 import inspect
 import os
 import time
 import traceback
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from itertools import islice
 from typing import Any, Iterable, List, Sequence
 
 try:
     from tqdm import tqdm
 except ImportError:  # pragma: no cover
-    tqdm = None                                       # type: ignore[assignment]
+    tqdm = None  # type: ignore[assignment]
 
-# ──────────────────────────────────────────────────────────────────────────────
+
+# ────────────────────────────────────────────────────────────
 # helpers
-# ──────────────────────────────────────────────────────────────────────────────
-def _signature_kwargs(func, arg) -> dict[str, Any]:
+# ────────────────────────────────────────────────────────────
+def _sig_kwargs(func, arg) -> dict[str, Any]:
     """Turn *arg* into **kwargs** that match *func*’s signature."""
     params = list(inspect.signature(func).parameters)
-    if len(params) == 1:                   # single positional param
+    if len(params) == 1:  # single positional
         return {params[0]: arg}
-    if isinstance(arg, (list, tuple, Sequence)):
+    if isinstance(arg, (Sequence, list, tuple)):
         return dict(zip(params, arg))
     if isinstance(arg, dict):
         return arg
     return {}
+
 
 def _group_iter(src: Iterable[Any], size: int) -> Iterable[list[Any]]:
     it = iter(src)
     while chunk := list(islice(it, size)):
         yield chunk
 
-def _flatten(x):
-    if isinstance(x, list):
-        return x
-    return [x]
 
 def _short_tb() -> str:
     tb = "".join(traceback.format_exc())
+    # hide frames inside this helper to keep logs short
     return "\n".join(ln for ln in tb.splitlines() if "multi_thread.py" not in ln)
 
-def _safe_call(func, arg, fixed_kwargs):
-    try:
-        return func(**_signature_kwargs(func, arg), **fixed_kwargs)
-    except Exception as e:
-        raise RuntimeError(
-            f"{func.__name__}({repr(arg)}) failed: {e}\n{_short_tb()}"
-        ) from e
 
-# ──────────────────────────────────────────────────────────────────────────────
+def _safe_call(func, arg, fixed):
+    try:
+        return func(**_sig_kwargs(func, arg), **fixed)
+    except Exception as exc:
+        raise RuntimeError(
+            f"{func.__name__}({arg!r}) failed: {exc}\n{_short_tb()}"
+        ) from exc
+
+
+# ────────────────────────────────────────────────────────────
 # main API
-# ──────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────
 def multi_thread(
     func: callable,
     inputs: Iterable[Any],
@@ -68,152 +77,202 @@ def multi_thread(
     batch: int = 1,
     ordered: bool = True,
     progress: bool = False,
+    progress_update: int = 500,
     prefetch_factor: int = 4,
     timeout: float | None = None,
     stop_on_error: bool = True,
     **fixed_kwargs,
 ) -> List[Any]:
     """
-    High‑throughput ThreadPool **map** that returns a *list*.
+    ThreadPool **map** that returns a *list*.
 
     Parameters
     ----------
-    func         – target function.
-    inputs       – iterable with the inputs.
-    workers      – defaults to `min(os.cpu_count()*2, 32)`.
-    batch        – package *batch* inputs into one call to amortise overhead.
-    ordered      – keep original order (costs memory); if `False`, outputs
-                   arrive as soon as they complete.
-    progress     – use `tqdm` if installed.
+    func            – target callable.
+    inputs          – iterable with the arguments.
+    workers         – defaults to ``os.cpu_count()*2``.
+    batch           – package *batch* inputs into one call for low‑overhead.
+    ordered         – keep original order (costs memory); if ``False`` results
+                      are yielded as soon as they finish.
+    progress        – show a tqdm bar (requires *tqdm* installed).
+    progress_update – bar redraw frequency (logical items, *not* batches).
+    prefetch_factor – in‑flight tasks ≈ ``workers * prefetch_factor``.
+    timeout         – overall timeout (seconds) for the mapping.
+    stop_on_error   – raise immediately on first exception (default).  If
+                      ``False`` the failing task’s result becomes ``None``.
+    **fixed_kwargs  – static keyword args forwarded to every ``func()`` call.
     """
     t0 = time.perf_counter()
 
-    src_list = list(inputs) if not hasattr(inputs, "__len__") else inputs
-    total = len(src_list)
+    # ── choose sensible defaults ──────────────────────────────────────────
+    if workers is None:
+        workers = os.cpu_count() * 2
+
+    # Tiny‑task heuristic: if we have *lots* of inputs and the user left batch=1
+    # we gently pick a small auto‑batch to avoid pure overhead.
+    try:
+        n_inputs = len(inputs)  # type: ignore[arg-type]
+    except Exception:
+        n_inputs = None
+    if batch == 1 and n_inputs and n_inputs / max(workers, 1) > 20_000:
+        batch = 32  # empirically good for sub‑ms tasks
+
+    # ── build (maybe‑batched) source iterator ────────────────────────────
+    src_iter: Iterable[Any] = iter(inputs)
     if batch > 1:
-        src_iter = _group_iter(src_list, batch)
-        total_batches = (total + batch - 1) // batch
-    else:
-        src_iter = iter(src_list)
-        total_batches = total
+        src_iter = _group_iter(src_iter, batch)
 
-    workers = workers or min(os.cpu_count() * 2, 32)
-    max_inflight = workers * max(prefetch_factor, 1)
+    # total logical items (for bar & ordered pre‑allocation)
+    logical_total = n_inputs
+    if logical_total is not None and batch > 1:
+        logical_total = n_inputs  # still number of *items*, not batches
 
+    # ── progress bar ─────────────────────────────────────────────────────
     bar = None
-    if progress and tqdm is not None:
+    if progress and tqdm is not None and logical_total is not None:
         bar = tqdm(
-            total=total,
+            total=logical_total,
             ncols=80,
-            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]",
+            colour="green",
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt}"
+            " [{elapsed}<{remaining}, {rate_fmt}{postfix}]",
         )
+        last_bar_update = 0
 
-    results: list[Any] = []
-    buffer: dict[int, Any] = {}
-    next_emit_idx = 0
+    # ── prepare result container ─────────────────────────────────────────
+    if ordered and logical_total is not None:
+        results: list[Any] = [None] * logical_total
+    else:
+        results = []
 
+    # ── worker wrapper ───────────────────────────────────────────────────
     def _worker(item_batch):
         if batch > 1:
             return [_safe_call(func, itm, fixed_kwargs) for itm in item_batch]
         return _safe_call(func, item_batch, fixed_kwargs)
 
+    # ── main execution loop ──────────────────────────────────────────────
+    max_inflight = workers * max(prefetch_factor, 1)
+    completed_items = 0
+    next_logical_idx = 0  # index assigned to the next submission
+
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {}
-        # Prime the pool
-        for idx, item in enumerate(islice(src_iter, max_inflight)):
-            futures[pool.submit(_worker, item)] = idx
-        next_submit_idx = len(futures)
+        inflight = set()
+
+        # prime the pool
+        for _ in range(max_inflight):
+            try:
+                arg = next(src_iter)
+            except StopIteration:
+                break
+            fut = pool.submit(_worker, arg)
+            fut.idx = next_logical_idx  # type: ignore[attr-defined]
+            inflight.add(fut)
+            next_logical_idx += len(arg) if batch > 1 else 1
 
         try:
-            while futures:
-                done, _ = wait(futures, return_when=FIRST_COMPLETED, timeout=timeout)
-                for fut in done:
-                    idx = futures.pop(fut)
-                    try:
-                        res = fut.result()
-                    except Exception:
-                        pool.shutdown(cancel_futures=True)
-                        if stop_on_error:
-                            raise
-                        res = None
+            for fut in as_completed(inflight, timeout=timeout):
+                inflight.remove(fut)
+                idx = fut.idx  # type: ignore[attr-defined]
+                try:
+                    res = fut.result()
+                except Exception:
+                    if stop_on_error:
+                        raise
+                    res = None
 
-                    if ordered:
-                        buffer[idx] = res
-                        while next_emit_idx in buffer:
-                            results.extend(_flatten(buffer.pop(next_emit_idx)))
-                            if bar:
-                                bar.update(batch if batch > 1 else 1)
-                            next_emit_idx += 1
-                    else:
-                        results.extend(_flatten(res))
-                        if bar:
-                            bar.update(batch if batch > 1 else 1)
+                # flatten res to list of logical outputs
+                out_items = res if batch > 1 else [res]
 
-                    # keep queue full
-                    try:
-                        new_item = next(src_iter)
-                        futures[pool.submit(_worker, new_item)] = next_submit_idx
-                        next_submit_idx += 1
-                    except StopIteration:
-                        pass
+                # store outputs
+                if ordered and logical_total is not None:
+                    results[idx : idx + len(out_items)] = out_items
+                else:
+                    results.extend(out_items)
+
+                completed_items += len(out_items)
+
+                # progress bar update
+                if bar and completed_items - last_bar_update >= progress_update:
+                    bar.update(completed_items - last_bar_update)
+                    last_bar_update = completed_items
+                    speed = completed_items / max(time.perf_counter() - t0, 1e-6)
+                    bar.set_postfix_str(f"{speed:,.0f} items/s")
+
+                # keep queue full
+                try:
+                    while next_logical_idx - completed_items < max_inflight:
+                        arg = next(src_iter)
+                        fut2 = pool.submit(_worker, arg)
+                        fut2.idx = next_logical_idx  # type: ignore[attr-defined]
+                        inflight.add(fut2)
+                        next_logical_idx += len(arg) if batch > 1 else 1
+                except StopIteration:
+                    pass
+
         finally:
             if bar:
+                bar.update(completed_items - last_bar_update)
                 bar.close()
 
     if __debug__ and not progress:
-        print(f"[multi_thread] completed {len(results)} items in {time.perf_counter() - t0:.4f}s")
+        dur = time.perf_counter() - t0
+        print(f"[multi_thread] {completed_items} items in {dur:.4f}s")
 
     return results
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# internals
-# ──────────────────────────────────────────────────────────────────────────────
-def _flatten(x):
-    """Yield x if list‑like else yield [x]."""
-    if isinstance(x, list):
-        yield from x
-    else:
-        yield x
-
-
-def _safe_call(func, arg, fixed_kwargs):
-    try:
-        return func(**_signature_kwargs(func, arg), **fixed_kwargs)
-    except Exception as e:  # attach minimal traceback
-        raise RuntimeError(
-            f"{func.__name__}({repr(arg)}) failed: {e}\n{_short_tb()}"
-        ) from e
-
-
-def _short_tb() -> str:
-    tb = "".join(traceback.format_exc())
-    # remove frames inside this helper to keep logs tidy
-    lines = [ln for ln in tb.splitlines() if "multi_thread.py" not in ln]
-    return "\n".join(lines)
-
-
 __all__ = ["multi_thread"]
 
-# ──────────────────────────────────────────────────────────────────────────────
-# self‑test
-# ──────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    import random
+    import random, time
+    from speedy_utils.multi_worker.thread import multi_thread   # ← your updated helper
 
-    def f(x):
-        time.sleep(random.random())
+    # Task definitions ----------------------------------------------------
+    def light_task(x: int) -> int:
+        """Simulate a network/file read that idles for ~0‑100 µs."""
+        time.sleep(random.random() * 1e-4)
         return x
 
-    inputs = range(1000)
-    t = time.time()
-    outs = list(multi_thread(
-        f,
-        inputs,
-        workers=1000,
-        progress=True,
-        prefetch_factor=4,
-    ))
-    mt_time = time.time() - t
-    print(f"[multi_thread] time: {mt_time:.4f}s")
-    print(f"[multi_thread] results: {outs[:10]}...{outs[-10:]}")
+    def heavy_task(x: int) -> int:
+        """Pure‑Python CPU work that keeps the GIL for ~0.35 ms."""
+        acc = 0
+        for i in range(5_000):
+            acc += (i * i) % 97
+        return acc
+
+    # Test matrix ---------------------------------------------------------
+    scenarios = [
+        ("small‑light",  1_000,  light_task),
+        ("large‑light", 100_000, light_task),
+        ("small‑heavy",  1_000,  heavy_task),
+        ("large‑heavy", 10_000,  heavy_task),
+    ]
+
+    results = []
+    for name, n_items, fn in scenarios:
+        data = list(range(n_items))
+
+        t0 = time.time()
+        multi_thread(fn, data, progress=False)          # threaded run
+        mt = time.time() - t0
+
+        t0 = time.time()
+        list(map(fn, data))                             # single‑thread run
+        st = time.time() - t0
+
+        results.append((name, n_items, mt, st, st / mt))
+
+    # Report --------------------------------------------------------------
+    try:
+        from tabulate import tabulate
+        header = ["scenario", "items", "multi_thread (s)",
+                  "single_thread (s)", "speed‑up×"]
+        print(tabulate(results, headers=header,
+                       floatfmt=("","", ".4f", ".4f", ".2f")))
+    except ImportError:      # fallback: plain text
+        print("\n".join(
+            f"{name:12} {n:7d}  MT={mt:.4f}s  ST={st:.4f}s  "
+            f"speed‑up×={st/mt:.2f}"
+            for name, n, mt, st, _ in results
+        ))
