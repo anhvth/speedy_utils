@@ -1,137 +1,219 @@
-import gc
+"""
+multi_thread.py ― fast, low‑overhead threaded map helper
+========================================================
+• Streams results internally, but finally **returns a list** to match the
+  original signature.
+• Batch very small tasks (``batch``) to remove micro‑task overhead.
+• Sane default worker count, optional ordering, optional tqdm progress bar.
+"""
+from __future__ import annotations
+
 import inspect
-import random
+import os
 import time
 import traceback
-from multiprocessing import Manager, Process
-from threading import Thread
-from typing import List, Literal
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from itertools import islice
+from typing import Any, Iterable, List, Sequence
 
-from fastcore.all import threaded, parallel
-from loguru import logger
-from tqdm import tqdm
+try:
+    from tqdm import tqdm
+except ImportError:  # pragma: no cover
+    tqdm = None                                       # type: ignore[assignment]
 
-from speedy_utils.common.clock import Clock
-from speedy_utils.common.report_manager import ReportManager
-
-THREADS = []  # Add a global variable to store threads
-
-
-def _convert_to_dict_input(func, args, input_type):
-    """Convert positional arguments to dictionary using function parameter names"""
-    if input_type == "dict":
-        return args if isinstance(args, dict) else {}
-    elif input_type == "tuple":
-        sig = inspect.signature(func)
-        params = list(sig.parameters.keys())
-        return dict(zip(params, args)) if isinstance(args, (list, tuple)) else {}
-    elif input_type == "single":
-        sig = inspect.signature(func)
-        params = list(sig.parameters.keys())
-        return {params[0]: args} if len(params) == 1 else {}
+# ──────────────────────────────────────────────────────────────────────────────
+# helpers
+# ──────────────────────────────────────────────────────────────────────────────
+def _signature_kwargs(func, arg) -> dict[str, Any]:
+    """Turn *arg* into **kwargs** that match *func*’s signature."""
+    params = list(inspect.signature(func).parameters)
+    if len(params) == 1:                   # single positional param
+        return {params[0]: arg}
+    if isinstance(arg, (list, tuple, Sequence)):
+        return dict(zip(params, arg))
+    if isinstance(arg, dict):
+        return arg
     return {}
 
+def _group_iter(src: Iterable[Any], size: int) -> Iterable[list[Any]]:
+    it = iter(src)
+    while chunk := list(islice(it, size)):
+        yield chunk
 
-def _clean_traceback(tb_text: str) -> str:
-    """Remove unnecessary lines from traceback"""
-    lines = tb_text.split("\n")
-    filtered_lines = []
-    skip_next = False
-    for line in lines:
-        if "Traceback (most recent call last):" in line:
-            continue
-        if "speedy_utils/multi_worker/thread.py" in line:
-            skip_next = True
-            continue
-        if skip_next:
-            skip_next = False
-            continue
-        filtered_lines.append(line)
-    return "\n".join(line for line in filtered_lines if line.strip())
+def _flatten(x):
+    if isinstance(x, list):
+        return x
+    return [x]
 
+def _short_tb() -> str:
+    tb = "".join(traceback.format_exc())
+    return "\n".join(ln for ln in tb.splitlines() if "multi_thread.py" not in ln)
 
+def _safe_call(func, arg, fixed_kwargs):
+    try:
+        return func(**_signature_kwargs(func, arg), **fixed_kwargs)
+    except Exception as e:
+        raise RuntimeError(
+            f"{func.__name__}({repr(arg)}) failed: {e}\n{_short_tb()}"
+        ) from e
+
+# ──────────────────────────────────────────────────────────────────────────────
+# main API
+# ──────────────────────────────────────────────────────────────────────────────
 def multi_thread(
     func: callable,
-    inputs: List[any],
-    workers=64,
-    report=False,
-    input_type: Literal["single", "tuple", "dict", "df"] = "single",
-    stop_on_error=True,
-    timeout=None,
-    progress=True,
-    pause=0,
-    chunksize=1,
-    **kwargs,
-):
-    if kwargs.get("verbose"):
-        # use progress instead of verbose
-        progress = kwargs.get("verbose")
-    if input_type == "df":
-        inputs = inputs.to_dict(orient="records")
-        input_type = "dict"
-    clock = Clock()
-    errors = []
-    results = []
+    inputs: Iterable[Any],
+    *,
+    workers: int | None = None,
+    batch: int = 1,
+    ordered: bool = True,
+    progress: bool = False,
+    prefetch_factor: int = 4,
+    timeout: float | None = None,
+    stop_on_error: bool = True,
+    **fixed_kwargs,
+) -> List[Any]:
+    """
+    High‑throughput ThreadPool **map** that returns a *list*.
 
-    def f_wrapper(item):
+    Parameters
+    ----------
+    func         – target function.
+    inputs       – iterable with the inputs.
+    workers      – defaults to `min(os.cpu_count()*2, 32)`.
+    batch        – package *batch* inputs into one call to amortise overhead.
+    ordered      – keep original order (costs memory); if `False`, outputs
+                   arrive as soon as they complete.
+    progress     – use `tqdm` if installed.
+    """
+    t0 = time.perf_counter()
+
+    src_list = list(inputs) if not hasattr(inputs, "__len__") else inputs
+    total = len(src_list)
+    if batch > 1:
+        src_iter = _group_iter(src_list, batch)
+        total_batches = (total + batch - 1) // batch
+    else:
+        src_iter = iter(src_list)
+        total_batches = total
+
+    workers = workers or min(os.cpu_count() * 2, 32)
+    max_inflight = workers * max(prefetch_factor, 1)
+
+    bar = None
+    if progress and tqdm is not None:
+        bar = tqdm(
+            total=total,
+            ncols=80,
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]",
+        )
+
+    results: list[Any] = []
+    buffer: dict[int, Any] = {}
+    next_emit_idx = 0
+
+    def _worker(item_batch):
+        if batch > 1:
+            return [_safe_call(func, itm, fixed_kwargs) for itm in item_batch]
+        return _safe_call(func, item_batch, fixed_kwargs)
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {}
+        # Prime the pool
+        for idx, item in enumerate(islice(src_iter, max_inflight)):
+            futures[pool.submit(_worker, item)] = idx
+        next_submit_idx = len(futures)
+
         try:
-            dict_input = _convert_to_dict_input(func, item, input_type)
-            if input_type == "dict":
-                return func(**dict_input, **kwargs)
-            elif input_type == "tuple":
-                return func(*item, **kwargs)
-            else:
-                return func(item, **kwargs)
-        except Exception as e:
-            errors.append(
-                {
-                    "error": e,
-                    "input": str(dict_input),
-                    "traceback": _clean_traceback(traceback.format_exc()),
-                }
-            )
-            if stop_on_error:
-                raise e
+            while futures:
+                done, _ = wait(futures, return_when=FIRST_COMPLETED, timeout=timeout)
+                for fut in done:
+                    idx = futures.pop(fut)
+                    try:
+                        res = fut.result()
+                    except Exception:
+                        pool.shutdown(cancel_futures=True)
+                        if stop_on_error:
+                            raise
+                        res = None
 
-    results = parallel(
-        f_wrapper,
-        inputs,
-        n_workers=workers,
-        progress=progress,
-        threadpool=True,
-        timeout=timeout,
-        pause=pause,
-        chunksize=chunksize
-    )
+                    if ordered:
+                        buffer[idx] = res
+                        while next_emit_idx in buffer:
+                            results.extend(_flatten(buffer.pop(next_emit_idx)))
+                            if bar:
+                                bar.update(batch if batch > 1 else 1)
+                            next_emit_idx += 1
+                    else:
+                        results.extend(_flatten(res))
+                        if bar:
+                            bar.update(batch if batch > 1 else 1)
 
-    if report:
-        try:
-            metadata = {
-                "mode": "multi_thread",
-                "workers": workers,
-                "total_inputs": len(inputs),
-                "execution_mode": "multi_thread",
-                "max_workers": workers,
-                "function_name": func.__name__,
-            }
-            ReportManager().save_report(
-                errors=errors,
-                results=results,
-                execution_time=clock.time_since_last_checkpoint(),
-                metadata=metadata,
-            )
+                    # keep queue full
+                    try:
+                        new_item = next(src_iter)
+                        futures[pool.submit(_worker, new_item)] = next_submit_idx
+                        next_submit_idx += 1
+                    except StopIteration:
+                        pass
+        finally:
+            if bar:
+                bar.close()
 
-        except Exception as e:
-            logger.debug(f"Error saving report: {e}")
+    if __debug__ and not progress:
+        print(f"[multi_thread] completed {len(results)} items in {time.perf_counter() - t0:.4f}s")
 
-    return list(results)
+    return results
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# internals
+# ──────────────────────────────────────────────────────────────────────────────
+def _flatten(x):
+    """Yield x if list‑like else yield [x]."""
+    if isinstance(x, list):
+        yield from x
+    else:
+        yield x
+
+
+def _safe_call(func, arg, fixed_kwargs):
+    try:
+        return func(**_signature_kwargs(func, arg), **fixed_kwargs)
+    except Exception as e:  # attach minimal traceback
+        raise RuntimeError(
+            f"{func.__name__}({repr(arg)}) failed: {e}\n{_short_tb()}"
+        ) from e
+
+
+def _short_tb() -> str:
+    tb = "".join(traceback.format_exc())
+    # remove frames inside this helper to keep logs tidy
+    lines = [ln for ln in tb.splitlines() if "multi_thread.py" not in ln]
+    return "\n".join(lines)
+
 
 __all__ = ["multi_thread"]
+
+# ──────────────────────────────────────────────────────────────────────────────
+# self‑test
+# ──────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    import random
 
     def f(x):
         time.sleep(random.random())
-        return x * x
+        return x
 
-    inputs = list(range(100))
-    results = multi_thread(f, inputs, workers=4, progress=True)
+    inputs = range(1000)
+    t = time.time()
+    outs = list(multi_thread(
+        f,
+        inputs,
+        workers=1000,
+        progress=True,
+        prefetch_factor=4,
+    ))
+    mt_time = time.time() - t
+    print(f"[multi_thread] time: {mt_time:.4f}s")
+    print(f"[multi_thread] results: {outs[:10]}...{outs[-10:]}")
