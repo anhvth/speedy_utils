@@ -11,7 +11,7 @@ requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.poetry.dependencies]
-python = ">=3.7"
+python = ">=3.9"
 numpy = "*"
 requests = "*"
 xxhash = "*"
@@ -31,3 +31,4 @@ cachetools = "*"
 bump2version = "*"
 json-repair = "*"
 fastprogress = "*"
+modin = "0.32.0"
