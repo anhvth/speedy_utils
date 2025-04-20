@@ -2,7 +2,7 @@ import functools
 import inspect
 from collections.abc import Iterable
 from typing import Any, Callable, Dict, List, Union
-import pandas as pd
+import modin.pandas as pd
 
 # Example object
 

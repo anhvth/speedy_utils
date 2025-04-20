@@ -100,7 +100,7 @@ def load_by_ext(fname: Union[str, List[str]], do_memoize: bool = False) -> Any:
             return multi_process(load_by_ext, paths, workers=16)
 
         def load_csv(path: str, **pd_kwargs) -> Any:
-            import pandas as pd
+            import modin.pandas as pd
 
             return pd.read_csv(path, engine="pyarrow", **pd_kwargs)
 
