@@ -27,7 +27,7 @@ from threading import Lock
 from typing import *
 
 import numpy as np
-import modin.pandas as pd
+import pandas as pd
 import xxhash
 from IPython import get_ipython
 from IPython.display import HTML, display
