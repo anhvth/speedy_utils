@@ -32,3 +32,6 @@ bump2version = "*"
 json-repair = "*"
 fastprogress = "*"
 modin = "0.32.0"
+
+[tool.poetry.scripts]
+mpython = "speedy_utils.scripts.mpython:main"
