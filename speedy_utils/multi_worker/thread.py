@@ -1,19 +1,3 @@
-"""
-multi_thread.py — fast, low‑overhead threaded map helper
-========================================================
-
-Highlights
-----------
-• **Single helper set** – no duplicate definitions.
-• **Automatic batching hint** for micro‑tasks.
-• **Zero‑copy ordered mode** – pre‑allocates result list when length is known.
-• **`as_completed` loop** – lighter than `wait(..., FIRST_COMPLETED)`.
-• **Progress bar redraw ≈ free** – updates every `progress_update` items.
-• **Streams inputs** – never forces a generator into a list unless needed.
-
-Public API is **unchanged**: ``multi_thread(func, inputs, …) → list``.
-"""
-
 from __future__ import annotations
 
 import inspect
@@ -33,16 +17,28 @@ except ImportError:  # pragma: no cover
 # ────────────────────────────────────────────────────────────
 # helpers
 # ────────────────────────────────────────────────────────────
+# ─── helpers ─────────────────────────────────────────────────────────────
+from collections.abc import Sequence      # (typing.Sequence misses str checks)
+
 def _sig_kwargs(func, arg) -> dict[str, Any]:
-    """Turn *arg* into **kwargs** that match *func*’s signature."""
+    """Turn *arg* into **kwargs** matching *func*’s signature.
+
+    • dict   → use as–is  
+    • non‑string Sequence → zip to positional parameters  
+    • everything else     → bind to *first* positional parameter
+    """
     params = list(inspect.signature(func).parameters)
-    if len(params) == 1:  # single positional
-        return {params[0]: arg}
-    if isinstance(arg, (Sequence, list, tuple)):
-        return dict(zip(params, arg))
+
+    # 1. direct **kwargs supplied
     if isinstance(arg, dict):
         return arg
-    return {}
+
+    # 2. tuple / list etc.  (explicitly NOT str, bytes …)
+    if isinstance(arg, Sequence) and not isinstance(arg, (str, bytes, bytearray)):
+        return dict(zip(params, arg))
+
+    # 3. scalar → assume it belongs to the first parameter
+    return {params[0]: arg}
 
 
 def _group_iter(src: Iterable[Any], size: int) -> Iterable[list[Any]]:
@@ -215,9 +211,6 @@ def multi_thread(
                 bar.update(completed_items - last_bar_update)
                 bar.close()
 
-    if __debug__ and not progress:
-        dur = time.perf_counter() - t0
-        print(f"[multi_thread] {completed_items} items in {dur:.4f}s")
 
     return results
 
