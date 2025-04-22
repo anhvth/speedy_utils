@@ -158,14 +158,14 @@ def forloop(inputs):
 
 def test_process_vs_thread_heavy():
     """Heavy CPU: compare multi_process against multi_thread for correctness and speed."""
-    inp = [22]*1000
+    inp = [22]*10000
 
     start_proc = time.perf_counter()
-    out_proc = multi_process(fibonacci, inp, workers=30, progress=True)
+    out_proc = multi_process(fibonacci, inp, workers=4, progress=True)
     dur_proc = time.perf_counter() - start_proc
 
     start_thread = time.perf_counter()
-    out_thread = multi_thread(fibonacci, inp, workers=30, progress=False)
+    out_thread = multi_thread(fibonacci, inp, workers=100, progress=True)
     dur_thread = time.perf_counter() - start_thread
 
     # test for loop
