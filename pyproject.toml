@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "speedy-utils"
-version = "0.1.21"
+version = "0.1.22"
 description = "Fast and easy-to-use package for data science"
 authors = ["AnhVTH <anhvth.226@gmail.com>"]
 readme = "README.md"
@@ -31,7 +31,6 @@ cachetools = "*"
 bump2version = "*"
 json-repair = "*"
 fastprogress = "*"
-modin = "0.32.0"
 
 [tool.poetry.scripts]
 mpython = "speedy_utils.scripts.mpython:main"
