@@ -186,6 +186,3 @@ def test_process_vs_thread_heavy():
         headers=["Method", "Duration (s)"],
     )
     print(table_string)
-    print(f"multi_process: {dur_proc:.2f}s")
-    print(f"multi_thread: {dur_thread:.2f}s")
-    print(f"for loop: {dur_forloop:.2f}s")
