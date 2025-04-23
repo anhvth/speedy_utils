@@ -81,7 +81,7 @@ def multi_thread(
     workers: int | None = DEFAULT_WORKERS,
     batch: int = 1,
     ordered: bool = True,
-    progress: bool = False,
+    progress: bool = True,
     progress_update: int = 500,
     prefetch_factor: int = 4,
     timeout: float | None = None,
@@ -201,8 +201,8 @@ def multi_thread(
                     if bar and completed_items - last_bar_update >= progress_update:
                         bar.update(completed_items - last_bar_update)
                         last_bar_update = completed_items
-                        speed = completed_items / max(time.perf_counter() - t0, 1e-6)
-                        bar.set_postfix_str(f"{speed:,.0f} items/s")
+                        # speed = completed_items / max(time.perf_counter() - t0, 1e-6)
+                        # bar.set_postfix_str(f"{speed:,.0f} items/s")
 
                     # keep queue full
                     try:
