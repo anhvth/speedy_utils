@@ -35,10 +35,10 @@ def _sig_kwargs(func, arg) -> dict[str, Any]:
     params = list(inspect.signature(func).parameters)
 
     # dict input --------------------------------------------------------
-    if isinstance(arg, dict):
-        if set(arg).issubset(params):
-            return arg  # looks like genuine **kwargs
-        return {params[0]: arg}  # dict is a single logical value
+    # if isinstance(arg, dict):
+    #     if set(arg).issubset(params):
+    #         return arg  # looks like genuine **kwargs
+        # return {params[0]: arg}  # dict is a single logical value
 
     # tuple / list / etc. ----------------------------------------------
     if isinstance(arg, Sequence) and not isinstance(arg, (str, bytes, bytearray)):

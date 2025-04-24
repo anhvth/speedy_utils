@@ -2,4 +2,10 @@ from speedy_utils import *
 from speedy_utils.all import *
 
 
-log('hello  world', level='warning')
+def f(x):
+    x = x['x']
+    print(x)
+    return 
+
+item = [{'x': i} for i in range(5)]
+multi_thread(f, item)
