@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from itertools import islice
 from typing import Any, Iterable, List, Sequence
 from fastcore.foundation import defaults
-
+from loguru import logger
 try:
     from tqdm import tqdm
 except ImportError:  # pragma: no cover
@@ -34,10 +34,10 @@ def _sig_kwargs(func, arg) -> dict[str, Any]:
     """
     params = list(inspect.signature(func).parameters)
     # do not allow more than 1 positional argument, raise
-    assert len(params) <= 1, (
-        "multi_thread() only supports functions with 0 or 1 positional "
-        "argument. Use **kwargs for more than one."
-    )
+    # assert len(params) <= 1, (
+    #     "multi_thread() only supports functions with 0 or 1 positional "
+    #     "argument. Use **kwargs for more than one."
+    # )
     
 
     # # dict input --------------------------------------------------------
@@ -113,12 +113,10 @@ def multi_thread(
                       ``False`` the failing task’s result becomes ``None``.
     **fixed_kwargs  – static keyword args forwarded to every ``func()`` call.
     """
-    t0 = time.perf_counter()
+    if 'DataFrame' in str(type(inputs)):
+        logger.info('Input is a DataFrame, converting to list of rows')
+        inputs = inputs.to_dict(orient='records')
 
-
-
-    # Tiny‑task heuristic: if we have *lots* of inputs and the user left batch=1
-    # we gently pick a small auto‑batch to avoid pure overhead.
     try:
         n_inputs = len(inputs)  # type: ignore[arg-type]
     except Exception:
