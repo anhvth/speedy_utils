@@ -33,18 +33,24 @@ def _sig_kwargs(func, arg) -> dict[str, Any]:
     • scalar / string – bind to the first parameter.
     """
     params = list(inspect.signature(func).parameters)
+    # do not allow more than 1 positional argument, raise
+    assert len(params) <= 1, (
+        "multi_thread() only supports functions with 0 or 1 positional "
+        "argument. Use **kwargs for more than one."
+    )
+    
 
-    # dict input --------------------------------------------------------
+    # # dict input --------------------------------------------------------
     # if isinstance(arg, dict):
     #     if set(arg).issubset(params):
     #         return arg  # looks like genuine **kwargs
-        # return {params[0]: arg}  # dict is a single logical value
+    #     return {params[0]: arg}  # dict is a single logical value
 
     # tuple / list / etc. ----------------------------------------------
-    if isinstance(arg, Sequence) and not isinstance(arg, (str, bytes, bytearray)):
-        if len(arg) > 1:  # real positional unpacking
-            return dict(zip(params, arg))
-        return {params[0]: arg}  # 1‑element → keep wrapper intact
+    # if isinstance(arg, Sequence) and not isinstance(arg, (str, bytes, bytearray)):
+    #     if len(arg) > 1:  # real positional unpacking
+    #         return dict(zip(params, arg))
+    #     return {params[0]: arg}  # 1‑element → keep wrapper intact
 
     # scalar fallback ---------------------------------------------------
     return {params[0]: arg}
