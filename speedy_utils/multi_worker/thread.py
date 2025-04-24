@@ -88,7 +88,7 @@ def multi_thread(
     batch: int = 1,
     ordered: bool = True,
     progress: bool = True,
-    progress_update: int = 500,
+    progress_update: int = 10,
     prefetch_factor: int = 4,
     timeout: float | None = None,
     stop_on_error: bool = True,
