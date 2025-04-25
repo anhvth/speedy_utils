@@ -8,6 +8,7 @@ import uuid
 from typing import Any, List, Literal
 from loguru import logger
 import cachetools
+import pandas as pd
 from pydantic import BaseModel
 import xxhash
 
@@ -58,11 +59,13 @@ def fast_serialize(x: Any) -> bytes:
 
 
 def identify(obj: Any, depth=0, max_depth=2) -> str:
-    # if depth > max_depth:
-    # Type aware is unstable for now disable it
     if isinstance(obj, (list, tuple)):
         x = [identify(x, depth + 1, max_depth) for x in obj]
         x = "\n".join(x)
+        return identify(x, depth + 1, max_depth)
+    # is pandas row or dict
+    elif isinstance(obj, (pd.DataFrame, pd.Series)):
+        x = str(obj.to_dict())
         return identify(x, depth + 1, max_depth)
     elif hasattr(obj, "__code__"):
         return identify(get_source(obj), depth + 1, max_depth)
