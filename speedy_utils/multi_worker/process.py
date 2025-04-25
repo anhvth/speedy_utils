@@ -190,8 +190,6 @@ def multi_process(
                 if bar and completed - last_bar >= 500:
                     bar.update(completed - last_bar)
                     last_bar = completed
-                    rate = completed / max(time.perf_counter(), 1e-6)
-                    bar.set_postfix_str(f"{rate:,.0f} items/s")
 
                 # keep pool saturated
                 try:

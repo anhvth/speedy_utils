@@ -9,6 +9,7 @@ from itertools import islice
 from typing import Any, Iterable, List, Sequence
 from fastcore.foundation import defaults
 from loguru import logger
+
 try:
     from tqdm import tqdm
 except ImportError:  # pragma: no cover
@@ -16,7 +17,9 @@ except ImportError:  # pragma: no cover
 
 # ── choose sensible defaults ──────────────────────────────────────────
 
-DEFAULT_WORKERS = os.cpu_count() * 2# ────────────────────────────────────────────────────────────
+DEFAULT_WORKERS = (
+    os.cpu_count() * 2
+)  # ────────────────────────────────────────────────────────────
 # helpers
 # ────────────────────────────────────────────────────────────
 # ─── helpers ─────────────────────────────────────────────────────────────
@@ -38,7 +41,6 @@ def _sig_kwargs(func, arg) -> dict[str, Any]:
     #     "multi_thread() only supports functions with 0 or 1 positional "
     #     "argument. Use **kwargs for more than one."
     # )
-    
 
     # # dict input --------------------------------------------------------
     # if isinstance(arg, dict):
@@ -92,6 +94,8 @@ def multi_thread(
     prefetch_factor: int = 4,
     timeout: float | None = None,
     stop_on_error: bool = True,
+    n_proc=0,
+    store_output_pkl_file: str | None = None,
     **fixed_kwargs,
 ) -> List[Any]:
     """
@@ -113,9 +117,48 @@ def multi_thread(
                       ``False`` the failing task’s result becomes ``None``.
     **fixed_kwargs  – static keyword args forwarded to every ``func()`` call.
     """
-    if 'DataFrame' in str(type(inputs)):
-        logger.info('Input is a DataFrame, converting to list of rows')
-        inputs = inputs.to_dict(orient='records')
+    from speedy_utils import load_by_ext, dump_json_or_pickle
+    if n_proc > 0:
+        from fastcore.all import threaded
+
+        # split the inputs by nproc
+        n_per_proc = max(len(inputs) // n_proc, 1)
+        proc_inputs_list = []
+        for i in range(0, len(inputs), n_per_proc):
+            proc_inputs_list.append(inputs[i : i + n_per_proc])
+        procs = []
+        in_process_multi_thread = threaded(process=True)(multi_thread)
+        
+        for proc_id, proc_inputs in enumerate(proc_inputs_list):
+            file_pkl = f"/tmp/multi_thread_{os.getpid()}_{time.time_ns()}.pkl"
+            proc = in_process_multi_thread(
+                func,
+                proc_inputs,
+                workers=workers,
+                batch=batch,
+                ordered=ordered,
+                progress=proc_id == 0,
+                progress_update=progress_update,
+                prefetch_factor=prefetch_factor,
+                timeout=timeout,
+                stop_on_error=stop_on_error,
+                n_proc=0,  # prevent recursion
+                store_output_pkl_file=file_pkl,
+                **fixed_kwargs,
+            )
+            procs.append([proc, file_pkl])
+        # join
+        results = []
+        
+
+        for proc, file_pkl in procs:
+            proc.join()
+            results.extend(load_by_ext(file_pkl))
+        return results
+
+    if "DataFrame" in str(type(inputs)):
+        logger.info("Input is a DataFrame, converting to list of rows")
+        inputs = inputs.to_dict(orient="records")
 
     try:
         n_inputs = len(inputs)  # type: ignore[arg-type]
@@ -139,7 +182,7 @@ def multi_thread(
     if progress and tqdm is not None and logical_total is not None:
         bar = tqdm(
             total=logical_total,
-            ncols=80,
+            ncols=128,
             colour="green",
             bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt}"
             " [{elapsed}<{remaining}, {rate_fmt}{postfix}]",
@@ -205,8 +248,20 @@ def multi_thread(
                     if bar and completed_items - last_bar_update >= progress_update:
                         bar.update(completed_items - last_bar_update)
                         last_bar_update = completed_items
-                        # speed = completed_items / max(time.perf_counter() - t0, 1e-6)
-                        # bar.set_postfix_str(f"{speed:,.0f} items/s")
+                        # Show pending, submitted, processing in the bar postfix
+                        submitted = next_logical_idx
+                        processing = len(inflight)
+                        pending = (
+                            (logical_total - submitted)
+                            if logical_total is not None
+                            else None
+                        )
+                        postfix = {
+                            "pending": pending if pending is not None else "-",
+                            # 'submitted': submitted,
+                            "processing": processing,
+                        }
+                        bar.set_postfix(postfix)
 
                     # keep queue full
                     try:
@@ -232,7 +287,8 @@ def multi_thread(
             if bar:
                 bar.update(completed_items - last_bar_update)
                 bar.close()
-
+    if store_output_pkl_file:
+        dump_json_or_pickle(results, store_output_pkl_file)
     return results
 
 
