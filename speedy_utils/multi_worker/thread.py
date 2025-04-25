@@ -117,9 +117,10 @@ def multi_thread(
                       ``False`` the failing task’s result becomes ``None``.
     **fixed_kwargs  – static keyword args forwarded to every ``func()`` call.
     """
-    from speedy_utils import load_by_ext, dump_json_or_pickle
-    if n_proc > 0:
+    from speedy_utils import load_by_ext, dump_json_or_pickle, identify
+    if n_proc > 1:
         from fastcore.all import threaded
+        import tempfile
 
         # split the inputs by nproc
         n_per_proc = max(len(inputs) // n_proc, 1)
@@ -130,7 +131,8 @@ def multi_thread(
         in_process_multi_thread = threaded(process=True)(multi_thread)
         
         for proc_id, proc_inputs in enumerate(proc_inputs_list):
-            file_pkl = f"/tmp/multi_thread_{os.getpid()}_{time.time_ns()}.pkl"
+            with tempfile.NamedTemporaryFile(delete=False, suffix="multi_thread.pkl") as tmp_file:
+                file_pkl = tmp_file.name
             proc = in_process_multi_thread(
                 func,
                 proc_inputs,
@@ -153,11 +155,11 @@ def multi_thread(
 
         for proc, file_pkl in procs:
             proc.join()
+            logger.info(f'Done proc {proc=}')
             results.extend(load_by_ext(file_pkl))
         return results
 
     if "DataFrame" in str(type(inputs)):
-        logger.info("Input is a DataFrame, converting to list of rows")
         inputs = inputs.to_dict(orient="records")
 
     try:
