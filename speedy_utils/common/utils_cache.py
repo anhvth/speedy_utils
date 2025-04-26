@@ -123,7 +123,7 @@ def _disk_memoize(func, keys, cache_dir, ignore_self, verbose):
                     except Exception as e:
                         if osp.exists(cache_path):
                             os.remove(cache_path)
-                        logger.warning(
+                        logger.opt(depth=1).warning(
                             f"Error loading cache: {str(e)[:100]}, continue to recompute"
                         )
 
@@ -135,7 +135,7 @@ def _disk_memoize(func, keys, cache_dir, ignore_self, verbose):
                     dump_json_or_pickle(result, cache_path)
             return result
         except Exception as e:
-            logger.warning(f"Failed to cache {func.__name__}: {e}, continue to recompute without cache")
+            logger.opt(depth=1).warning(f"Failed to cache {func.__name__}: {e}, continue to recompute without cache")
             return func(*args, **kwargs)
 
     return wrapper
