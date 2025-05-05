@@ -30,4 +30,4 @@ __all__ += process.__all__
 __all__ += thread.__all__
 __all__ += utils_print.__all__
 
-setup_logger('D')
+# setup_logger('D')
