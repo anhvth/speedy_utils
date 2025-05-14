@@ -4,6 +4,25 @@ Unit‑tests for speedy_utils.multi_worker.process.multi_process
 
 The test cases mirror those in test_multi_thread.py.  All target functions
 are declared at *module scope* to guarantee they are picklable under the
+"spawn" start‑method that Windows uses for multiprocessing.
+"""
+import multiprocessing
+# Set the start method to 'spawn' to avoid fork-related warnings
+if hasattr(multiprocessing, 'set_start_method'):
+    try:
+        multiprocessing.set_start_method('spawn', force=True)
+    except RuntimeError:
+        # It's already set, which is fine
+        pass
+
+import time
+from speedy_utils.multi_worker.process import multi_process
+from speedy_utils.multi_worker.thread import multi_thread   # used in the last testt_multi_process.py
+"""
+Unit‑tests for speedy_utils.multi_worker.process.multi_process
+
+The test cases mirror those in test_multi_thread.py.  All target functions
+are declared at *module scope* to guarantee they are picklable under the
 “spawn” start‑method that Windows uses for multiprocessing.
 """
 import time

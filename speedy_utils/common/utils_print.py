@@ -100,12 +100,22 @@ def fprint(
     # is_notebook = is_notebook or is_interactive()
     if is_notebook is None:
         is_notebook = is_interactive()
-    if hasattr(input_data, "toDict"):
+    if isinstance(input_data, list):
+        if all(hasattr(item, "toDict") for item in input_data):
+            input_data = [item.toDict() for item in input_data]
+    elif hasattr(input_data, "toDict"):
         input_data = input_data.toDict()
-    if hasattr(input_data, "to_dict"):
+    
+    if isinstance(input_data, list):
+        if all(hasattr(item, "to_dict") for item in input_data):
+            input_data = [item.to_dict() for item in input_data]
+    elif hasattr(input_data, "to_dict"):
         input_data = input_data.to_dict()
 
-    if hasattr(input_data, "model_dump"):
+    if isinstance(input_data, list):
+        if all(hasattr(item, "model_dump") for item in input_data):
+            input_data = [item.model_dump() for item in input_data]
+    elif hasattr(input_data, "model_dump"):
         input_data = input_data.model_dump()
     if not isinstance(input_data, (dict, str)):
         raise ValueError("Input data must be a dictionary or string")
@@ -113,7 +123,7 @@ def fprint(
     if isinstance(input_data, dict):
         input_data = flatten_dict(input_data)
 
-    if grep is not None:
+    if grep is not None and isinstance(input_data, dict):
         input_data = {k: v for k, v in input_data.items() if grep in str(k)}
 
     def remove_keys(d: Dict, keys: List[str]) -> Dict:
@@ -142,7 +152,7 @@ def fprint(
                 sub_result[parts[-1]] = copy.deepcopy(sub_source.get(parts[-1]))
         return result
 
-    if hasattr(input_data, "to_dict"):
+    if hasattr(input_data, "to_dict") and not isinstance(input_data, str):
         input_data = input_data.to_dict()
 
     processed_data = copy.deepcopy(input_data)
@@ -261,7 +271,7 @@ def setup_logger(
         "E": "ERROR",
         "C": "CRITICAL",
     }
-    level = level_mapping.get(level.upper(), level.upper())
+    level_str = level_mapping.get(level.upper(), level.upper())
 
     # Remove any existing handlers to avoid duplication
     logger.remove()
@@ -278,7 +288,7 @@ def setup_logger(
         4. Enforces a max size on the (file:line) dictionary.
         """
         # ---------- 1) Log-level check ----------
-        if record["level"].no < logger.level(level).no:
+        if record["level"].no < logger.level(level_str).no:
             return False
 
         # ---------- 2) Grep pattern handling ----------
@@ -316,12 +326,12 @@ def setup_logger(
     )
 
     # ---------- 4) Handle "DISABLE" level ----------
-    if level.upper() == "DISABLE":
+    if level_str.upper() == "DISABLE":
         logger.disable("")
         logger.info("Logging disabled")
     else:
         logger.enable("")
-        logger.debug(f"Logging set to {level}")
+        logger.debug(f"Logging set to {level_str}")
 
 
 

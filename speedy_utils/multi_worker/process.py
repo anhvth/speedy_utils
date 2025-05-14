@@ -1,7 +1,17 @@
 import inspect, os, time, traceback
+import multiprocessing
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from itertools import islice
 from typing import Any, Callable, Iterable, List, Sequence
+
+# Set the start method to 'spawn' to avoid fork-related warnings
+# This needs to be done before any ProcessPoolExecutor is created
+if hasattr(multiprocessing, 'set_start_method'):
+    try:
+        multiprocessing.set_start_method('spawn', force=True)
+    except RuntimeError:
+        # It's already set, which is fine
+        pass
 
 try:
     from tqdm import tqdm
