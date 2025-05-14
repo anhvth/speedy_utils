@@ -6,13 +6,10 @@ from typing import Any, Callable, Iterable, Iterator, List, Sequence, TypeVar, c
 
 T = TypeVar("T")
 
-# Set the start method to 'spawn' to avoid fork-related warnings
-# This needs to be done before any ProcessPoolExecutor is created
 if hasattr(multiprocessing, "set_start_method"):
     try:
         multiprocessing.set_start_method("spawn", force=True)
     except RuntimeError:
-        # It's already set, which is fine
         pass
 
 try:
@@ -22,21 +19,6 @@ except ImportError:  # pragma: no cover
 
 
 # ──── internal helpers ────────────────────────────────────────────────────
-def _sig_kwargs(func: Callable, arg) -> dict[str, Any]:
-    "Smartly convert *arg* into **kwargs** for *func* (same logic as multi_thread)."
-    params = list(inspect.signature(func).parameters)
-
-    # mapping input → maybe‑kwargs
-    if isinstance(arg, dict):
-        return arg if set(arg).issubset(params) else {params[0]: arg}
-
-    # 1‑element Sequence → keep wrapper; >1 → positional unpack
-    if isinstance(arg, Sequence) and not isinstance(arg, (str, bytes, bytearray)):
-        return dict(zip(params, arg)) if len(arg) > 1 else {params[0]: arg}
-
-    # scalar fallback
-    return {params[0]: arg}
-
 
 def _group_iter(src: Iterable[Any], size: int) -> Iterable[List[Any]]:
     "Yield *size*-sized chunks from *src*."
@@ -44,23 +26,19 @@ def _group_iter(src: Iterable[Any], size: int) -> Iterable[List[Any]]:
     while chunk := list(islice(it, size)):
         yield chunk
 
-
 def _short_tb() -> str:
-    "Trim internal frames from a traceback for compact logs."
     tb = "".join(traceback.format_exc())
     return "\n".join(ln for ln in tb.splitlines() if "multi_process" not in ln)
 
-
-def _safe_call(func: Callable, arg, fixed):
+def _safe_call(func: Callable, obj, fixed):
     try:
-        return func(**_sig_kwargs(func, arg), **fixed)
+        return func(obj, **fixed)
     except Exception as exc:
+        func_name = getattr(func, "__name__", str(func))
         raise RuntimeError(
-            f"{func.__name__}({arg!r}) failed: {exc}\n{_short_tb()}"
+            f"{func_name}({obj!r}) failed: {exc}\n{_short_tb()}"
         ) from exc
 
-
-# Define _worker at the module level to ensure it's picklable
 def _worker_process(
     func: Callable, item_batch: Any, fixed_kwargs: dict, batch_size: int
 ):
@@ -71,14 +49,9 @@ def _worker_process(
             try:
                 results.append(_safe_call(func, itm, fixed_kwargs))
             except Exception:
-                # If an error occurs for an item in the batch, append None
-                # This ensures the output list length matches the input batch length
                 results.append(None)
         return results
-    # For batch_size == 1, _safe_call handles the exception and raises if needed
-    # If stop_on_error=False, the main loop will catch it and set res=None
     return _safe_call(func, item_batch, fixed_kwargs)
-
 
 # ──── public API ──────────────────────────────────────────────────────────
 def multi_process(
@@ -96,12 +69,12 @@ def multi_process(
     **fixed_kwargs,
 ) -> List[Any]:
     """
-    Cross‑platform **multi‑processing** parallel map that returns a *list*.
+    Simple multi‑processing parallel map that returns a *list*.
 
     Parameters
     ----------
-    func          – target callable executed in separate processes.
-    inputs        – iterable with the arguments.
+    func          – target callable executed in separate processes, must be of the form f(obj, ...).
+    inputs        – iterable with the objects.
     workers       – process pool size (defaults to :pyfunc:`os.cpu_count()`).
     batch         – package *batch* inputs into one call to reduce IPC overhead.
     ordered       – keep original order; if ``False`` results stream as finished.
@@ -120,24 +93,18 @@ def multi_process(
     if batch < 1:
         raise ValueError("batch must be ≥ 1")
 
-    # figure out total length if cheaply available
     try:
         n_inputs = len(inputs)  # type: ignore[arg-type]
     except Exception:
         n_inputs = None
 
-    # heuristic: auto‑batch tiny tasks if user left batch=1
-    if batch == 1 and n_inputs and n_inputs / workers > 20_000:
-        batch = 32
-
-    # wrap source iterator
     src_iter: Iterator[Any] = iter(inputs)
     if batch > 1:
         src_iter = cast(Iterator[Any], _group_iter(src_iter, batch))
 
-    logical_total = n_inputs  # for progress & ordered pre‑alloc
+    logical_total = n_inputs
     bar = None
-    last_bar = 0  # Initialize last_bar regardless of whether bar is used
+    last_bar = 0
     if progress and tqdm is not None and logical_total is not None:
         bar = tqdm(
             total=logical_total,
@@ -147,7 +114,6 @@ def multi_process(
             " [{elapsed}<{remaining}, {rate_fmt}{postfix}]",
         )
 
-    # pre‑allocate result list if we must keep order
     if ordered and logical_total is not None:
         results: List[Any] = [None] * logical_total
     else:
@@ -159,13 +125,11 @@ def multi_process(
     with ProcessPoolExecutor(max_workers=workers) as pool:
         futures = set()
 
-        # prime pool
         for _ in range(min(inflight, workers)):
             try:
                 arg = next(src_iter)
             except StopIteration:
                 break
-            # Use the top-level _worker_process function
             fut = pool.submit(_worker_process, func, arg, fixed_kwargs, batch)
             fut.idx = next_idx  # type: ignore[attr-defined]
             futures.add(fut)
@@ -180,52 +144,31 @@ def multi_process(
                 except Exception:
                     if stop_on_error:
                         raise
-                    # Determine the number of items expected for this future
                     num_items = batch if batch > 1 else 1
-                    # If an exception occurred fetching the result (e.g., worker process died)
-                    # and stop_on_error is False, fill with None
                     res = [None] * num_items if batch > 1 else None
 
-                # flatten batched outputs if necessary
                 out_items = res if batch > 1 else [res]
-
-                # Ensure out_items is always a list
                 if out_items is None:
                     out_items = []
 
                 if ordered and logical_total is not None:
-                    # Ensure out_items has the correct length even if res was None (for batch > 1)
-                    if (
-                        batch > 1
-                        and isinstance(out_items, list)
-                        and len(out_items) != batch
-                    ):
-                        # This case might happen if the worker process died unexpectedly
-                        # We already handled this by setting res = [None] * batch above
-                        pass  # Should be correctly sized now
-
-                    # Use safer individual element assignment instead of slice assignment
                     if isinstance(out_items, list) and len(out_items) > 0:
                         for i, item in enumerate(out_items):
                             if idx + i < len(results):
                                 results[idx + i] = item
                 else:
-                    # Extend results with items only if out_items is a valid iterable
                     if isinstance(out_items, list):
                         results.extend(out_items)
 
                 completed += len(out_items)
 
-                # progress
                 if bar and completed - last_bar >= process_update_interval:
                     bar.update(completed - last_bar)
                     last_bar = completed
 
-                # keep pool saturated
                 try:
                     while next_idx - completed < inflight:
                         arg = next(src_iter)
-                        # Use the top-level _worker_process function
                         fut2 = pool.submit(
                             _worker_process, func, arg, fixed_kwargs, batch
                         )
@@ -234,7 +177,7 @@ def multi_process(
                         next_idx += len(arg) if batch > 1 else 1
                 except StopIteration:
                     pass
-                break  # process one future per outer loop iteration
+                break
 
     if bar:
         bar.update(completed - last_bar)

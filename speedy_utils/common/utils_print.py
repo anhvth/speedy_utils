@@ -105,7 +105,7 @@ def fprint(
             input_data = [item.toDict() for item in input_data]
     elif hasattr(input_data, "toDict"):
         input_data = input_data.toDict()
-    
+
     if isinstance(input_data, list):
         if all(hasattr(item, "to_dict") for item in input_data):
             input_data = [item.to_dict() for item in input_data]
@@ -319,6 +319,7 @@ def setup_logger(
         sys.stdout,
         colorize=True,
         format=(
+            "<green>{time:HH:mm:ss}</green> | "
             "<level>{level: <8}</level> | "
             "<cyan>{file}:{line} ({function})</cyan> - <level>{message}</level>"
         ),
@@ -326,18 +327,17 @@ def setup_logger(
     )
 
     # ---------- 4) Handle "DISABLE" level ----------
-    if level_str.upper() == "DISABLE":
-        logger.disable("")
-        logger.info("Logging disabled")
-    else:
-        logger.enable("")
-        logger.debug(f"Logging set to {level_str}")
-
-
+    # if level_str.upper() == "DISABLE":
+    #     logger.disable("")
+    #     logger.info("Logging disabled")
+    # else:
+    # logger.enable("")
+    # logger.debug(f"Logging set to {level_str}")
 
 
 _logged_once_set = set()
 _last_log_intervals = {}
+
 
 def _get_call_site_id(depth=2) -> str:
     """
@@ -345,6 +345,7 @@ def _get_call_site_id(depth=2) -> str:
     """
     frame = inspect.stack()[depth]
     return f"{frame.filename}:{frame.lineno}"
+
 
 def log(
     msg: str,
