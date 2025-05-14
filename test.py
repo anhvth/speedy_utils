@@ -1,5 +1,4 @@
-from speedy_utils import *
-from speedy_utils.all import *
+from speedy_utils.multi_worker.thread import multi_thread
 
 
 def f(x):

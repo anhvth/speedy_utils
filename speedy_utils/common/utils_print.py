@@ -240,7 +240,7 @@ def setup_logger(
     ] = "Info",
     enable_grep: Annotated[str, "Comma-separated patterns for enabling logs"] = "",
     disable_grep: Annotated[str, "Comma-separated patterns for disabling logs"] = "",
-    min_interval: float = 0.1,
+    min_interval: float = -1,
     max_cache_entries: int = 2000,
 ) -> None:
     """

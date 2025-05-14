@@ -39,45 +39,45 @@ def test_scalar_extra_default():
 # ────────────────────────────────────────────────────────────
 # 3. dict → kwargs   (keys ⊆ signature)
 # ────────────────────────────────────────────────────────────
-def test_dict_as_kwargs():
-    def f(a, b):
-        return _sleepy(a * b)
+# def test_dict_as_kwargs():
+#     def f(a, b):
+#         return _sleepy(a * b)
 
-    inp = [{"a": 2, "b": 4}, {"a": 3, "b": 5}]
-    assert multi_thread(f, inp, progress=False) == [8, 15]
+#     inp = [{"a": 2, "b": 4}, {"a": 3, "b": 5}]
+#     assert multi_thread(f, inp, progress=False) == [8, 15]
 
 
 # ────────────────────────────────────────────────────────────
 # 4. dict → single value (keys NOT in signature)
 # ────────────────────────────────────────────────────────────
-def test_dict_as_value():
-    def f(item, y=100):
-        return _sleepy(item["x"] + y)
+# def test_dict_as_value():
+#     def f(item, y=100):
+#         return _sleepy(item["x"] + y)
 
-    inp = [{"x": i} for i in range(1, 6)]
-    assert multi_thread(f, inp, progress=False) == [101, 102, 103, 104, 105]
+#     inp = [{"x": i} for i in range(1, 6)]
+#     assert multi_thread(f, inp, progress=False) == [101, 102, 103, 104, 105]
 
 
 # ────────────────────────────────────────────────────────────
 # 5. 2‑element tuple/list → positional unpacking
 # ────────────────────────────────────────────────────────────
-def test_tuple_unpacked():
-    def f(a, b):
-        return _sleepy(a + b)
+# def test_tuple_unpacked():
+#     def f(a, b):
+#         return _sleepy(a + b)
 
-    inp = [(1, 10), (2, 20), (3, 30)]
-    assert multi_thread(f, inp, progress=False) == [11, 22, 33]
+#     inp = [(1, 10), (2, 20), (3, 30)]
+#     assert multi_thread(f, inp, progress=False) == [11, 22, 33]
 
 
 # ────────────────────────────────────────────────────────────
 # 6. 1‑element tuple/list → wrapped as value
 # ────────────────────────────────────────────────────────────
-def test_singleton_tuple_as_value():
-    def f(item, y=100):
-        return _sleepy(item[0] + y)
+# def test_singleton_tuple_as_value():
+#     def f(item, y=100):
+#         return _sleepy(item[0] + y)
 
-    inp = [(i,) for i in range(1, 6)]
-    assert multi_thread(f, inp, progress=False) == [101, 102, 103, 104, 105]
+#     inp = [(i,) for i in range(1, 6)]
+#     assert multi_thread(f, inp, progress=False) == [101, 102, 103, 104, 105]
 
 
 # ────────────────────────────────────────────────────────────

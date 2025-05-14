@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import inspect, os, time, traceback
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from itertools import islice
@@ -7,8 +5,8 @@ from typing import Any, Callable, Iterable, List, Sequence
 
 try:
     from tqdm import tqdm
-except ImportError:          # pragma: no cover
-    tqdm = None              # type: ignore[assignment]
+except ImportError:  # pragma: no cover
+    tqdm = None  # type: ignore[assignment]
 
 
 # ──── internal helpers ────────────────────────────────────────────────────
@@ -45,11 +43,15 @@ def _safe_call(func: Callable, arg, fixed):
     try:
         return func(**_sig_kwargs(func, arg), **fixed)
     except Exception as exc:
-        raise RuntimeError(f"{func.__name__}({arg!r}) failed: {exc}\n{_short_tb()}") from exc
+        raise RuntimeError(
+            f"{func.__name__}({arg!r}) failed: {exc}\n{_short_tb()}"
+        ) from exc
 
 
 # Define _worker at the module level to ensure it's picklable
-def _worker_process(func: Callable, item_batch: Any, fixed_kwargs: dict, batch_size: int):
+def _worker_process(
+    func: Callable, item_batch: Any, fixed_kwargs: dict, batch_size: int
+):
     """Worker function executed in each process."""
     if batch_size > 1:
         results = []
@@ -91,7 +93,7 @@ def multi_process(
     batch         – package *batch* inputs into one call to reduce IPC overhead.
     ordered       – keep original order; if ``False`` results stream as finished.
     progress      – show a tqdm bar (requires *tqdm*).
-    inflight      – max logical items concurrently submitted  
+    inflight      – max logical items concurrently submitted
                     *(default: ``workers × 4``)*.
     timeout       – overall timeout for the mapping (seconds).
     stop_on_error – raise immediately on first exception (default) or
@@ -120,7 +122,7 @@ def multi_process(
     if batch > 1:
         src_iter = _group_iter(src_iter, batch)
 
-    logical_total = n_inputs            # for progress & ordered pre‑alloc
+    logical_total = n_inputs  # for progress & ordered pre‑alloc
     bar = None
     if progress and tqdm is not None and logical_total is not None:
         bar = tqdm(
@@ -177,9 +179,9 @@ def multi_process(
                 if ordered and logical_total is not None:
                     # Ensure out_items has the correct length even if res was None (for batch > 1)
                     if len(out_items) != (batch if batch > 1 else 1) and batch > 1:
-                         # This case might happen if the worker process died unexpectedly
-                         # We already handled this by setting res = [None] * batch above
-                         pass # Should be correctly sized now
+                        # This case might happen if the worker process died unexpectedly
+                        # We already handled this by setting res = [None] * batch above
+                        pass  # Should be correctly sized now
                     results[idx : idx + len(out_items)] = out_items
                 else:
                     results.extend(out_items)
@@ -196,18 +198,21 @@ def multi_process(
                     while next_idx - completed < inflight:
                         arg = next(src_iter)
                         # Use the top-level _worker_process function
-                        fut2 = pool.submit(_worker_process, func, arg, fixed_kwargs, batch)
+                        fut2 = pool.submit(
+                            _worker_process, func, arg, fixed_kwargs, batch
+                        )
                         fut2.idx = next_idx  # type: ignore[attr-defined]
                         futures.add(fut2)
                         next_idx += len(arg) if batch > 1 else 1
                 except StopIteration:
                     pass
-                break      # process one future per outer loop iteration
+                break  # process one future per outer loop iteration
 
     if bar:
         bar.update(completed - last_bar)
         bar.close()
 
     return results
+
 
 __all__ = ["multi_process"]

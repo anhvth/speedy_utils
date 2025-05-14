@@ -149,6 +149,7 @@ __all__ = [
     "dump_jsonl",
     "load_by_ext",
     "load_json_or_pickle",
+    "load_jsonl",
     "jdumps",
     "jloads",
 ]

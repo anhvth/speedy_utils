@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import inspect
 import os
 import time
@@ -42,8 +40,8 @@ def _sig_kwargs(func, arg) -> dict[str, Any]:
     #     "argument. Use **kwargs for more than one."
     # )
 
-    # # dict input --------------------------------------------------------
-    # if isinstance(arg, dict):
+    # dict input --------------------------------------------------------
+    if isinstance(arg, dict):
     #     if set(arg).issubset(params):
     #         return arg  # looks like genuine **kwargs
     #     return {params[0]: arg}  # dict is a single logical value
@@ -118,6 +116,7 @@ def multi_thread(
     **fixed_kwargs  – static keyword args forwarded to every ``func()`` call.
     """
     from speedy_utils import load_by_ext, dump_json_or_pickle, identify
+
     if n_proc > 1:
         from fastcore.all import threaded
         import tempfile
@@ -129,9 +128,11 @@ def multi_thread(
             proc_inputs_list.append(inputs[i : i + n_per_proc])
         procs = []
         in_process_multi_thread = threaded(process=True)(multi_thread)
-        
+
         for proc_id, proc_inputs in enumerate(proc_inputs_list):
-            with tempfile.NamedTemporaryFile(delete=False, suffix="multi_thread.pkl") as tmp_file:
+            with tempfile.NamedTemporaryFile(
+                delete=False, suffix="multi_thread.pkl"
+            ) as tmp_file:
                 file_pkl = tmp_file.name
             proc = in_process_multi_thread(
                 func,
@@ -151,11 +152,10 @@ def multi_thread(
             procs.append([proc, file_pkl])
         # join
         results = []
-        
 
         for proc, file_pkl in procs:
             proc.join()
-            logger.info(f'Done proc {proc=}')
+            logger.info(f"Done proc {proc=}")
             results.extend(load_by_ext(file_pkl))
         return results
 
@@ -305,4 +305,4 @@ def multi_threaad_standard(fn, items, workers=4):
     return results
 
 
-__all__ = ["multi_thread"]
+__all__ = ["multi_thread", "multi_threaad_standard"]
