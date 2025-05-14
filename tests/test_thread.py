@@ -212,7 +212,7 @@ def test_multi_thread_vs_standard():
         return fibonacci(x)
 
     # Create a longer input list for more substantial testing
-    inp = [i for i in range(10, 35)]  # Fibonacci numbers from 10 to 24
+    inp = [i for i in range(10, 35)]  # Fibonacci numbers from 10 to 34
 
     # Use multi_thread
     start_mt = time.time()
@@ -221,7 +221,7 @@ def test_multi_thread_vs_standard():
 
     # Use standard ThreadPoolExecutor
     start_std = time.time()
-    out_std = multi_threaad_standard(f, inp)
+    out_std = multi_threaad_standard(f, inp, workers=4)
     std_time = time.time() - start_std
 
     print(

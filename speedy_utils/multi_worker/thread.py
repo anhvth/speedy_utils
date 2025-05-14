@@ -4,7 +4,7 @@ import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from itertools import islice
-from typing import Any, Iterable, List, Sequence
+from typing import Any, Callable, Iterable, List, Sequence
 from fastcore.foundation import defaults
 from loguru import logger
 
@@ -16,44 +16,12 @@ except ImportError:  # pragma: no cover
 # ── choose sensible defaults ──────────────────────────────────────────
 
 DEFAULT_WORKERS = (
-    os.cpu_count() * 2
-)  # ────────────────────────────────────────────────────────────
+    os.cpu_count() or 4
+) * 2  # ────────────────────────────────────────────────────────────
 # helpers
 # ────────────────────────────────────────────────────────────
 # ─── helpers ─────────────────────────────────────────────────────────────
 from collections.abc import Sequence  # (typing.Sequence misses str checks)
-
-
-def _sig_kwargs(func, arg) -> dict[str, Any]:
-    """
-    Convert *arg* into **kwargs** for *func*.
-
-    • dict  – unpack **only if** keys ⊆ func params, else bind whole dict.
-    • Sequence (≠ str/bytes) with **> 1 elements** – unpack positionally.
-      • 1‑element sequences are treated like scalars to preserve the container.
-    • scalar / string – bind to the first parameter.
-    """
-    params = list(inspect.signature(func).parameters)
-    # do not allow more than 1 positional argument, raise
-    # assert len(params) <= 1, (
-    #     "multi_thread() only supports functions with 0 or 1 positional "
-    #     "argument. Use **kwargs for more than one."
-    # )
-
-    # dict input --------------------------------------------------------
-    if isinstance(arg, dict):
-    #     if set(arg).issubset(params):
-    #         return arg  # looks like genuine **kwargs
-    #     return {params[0]: arg}  # dict is a single logical value
-
-    # tuple / list / etc. ----------------------------------------------
-    # if isinstance(arg, Sequence) and not isinstance(arg, (str, bytes, bytearray)):
-    #     if len(arg) > 1:  # real positional unpacking
-    #         return dict(zip(params, arg))
-    #     return {params[0]: arg}  # 1‑element → keep wrapper intact
-
-    # scalar fallback ---------------------------------------------------
-    return {params[0]: arg}
 
 
 def _group_iter(src: Iterable[Any], size: int) -> Iterable[list[Any]]:
@@ -68,20 +36,15 @@ def _short_tb() -> str:
     return "\n".join(ln for ln in tb.splitlines() if "multi_thread.py" not in ln)
 
 
-def _safe_call(func, arg, fixed):
-    try:
-        return func(**_sig_kwargs(func, arg), **fixed)
-    except Exception as exc:
-        raise RuntimeError(
-            f"{func.__name__}({arg!r}) failed: {exc}\n{_short_tb()}"
-        ) from exc
+def _worker(item, func, fixed_kwargs):
+    return func(item, **fixed_kwargs)
 
 
 # ────────────────────────────────────────────────────────────
 # main API
 # ────────────────────────────────────────────────────────────
 def multi_thread(
-    func: callable,
+    func: Callable,
     inputs: Iterable[Any],
     *,
     workers: int | None = DEFAULT_WORKERS,
@@ -122,6 +85,7 @@ def multi_thread(
         import tempfile
 
         # split the inputs by nproc
+        inputs = list(inputs)
         n_per_proc = max(len(inputs) // n_proc, 1)
         proc_inputs_list = []
         for i in range(0, len(inputs), n_per_proc):
@@ -159,20 +123,29 @@ def multi_thread(
             results.extend(load_by_ext(file_pkl))
         return results
 
-    if "DataFrame" in str(type(inputs)):
-        inputs = inputs.to_dict(orient="records")
+    try:
+        import pandas as pd
+
+        if isinstance(inputs, pd.DataFrame):
+            inputs = inputs.to_dict(orient="records")
+    except ImportError:
+        pass
 
     try:
         n_inputs = len(inputs)  # type: ignore[arg-type]
     except Exception:
         n_inputs = None
-    if batch == 1 and n_inputs and n_inputs / max(workers, 1) > 20_000:
+    workers_val = workers if workers is not None else DEFAULT_WORKERS
+    
+    if batch == 1 and n_inputs and n_inputs / max(workers_val, 1) > 20_000:
         batch = 32  # empirically good for sub‑ms tasks
 
     # ── build (maybe‑batched) source iterator ────────────────────────────
     src_iter: Iterable[Any] = iter(inputs)
     if batch > 1:
         src_iter = _group_iter(src_iter, batch)
+    # Ensure src_iter is always an iterator
+    src_iter = iter(src_iter)
 
     # total logical items (for bar & ordered pre‑allocation)
     logical_total = n_inputs
@@ -181,6 +154,7 @@ def multi_thread(
 
     # ── progress bar ─────────────────────────────────────────────────────
     bar = None
+    last_bar_update = 0
     if progress and tqdm is not None and logical_total is not None:
         bar = tqdm(
             total=logical_total,
@@ -189,7 +163,6 @@ def multi_thread(
             bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt}"
             " [{elapsed}<{remaining}, {rate_fmt}{postfix}]",
         )
-        last_bar_update = 0
 
     # ── prepare result container ─────────────────────────────────────────
     if ordered and logical_total is not None:
@@ -197,14 +170,9 @@ def multi_thread(
     else:
         results = []
 
-    # ── worker wrapper ───────────────────────────────────────────────────
-    def _worker(item_batch):
-        if batch > 1:
-            return [_safe_call(func, itm, fixed_kwargs) for itm in item_batch]
-        return _safe_call(func, item_batch, fixed_kwargs)
-
     # ── main execution loop ──────────────────────────────────────────────────
-    max_inflight = workers * max(prefetch_factor, 1)
+    workers_val = workers if workers is not None else DEFAULT_WORKERS
+    max_inflight = workers_val * max(prefetch_factor, 1)
     completed_items = 0
     next_logical_idx = 0  # index assigned to the next submission
 
@@ -217,10 +185,16 @@ def multi_thread(
                 arg = next(src_iter)
             except StopIteration:
                 break
-            fut = pool.submit(_worker, arg)
-            fut.idx = next_logical_idx  # type: ignore[attr-defined]
-            inflight.add(fut)
-            next_logical_idx += len(arg) if batch > 1 else 1
+            if batch > 1:
+                fut = pool.submit(lambda items: [_worker(item, func, fixed_kwargs) for item in items], arg)
+                fut.idx = next_logical_idx  # type: ignore[attr-defined]
+                inflight.add(fut)
+                next_logical_idx += len(arg)
+            else:
+                fut = pool.submit(_worker, arg, func, fixed_kwargs)
+                fut.idx = next_logical_idx  # type: ignore[attr-defined]
+                inflight.add(fut)
+                next_logical_idx += 1
 
         try:
             # Process futures as they complete and add new ones to keep the pool busy
@@ -238,6 +212,16 @@ def multi_thread(
                     # flatten res to list of logical outputs
                     out_items = res if batch > 1 else [res]
 
+                    # Ensure out_items is a list (and thus Sized)
+                    if out_items is None:
+                        out_items = [None]
+                    elif not isinstance(out_items, list):
+                        out_items = (
+                            list(out_items)
+                            if isinstance(out_items, Iterable)
+                            else [out_items]
+                        )
+
                     # store outputs
                     if ordered and logical_total is not None:
                         results[idx : idx + len(out_items)] = out_items
@@ -252,7 +236,7 @@ def multi_thread(
                         last_bar_update = completed_items
                         # Show pending, submitted, processing in the bar postfix
                         submitted = next_logical_idx
-                        processing = len(inflight)
+                        processing = min(len(inflight), workers_val)
                         pending = (
                             (logical_total - submitted)
                             if logical_total is not None
@@ -269,10 +253,16 @@ def multi_thread(
                     try:
                         while next_logical_idx - completed_items < max_inflight:
                             arg = next(src_iter)
-                            fut2 = pool.submit(_worker, arg)
-                            fut2.idx = next_logical_idx  # type: ignore[attr-defined]
-                            inflight.add(fut2)
-                            next_logical_idx += len(arg) if batch > 1 else 1
+                            if batch > 1:
+                                fut2 = pool.submit(lambda items: [_worker(item, func, fixed_kwargs) for item in items], arg)
+                                fut2.idx = next_logical_idx  # type: ignore[attr-defined]
+                                inflight.add(fut2)
+                                next_logical_idx += len(arg)
+                            else:
+                                fut2 = pool.submit(_worker, arg, func, fixed_kwargs)
+                                fut2.idx = next_logical_idx  # type: ignore[attr-defined]
+                                inflight.add(fut2)
+                                next_logical_idx += 1
                     except StopIteration:
                         pass
 

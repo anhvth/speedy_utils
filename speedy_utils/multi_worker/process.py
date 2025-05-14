@@ -2,13 +2,15 @@ import inspect, os, time, traceback
 import multiprocessing
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from itertools import islice
-from typing import Any, Callable, Iterable, List, Sequence
+from typing import Any, Callable, Iterable, Iterator, List, Sequence, TypeVar, cast
+
+T = TypeVar("T")
 
 # Set the start method to 'spawn' to avoid fork-related warnings
 # This needs to be done before any ProcessPoolExecutor is created
-if hasattr(multiprocessing, 'set_start_method'):
+if hasattr(multiprocessing, "set_start_method"):
     try:
-        multiprocessing.set_start_method('spawn', force=True)
+        multiprocessing.set_start_method("spawn", force=True)
     except RuntimeError:
         # It's already set, which is fine
         pass
@@ -90,6 +92,7 @@ def multi_process(
     inflight: int | None = None,
     timeout: float | None = None,
     stop_on_error: bool = True,
+    process_update_interval=10,
     **fixed_kwargs,
 ) -> List[Any]:
     """
@@ -128,12 +131,13 @@ def multi_process(
         batch = 32
 
     # wrap source iterator
-    src_iter: Iterable[Any] = iter(inputs)
+    src_iter: Iterator[Any] = iter(inputs)
     if batch > 1:
-        src_iter = _group_iter(src_iter, batch)
+        src_iter = cast(Iterator[Any], _group_iter(src_iter, batch))
 
     logical_total = n_inputs  # for progress & ordered pre‑alloc
     bar = None
+    last_bar = 0  # Initialize last_bar regardless of whether bar is used
     if progress and tqdm is not None and logical_total is not None:
         bar = tqdm(
             total=logical_total,
@@ -142,7 +146,6 @@ def multi_process(
             bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt}"
             " [{elapsed}<{remaining}, {rate_fmt}{postfix}]",
         )
-        last_bar = 0
 
     # pre‑allocate result list if we must keep order
     if ordered and logical_total is not None:
@@ -186,20 +189,35 @@ def multi_process(
                 # flatten batched outputs if necessary
                 out_items = res if batch > 1 else [res]
 
+                # Ensure out_items is always a list
+                if out_items is None:
+                    out_items = []
+
                 if ordered and logical_total is not None:
                     # Ensure out_items has the correct length even if res was None (for batch > 1)
-                    if len(out_items) != (batch if batch > 1 else 1) and batch > 1:
+                    if (
+                        batch > 1
+                        and isinstance(out_items, list)
+                        and len(out_items) != batch
+                    ):
                         # This case might happen if the worker process died unexpectedly
                         # We already handled this by setting res = [None] * batch above
                         pass  # Should be correctly sized now
-                    results[idx : idx + len(out_items)] = out_items
+
+                    # Use safer individual element assignment instead of slice assignment
+                    if isinstance(out_items, list) and len(out_items) > 0:
+                        for i, item in enumerate(out_items):
+                            if idx + i < len(results):
+                                results[idx + i] = item
                 else:
-                    results.extend(out_items)
+                    # Extend results with items only if out_items is a valid iterable
+                    if isinstance(out_items, list):
+                        results.extend(out_items)
 
                 completed += len(out_items)
 
                 # progress
-                if bar and completed - last_bar >= 500:
+                if bar and completed - last_bar >= process_update_interval:
                     bar.update(completed - last_bar)
                     last_bar = completed
 
