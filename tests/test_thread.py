@@ -200,23 +200,24 @@ def test_speedy_vs_normal():
 
 # ────────────────────────────────────────────────────────────
 # 12. Test multi_thread vs standard threading, use a heavry compute function like fibonacci
-def fibonacci(n):
+def fibonacci(n, x):
     if n <= 1:
-        return n
+        return n + x
     else:
-        return fibonacci(n - 1) + fibonacci(n - 2)
+        return fibonacci(n - 1, x) + fibonacci(n - 2, x)
 
 
 def test_multi_thread_vs_standard():
     def f(x):
-        return fibonacci(x)
+        return fibonacci(x, 0)
 
     # Create a longer input list for more substantial testing
     inp = [i for i in range(10, 35)]  # Fibonacci numbers from 10 to 34
 
     # Use multi_thread
     start_mt = time.time()
-    out_mt = multi_thread(f, inp, workers=4, progress=False)
+    print(inp)
+    out_mt = multi_thread(f, inp, workers=4, progress=False,)
     mt_time = time.time() - start_mt
 
     # Use standard ThreadPoolExecutor
