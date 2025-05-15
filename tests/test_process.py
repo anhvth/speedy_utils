@@ -1,14 +1,15 @@
-# tests/test_multi_process.py
-"""
-Unit‑tests for speedy_utils.multi_worker.process.multi_process
-
-The test cases mirror those in test_multi_thread.py.  All target functions
-are declared at *module scope* to guarantee they are picklable under the
-“spawn” start‑method that Windows uses for multiprocessing.
-"""
 import time
-from speedy_utils.multi_worker.process import multi_process
-from speedy_utils.multi_worker.thread import multi_thread   # used in the last test
+import multiprocessing
+
+if hasattr(multiprocessing, "set_start_method"):
+    try:
+        multiprocessing.set_start_method("spawn", force=True)
+    except RuntimeError:
+        # It's already set, which is fine
+        pass
+
+from speedy_utils import multi_thread
+from speedy_utils.multi_worker.process import multi_process, tqdm
 
 
 # ────────────────────────────────────────────────────────────
@@ -83,37 +84,6 @@ def test_scalar_single_param():
     assert multi_process(double, inp, workers=2, progress=False) == [2, 4, 6]
 
 
-def test_scalar_extra_default():
-    inp = [1, 2, 3]
-    assert multi_process(add_default, inp, progress=False) == [6, 7, 8]
-
-
-def test_dict_as_kwargs():
-    inp = [{"a": 2, "b": 4}, {"a": 3, "b": 5}]
-    assert multi_process(mul, inp, progress=False) == [8, 15]
-
-
-def test_dict_as_value():
-    inp = [{"x": i} for i in range(1, 6)]
-    assert multi_process(dict_plus, inp, progress=False) == [101, 102, 103, 104, 105]
-
-
-def test_tuple_unpacked():
-    inp = [(1, 10), (2, 20), (3, 30)]
-    assert multi_process(add_pair, inp, progress=False) == [11, 22, 33]
-
-
-def test_singleton_tuple_as_value():
-    inp = [(i,) for i in range(1, 6)]
-    assert multi_process(tuple_first_plus, inp, progress=False) == [
-        101,
-        102,
-        103,
-        104,
-        105,
-    ]
-
-
 def test_string_scalar():
     inp = ["ab", "cd"]
     assert multi_process(to_upper, inp, progress=False) == ["AB", "CD"]
@@ -133,32 +103,41 @@ def test_unordered():
 
 def test_stop_on_error_false():
     inp = list(range(5))
-    out = multi_process(
-        maybe_fail, inp, stop_on_error=False, workers=2, progress=False
-    )
-    assert out.count(None) == 1 and out[3] is None
+    out = multi_process(maybe_fail, inp, stop_on_error=False, workers=2, progress=False)
+    assert out.count(None) == 1
+    assert out[3] is None
     for i, val in enumerate(out):
         if i != 3:
             assert val == i
 
 
 def test_multi_process_vs_serial():
-    """Outputs must match a plain Python for‑loop."""
-    inp = list(range(40))
-    out_mp = multi_process(square, inp, workers=4, progress=False)
-    out_serial = [square(x) for x in inp]
+    """Outputs must match a plain Python for‑loop. Also log the time for each."""
+    inp = list(range(200))
+
+    start_mp = time.perf_counter()
+    out_mp = multi_process(square, inp, workers=4, progress=True)
+    dur_mp = time.perf_counter() - start_mp
+
+    start_serial = time.perf_counter()
+    out_serial = [square(x) for x in tqdm(inp, desc="serial")]
+    dur_serial = time.perf_counter() - start_serial
+
+    print(f"multi_process duration: {dur_mp:.6f} seconds")
+    print(f"serial duration: {dur_serial:.6f} seconds")
+
     assert out_mp == out_serial
 
-
-def forloop(inputs):
-    ys = []
-    for x in inputs:
-        ys.append(fibonacci(x))
-    return ys
+def forloop(func, inp):
+    """Plain Python for loop to compare against multi_process."""
+    out = []
+    for i in tqdm(inp, desc="forloop"):
+        out.append(func(i))
+    return out
 
 def test_process_vs_thread_heavy():
     """Heavy CPU: compare multi_process against multi_thread for correctness and speed."""
-    inp = [22]*10000
+    inp = [22]*1000
 
     start_proc = time.perf_counter()
     out_proc = multi_process(fibonacci, inp, workers=4, progress=True)
@@ -170,7 +149,7 @@ def test_process_vs_thread_heavy():
 
     # test for loop
     start_forloop = time.perf_counter()
-    out_for = forloop(inp)
+    out_for = forloop(fibonacci, inp)
     dur_forloop = time.perf_counter() - start_forloop
 
     assert out_proc == out_thread

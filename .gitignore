@@ -120,3 +120,5 @@ dmypy.json
 ./cachedir
 3.9,
 .copilot
+.vscode/settings.json
+.codegen
