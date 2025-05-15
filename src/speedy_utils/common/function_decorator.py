@@ -1,8 +1,8 @@
 import functools
 import time
 import traceback
-from typing import Any, Tuple, Type, Union
 from collections.abc import Callable
+from typing import Any, Tuple, Type, Union
 
 from loguru import logger
 

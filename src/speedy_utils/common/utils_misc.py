@@ -3,8 +3,8 @@
 import inspect
 import os
 import sys
-from typing import Any, List
 from collections.abc import Callable
+from typing import Any, List
 
 from IPython import get_ipython
 from pydantic import BaseModel

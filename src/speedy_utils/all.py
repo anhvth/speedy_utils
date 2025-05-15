@@ -22,13 +22,13 @@ import time
 import traceback
 import uuid
 from collections import Counter, defaultdict
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from glob import glob
 from multiprocessing import Pool
 from pathlib import Path
 from threading import Lock
 from typing import Any, Dict, Generic, List, Literal, Optional, TypeVar, Union
-from collections.abc import Callable
 
 # Third-party imports
 import numpy as np
