@@ -41,7 +41,7 @@ from .common.utils_print import (
 
 # Multi-worker processing
 from .multi_worker.process import multi_process
-from .multi_worker.thread import multi_threaad_standard, multi_thread
+from .multi_worker.thread import multi_thread
 
 # Define __all__ explicitly
 __all__ = [
@@ -79,7 +79,6 @@ __all__ = [
     # Multi-worker processing
     "multi_process",
     "multi_thread",
-    "multi_threaad_standard",
 ]
 
 # Setup default logger

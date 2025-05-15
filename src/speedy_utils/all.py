@@ -64,7 +64,6 @@ from speedy_utils import (  # Clock module; Function decorators; Cache utilities
     memoize,
     mkdir_or_exist,
     multi_process,
-    multi_threaad_standard,
     multi_thread,
     print_table,
     retry_runtime,
@@ -157,5 +156,4 @@ __all__ = [
     # Multi-worker processing
     "multi_process",
     "multi_thread",
-    "multi_threaad_standard",
 ]

@@ -3,7 +3,7 @@ import random
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from speedy_utils.multi_worker.thread import multi_threaad_standard, multi_thread
+from speedy_utils.multi_worker.thread import multi_thread_standard, multi_thread
 
 
 # ────────────────────────────────────────────────────────────
@@ -227,7 +227,7 @@ def test_multi_thread_vs_standard():
 
     # Use standard ThreadPoolExecutor
     start_std = time.time()
-    out_std = multi_threaad_standard(f, inp, workers=4)
+    out_std = multi_thread_standard(f, inp, workers=4)
     std_time = time.time() - start_std
 
     print(

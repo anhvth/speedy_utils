@@ -1,13 +1,12 @@
 """Provides thread-based parallel execution utilities."""
 
-import inspect
 import os
 import time
 import traceback
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from itertools import islice
-from typing import Any, TypeVar, cast
+from typing import Any, TypeVar
 
 from loguru import logger
 
@@ -80,7 +79,7 @@ def multi_thread(
                       ``False`` the failing task’s result becomes ``None``.
     **fixed_kwargs  – static keyword args forwarded to every ``func()`` call.
     """
-    from speedy_utils import dump_json_or_pickle, identify, load_by_ext
+    from speedy_utils import dump_json_or_pickle, load_by_ext
 
     if n_proc > 1:
         import tempfile
@@ -297,10 +296,27 @@ def multi_thread(
     return results
 
 
-def multi_threaad_standard(fn, items, workers=4):
-    """
+def multi_thread_standard(
+    fn: Callable[[Any], Any], items: Iterable[Any], workers: int = 4
+) -> list[Any]:
+    """Execute a function using standard ThreadPoolExecutor.
+
     A standard implementation of multi-threading using ThreadPoolExecutor.
     Ensures the order of results matches the input order.
+
+    Parameters
+    ----------
+    fn : Callable
+        The function to execute for each item.
+    items : Iterable
+        The items to process.
+    workers : int, optional
+        Number of worker threads, by default 4.
+
+    Returns
+    -------
+    list
+        Results in same order as input items.
     """
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [executor.submit(fn, item) for item in items]
@@ -308,4 +324,4 @@ def multi_threaad_standard(fn, items, workers=4):
     return results
 
 
-__all__ = ["multi_thread", "multi_threaad_standard"]
+__all__ = ["multi_thread", "multi_thread_standard"]
