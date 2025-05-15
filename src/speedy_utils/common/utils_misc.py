@@ -3,7 +3,9 @@
 import inspect
 import os
 import sys
-from typing import Any, Callable, List
+from typing import Any, List
+from collections.abc import Callable
+
 from IPython import get_ipython
 from pydantic import BaseModel
 
@@ -13,12 +15,12 @@ def mkdir_or_exist(dir_name: str) -> None:
     os.makedirs(dir_name, exist_ok=True)
 
 
-def flatten_list(list_of_lists: List[List[Any]]) -> List[Any]:
+def flatten_list(list_of_lists: list[list[Any]]) -> list[Any]:
     """Flatten a list of lists into a single list."""
     return [item for sublist in list_of_lists for item in sublist]
 
 
-def get_arg_names(func: Callable) -> List[str]:
+def get_arg_names(func: Callable) -> list[str]:
     """Retrieve argument names of a function."""
     return inspect.getfullargspec(func).args
 
@@ -48,6 +50,7 @@ def convert_to_builtin_python(input_data: Any) -> Any:
         return convert_to_builtin_python(data)
     else:
         raise ValueError(f"Unsupported type {type(input_data)}")
+
 
 __all__ = [
     "mkdir_or_exist",

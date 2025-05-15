@@ -1,7 +1,8 @@
 # tests/test_multi_thread.py
-from concurrent.futures import ThreadPoolExecutor
-import time
 import random
+import time
+from concurrent.futures import ThreadPoolExecutor
+
 from speedy_utils.multi_worker.thread import multi_threaad_standard, multi_thread
 
 
@@ -197,7 +198,6 @@ def test_speedy_vs_normal():
 # =====
 
 
-
 # ────────────────────────────────────────────────────────────
 # 12. Test multi_thread vs standard threading, use a heavry compute function like fibonacci
 def fibonacci(n, x):
@@ -217,7 +217,12 @@ def test_multi_thread_vs_standard():
     # Use multi_thread
     start_mt = time.time()
     print(inp)
-    out_mt = multi_thread(f, inp, workers=4, progress=False,)
+    out_mt = multi_thread(
+        f,
+        inp,
+        workers=4,
+        progress=False,
+    )
     mt_time = time.time() - start_mt
 
     # Use standard ThreadPoolExecutor

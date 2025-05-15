@@ -1,11 +1,14 @@
+"""Provides thread-based parallel execution utilities."""
+
 import inspect
 import os
 import time
 import traceback
+from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from itertools import islice
-from typing import Any, Callable, Iterable, List, Sequence
-from fastcore.foundation import defaults
+from typing import Any, TypeVar, cast
+
 from loguru import logger
 
 try:
@@ -13,30 +16,29 @@ try:
 except ImportError:  # pragma: no cover
     tqdm = None  # type: ignore[assignment]
 
-# ── choose sensible defaults ──────────────────────────────────────────
+# Sensible defaults
+DEFAULT_WORKERS = (os.cpu_count() or 4) * 2
 
-DEFAULT_WORKERS = (
-    os.cpu_count() or 4
-) * 2  # ────────────────────────────────────────────────────────────
-# helpers
-# ────────────────────────────────────────────────────────────
-# ─── helpers ─────────────────────────────────────────────────────────────
-from collections.abc import Sequence  # (typing.Sequence misses str checks)
+T = TypeVar("T")
+R = TypeVar("R")
 
 
-def _group_iter(src: Iterable[Any], size: int) -> Iterable[list[Any]]:
+def _group_iter(src: Iterable[T], size: int) -> Iterable[list[T]]:
+    """Yield successive chunks from iterable of specified size."""
     it = iter(src)
     while chunk := list(islice(it, size)):
         yield chunk
 
 
 def _short_tb() -> str:
+    """Return a shortened traceback, excluding internal frames."""
     tb = "".join(traceback.format_exc())
     # hide frames inside this helper to keep logs short
     return "\n".join(ln for ln in tb.splitlines() if "multi_thread.py" not in ln)
 
 
-def _worker(item, func, fixed_kwargs):
+def _worker(item: T, func: Callable[[T], R], fixed_kwargs: dict[str, Any]) -> R:
+    """Execute the function with an item and fixed kwargs."""
     return func(item, **fixed_kwargs)
 
 
@@ -58,7 +60,7 @@ def multi_thread(
     n_proc=0,
     store_output_pkl_file: str | None = None,
     **fixed_kwargs,
-) -> List[Any]:
+) -> list[Any]:
     """
     ThreadPool **map** that returns a *list*.
 
@@ -78,11 +80,12 @@ def multi_thread(
                       ``False`` the failing task’s result becomes ``None``.
     **fixed_kwargs  – static keyword args forwarded to every ``func()`` call.
     """
-    from speedy_utils import load_by_ext, dump_json_or_pickle, identify
+    from speedy_utils import dump_json_or_pickle, identify, load_by_ext
 
     if n_proc > 1:
-        from fastcore.all import threaded
         import tempfile
+
+        from fastcore.all import threaded
 
         # split the inputs by nproc
         inputs = list(inputs)

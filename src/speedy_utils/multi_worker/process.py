@@ -1,8 +1,12 @@
-import inspect, os, time, traceback
+import inspect
 import multiprocessing
+import os
+import time
+import traceback
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from itertools import islice
-from typing import Any, Callable, Iterable, Iterator, List, Sequence, TypeVar, cast
+from typing import Any, List, TypeVar, cast
+from collections.abc import Callable, Iterable, Iterator, Sequence
 
 T = TypeVar("T")
 
@@ -20,15 +24,18 @@ except ImportError:  # pragma: no cover
 
 # ──── internal helpers ────────────────────────────────────────────────────
 
-def _group_iter(src: Iterable[Any], size: int) -> Iterable[List[Any]]:
+
+def _group_iter(src: Iterable[Any], size: int) -> Iterable[list[Any]]:
     "Yield *size*-sized chunks from *src*."
     it = iter(src)
     while chunk := list(islice(it, size)):
         yield chunk
 
+
 def _short_tb() -> str:
     tb = "".join(traceback.format_exc())
     return "\n".join(ln for ln in tb.splitlines() if "multi_process" not in ln)
+
 
 def _safe_call(func: Callable, obj, fixed):
     try:
@@ -38,6 +45,7 @@ def _safe_call(func: Callable, obj, fixed):
         raise RuntimeError(
             f"{func_name}({obj!r}) failed: {exc}\n{_short_tb()}"
         ) from exc
+
 
 def _worker_process(
     func: Callable, item_batch: Any, fixed_kwargs: dict, batch_size: int
@@ -53,6 +61,7 @@ def _worker_process(
         return results
     return _safe_call(func, item_batch, fixed_kwargs)
 
+
 # ──── public API ──────────────────────────────────────────────────────────
 def multi_process(
     func: Callable[[Any], Any],
@@ -67,7 +76,7 @@ def multi_process(
     stop_on_error: bool = True,
     process_update_interval=10,
     **fixed_kwargs,
-) -> List[Any]:
+) -> list[Any]:
     """
     Simple multi‑processing parallel map that returns a *list*.
 
@@ -115,7 +124,7 @@ def multi_process(
         )
 
     if ordered and logical_total is not None:
-        results: List[Any] = [None] * logical_total
+        results: list[Any] = [None] * logical_total
     else:
         results = []
 

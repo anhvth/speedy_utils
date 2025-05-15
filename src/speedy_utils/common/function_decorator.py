@@ -1,14 +1,16 @@
-import time
 import functools
+import time
 import traceback
+from typing import Any, Tuple, Type, Union
+from collections.abc import Callable
+
 from loguru import logger
-from typing import Type, Tuple, Union, Callable, Any
 
 
 def retry_runtime(
     sleep_seconds: int = 5,
     max_retry: int = 12,
-    exceptions: Union[Type[Exception], Tuple[Type[Exception], ...]] = (RuntimeError,),
+    exceptions: type[Exception] | tuple[type[Exception], ...] = (RuntimeError,),
 ) -> Callable:
     """Decorator that retries the function with exponential backoff on specified runtime exceptions.
 
@@ -20,6 +22,7 @@ def retry_runtime(
     Returns:
         Callable: Decorated function
     """
+
     def decorator(func: Callable) -> Callable:
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -44,7 +47,9 @@ def retry_runtime(
                         )
                         raise
 
-                    backoff_time = sleep_seconds * (2 ** (attempt - 1))  # Exponential backoff
+                    backoff_time = sleep_seconds * (
+                        2 ** (attempt - 1)
+                    )  # Exponential backoff
                     logger.opt(depth=1).warning(
                         f"Attempt {attempt}/{max_retry} failed: {str(e)[:100]}. "
                         f"Retrying in {backoff_time} seconds."
@@ -54,6 +59,7 @@ def retry_runtime(
             return None  # This line should never be reached
 
         return wrapper
+
     return decorator
 
 

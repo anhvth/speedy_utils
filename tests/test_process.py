@@ -1,5 +1,5 @@
-import time
 import multiprocessing
+import time
 
 if hasattr(multiprocessing, "set_start_method"):
     try:
@@ -10,6 +10,7 @@ if hasattr(multiprocessing, "set_start_method"):
 from speedy_utils import multi_thread
 from speedy_utils.multi_worker.process import multi_process, tqdm
 
+
 # ────────────────────────────────────────────────────────────
 # helpers (top‑level ⇒ picklable)
 # ────────────────────────────────────────────────────────────
@@ -18,40 +19,51 @@ def _sleepy(x, delay=0.00001):
     time.sleep(delay)
     return x
 
+
 def double(x):
     return _sleepy(x * 2)
+
 
 def add_default(x, y=5):
     return _sleepy(x + y)
 
+
 def mul(a, b):
     return _sleepy(a * b)
+
 
 def dict_plus(item, y=100):
     return _sleepy(item["x"] + y)
 
+
 def add_pair(a, b):
     return _sleepy(a + b)
+
 
 def tuple_first_plus(item, y=100):
     return _sleepy(item[0] + y)
 
+
 def to_upper(name):
     return _sleepy(name.upper())
 
+
 def square(x):
     return _sleepy(x * x)
+
 
 def maybe_fail(x):
     if x == 3:
         raise ValueError("boom")
     return _sleepy(x)
 
+
 def fibonacci(n):
     """Inefficient recursive Fibonacci – intentionally CPU heavy."""
     if n <= 1:
         return n
     return fibonacci(n - 1) + fibonacci(n - 2)
+
 
 # ────────────────────────────────────────────────────────────
 # actual tests
@@ -60,19 +72,23 @@ def test_scalar_single_param():
     inp = [1, 2, 3]
     assert multi_process(double, inp, workers=2, progress=False) == [2, 4, 6]
 
+
 def test_string_scalar():
     inp = ["ab", "cd"]
     assert multi_process(to_upper, inp, progress=False) == ["AB", "CD"]
+
 
 def test_batch_ordered():
     inp = list(range(20))
     out = multi_process(square, inp, batch=4, ordered=True, workers=4, progress=False)
     assert out == [i * i for i in inp]
 
+
 def test_unordered():
     inp = list(range(32))
     out = multi_process(square, inp, ordered=False, workers=8, progress=False)
     assert sorted(out) == [i * i for i in inp]
+
 
 def test_stop_on_error_false():
     inp = list(range(5))
@@ -82,6 +98,7 @@ def test_stop_on_error_false():
     for i, val in enumerate(out):
         if i != 3:
             assert val == i
+
 
 def test_multi_process_vs_serial():
     inp = list(range(20))
@@ -98,11 +115,13 @@ def test_multi_process_vs_serial():
 
     assert out_mp == out_serial
 
+
 def forloop(func, inp):
     out = []
     for i in tqdm(inp, desc="forloop"):
         out.append(func(i))
     return out
+
 
 def test_process_vs_thread_heavy():
     inp = [18] * 10
@@ -124,6 +143,7 @@ def test_process_vs_thread_heavy():
 
     try:
         import tabulate
+
         table_string = tabulate.tabulate(
             [
                 ["multi_process", dur_proc],

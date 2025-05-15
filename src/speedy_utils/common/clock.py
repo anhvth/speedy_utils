@@ -102,7 +102,7 @@ class Clock:
 
     def tick(self):
         return self._tick()
-    
+
     def time_since_last_checkpoint(self):
         """Return the time elapsed since the last checkpoint."""
         if self.start_time is None:

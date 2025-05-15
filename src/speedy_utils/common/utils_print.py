@@ -18,7 +18,7 @@ from tabulate import tabulate
 from .utils_misc import is_notebook
 
 
-def display_pretty_table_html(data: Dict) -> None:
+def display_pretty_table_html(data: dict) -> None:
     """
     Display a pretty HTML table in Jupyter notebooks.
     """
@@ -43,11 +43,11 @@ def flatten_dict(d, parent_key="", sep="."):
 
 def fprint(
     input_data: Any,
-    key_ignore: Optional[List[str]] = None,
-    key_keep: Optional[List[str]] = None,
+    key_ignore: list[str] | None = None,
+    key_keep: list[str] | None = None,
     max_width: int = 100,
     indent: int = 2,
-    depth: Optional[int] = None,
+    depth: int | None = None,
     table_format: str = "grid",
     str_wrap_width: int = 80,
     grep=None,
@@ -105,7 +105,7 @@ def fprint(
     if grep is not None and isinstance(input_data, dict):
         input_data = {k: v for k, v in input_data.items() if grep in str(k)}
 
-    def remove_keys(d: Dict, keys: List[str]) -> Dict:
+    def remove_keys(d: dict, keys: list[str]) -> dict:
         """Remove specified keys from a dictionary."""
         for key in keys:
             parts = key.split(".")
@@ -115,7 +115,7 @@ def fprint(
             sub_dict.pop(parts[-1], None)
         return d
 
-    def keep_keys(d: Dict, keys: List[str]) -> Dict:
+    def keep_keys(d: dict, keys: list[str]) -> dict:
         """Keep only specified keys in a dictionary."""
         result = {}
         for key in keys:

@@ -76,7 +76,7 @@ def setup_logger(
         "C": "CRITICAL",
     }
     level_str = level_mapping.get(level.upper(), level.upper())
-    
+
     # Set the log level
     logger.level(level_str)
 
@@ -166,7 +166,7 @@ def log(
     *,
     level: Literal["info", "warning", "error", "critical", "success"] = "info",
     once: bool = False,
-    interval: Optional[float] = None,
+    interval: float | None = None,
 ) -> None:
     """
     Log a message using loguru with optional `once` and `interval` control.
@@ -178,11 +178,11 @@ def log(
         interval (float): If set, log only once every `interval` seconds per call site.
     """
     identifier = _get_call_site_id(depth=2)
-    
+
     # Handle once parameter - check before logging
     if once and identifier in _logged_once_set:
         return
-    
+
     # Handle interval parameter - check before logging
     if interval is not None:
         now = time.time()
@@ -194,14 +194,14 @@ def log(
             except TypeError:
                 # Handle case in tests where last might be a mock
                 pass
-    
+
     # Log the message
     fn = getattr(logger.opt(depth=1), level)
     fn(msg)
-    
+
     # Update rate-limiting caches after successful logging
     if once:
         _logged_once_set.add(identifier)
-    
+
     if interval is not None:
         _last_log_intervals[identifier] = time.time()

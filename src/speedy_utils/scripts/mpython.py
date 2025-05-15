@@ -4,7 +4,6 @@ import itertools
 import multiprocessing  # Import multiprocessing module
 import os
 import shlex  # To properly escape command line arguments
-
 import shutil
 import subprocess
 
@@ -16,7 +15,7 @@ def assert_script(python_path):
     if "MP_ID" not in code_str or "MP_TOTAL" not in code_str:
         example_code = (
             'import os; MP_TOTAL = int(os.environ.get("MP_TOTAL"));MP_ID = int(os.environ.get("MP_ID"))\n'
-            'inputs = list(inputs[MP_ID::MP_TOTAL])'
+            "inputs = list(inputs[MP_ID::MP_TOTAL])"
         )
         # ANSI escape codes for coloring
         YELLOW = "\033[93m"
@@ -26,6 +25,7 @@ def assert_script(python_path):
             f"Example:\n{YELLOW}{example_code}{RESET}"
         )
         raise Exception(raise_msg)
+
 
 def run_in_tmux(commands_to_run, tmux_name, num_windows):
     with open("/tmp/start_multirun_tmux.sh", "w") as script_file:
@@ -75,9 +75,9 @@ def main():
 
     cmd_str = None
     if args.cmd[0] == "--":
-        cmd_str = " ".join(shlex.quote(arg) for arg in args.cmd[1:])
+        cmd_str = shlex.join(args.cmd[1:])
     else:
-        cmd_str = " ".join(shlex.quote(arg) for arg in args.cmd)
+        cmd_str = shlex.join(args.cmd)
 
     gpus = args.gpus.split(",")
     gpus = [gpu for gpu in gpus if not gpu in args.ignore_gpus.split(",")]
@@ -89,9 +89,11 @@ def main():
         gpu = gpus[i % num_gpus]
         cpu_start = (i * cpu_per_process) % args.total_cpu
         cpu_end = ((i + 1) * cpu_per_process - 1) % args.total_cpu
-        ENV = f'CUDA_VISIBLE_DEVICES={gpu} MP_ID={i} MP_TOTAL={args.total_fold}'
+        ENV = f"CUDA_VISIBLE_DEVICES={gpu} MP_ID={i} MP_TOTAL={args.total_fold}"
         if taskset_path:
-            fold_cmd = f"{ENV} {taskset_path} -c {cpu_start}-{cpu_end}  python {cmd_str}"
+            fold_cmd = (
+                f"{ENV} {taskset_path} -c {cpu_start}-{cpu_end}  python {cmd_str}"
+            )
         else:
             fold_cmd = f"{ENV} python {cmd_str}"
 

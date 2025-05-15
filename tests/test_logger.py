@@ -1,11 +1,17 @@
 import re
 import time
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from freezegun import freeze_time
 
-from speedy_utils.common.logger import setup_logger, log, _logged_once_set, _last_log_intervals, _last_log_times
+from speedy_utils.common.logger import (
+    _last_log_intervals,
+    _last_log_times,
+    _logged_once_set,
+    log,
+    setup_logger,
+)
 
 
 @pytest.fixture
@@ -25,11 +31,11 @@ class TestSetupLogger:
     def test_setup_logger_with_default_values(self, mock_logger):
         """Test setup_logger with default parameters."""
         setup_logger()
-        
+
         # Verify logger was configured correctly
         mock_logger.remove.assert_called_once()
         mock_logger.add.assert_called_once()
-        
+
         # Check that INFO level was set
         add_call_args = mock_logger.add.call_args[1]
         assert "filter" in add_call_args
@@ -59,23 +65,28 @@ class TestSetupLogger:
         """Test that the log filter correctly rate-limits messages."""
         min_interval = 2.0
         setup_logger(min_interval=min_interval)
-        
+
         # Extract the filter function
         filter_fn = mock_logger.add.call_args[1]["filter"]
-        
+
         # Create mock record with file and line info
-        record1 = {"file": "test.py", "line": 10, "level": MagicMock(), "function": "test_func"}
+        record1 = {
+            "file": "test.py",
+            "line": 10,
+            "level": MagicMock(),
+            "function": "test_func",
+        }
         record1["level"].no = 30  # INFO level
-        
+
         with patch("speedy_utils.common.logger.logger.level") as mock_level:
             mock_level.return_value.no = 20  # DEBUG level threshold
-            
+
             # First call should pass
             assert filter_fn(record1) is True
-            
+
             # Second call within min_interval should be filtered out
             assert filter_fn(record1) is False
-            
+
             # Advance time beyond min_interval
             with patch("time.time") as mock_time:
                 mock_time.return_value = time.time() + min_interval + 0.1
@@ -87,30 +98,30 @@ class TestSetupLogger:
         """Test that the log filter correctly applies grep patterns."""
         # Enable only logs from 'foo.py'
         setup_logger(enable_grep="foo.py")
-        
+
         # Extract the filter function
         filter_fn = mock_logger.add.call_args[1]["filter"]
-        
+
         with patch("speedy_utils.common.logger.logger.level") as mock_level:
             mock_level.return_value.no = 20  # DEBUG level threshold
-            
+
             # Create records for different files
             record_foo = {
-                "file": "foo.py", 
-                "line": 10, 
-                "level": MagicMock(), 
-                "function": "test_func"
+                "file": "foo.py",
+                "line": 10,
+                "level": MagicMock(),
+                "function": "test_func",
             }
             record_foo["level"].no = 30  # INFO level
-            
+
             record_bar = {
-                "file": "bar.py", 
-                "line": 10, 
-                "level": MagicMock(), 
-                "function": "test_func"
+                "file": "bar.py",
+                "line": 10,
+                "level": MagicMock(),
+                "function": "test_func",
             }
             record_bar["level"].no = 30  # INFO level
-            
+
             # foo.py should pass the filter
             assert filter_fn(record_foo) is True
             # bar.py should be filtered out
@@ -121,30 +132,30 @@ class TestSetupLogger:
         """Test that the log filter correctly applies disable_grep patterns."""
         # Disable logs from 'secret.py'
         setup_logger(disable_grep="secret.py")
-        
+
         # Extract the filter function
         filter_fn = mock_logger.add.call_args[1]["filter"]
-        
+
         with patch("speedy_utils.common.logger.logger.level") as mock_level:
             mock_level.return_value.no = 20  # DEBUG level threshold
-            
+
             # Create records for different files
             record_normal = {
-                "file": "normal.py", 
-                "line": 10, 
-                "level": MagicMock(), 
-                "function": "test_func"
+                "file": "normal.py",
+                "line": 10,
+                "level": MagicMock(),
+                "function": "test_func",
             }
             record_normal["level"].no = 30  # INFO level
-            
+
             record_secret = {
-                "file": "secret.py", 
-                "line": 10, 
-                "level": MagicMock(), 
-                "function": "test_func"
+                "file": "secret.py",
+                "line": 10,
+                "level": MagicMock(),
+                "function": "test_func",
             }
             record_secret["level"].no = 30  # INFO level
-            
+
             # normal.py should pass the filter
             assert filter_fn(record_normal) is True
             # secret.py should be filtered out
@@ -157,9 +168,9 @@ class TestLogFunction:
         """Test that the log function correctly delegates to loguru."""
         mock_info = MagicMock()
         mock_opt.return_value.info = mock_info
-        
+
         log("Test message")
-        
+
         mock_opt.assert_called_once_with(depth=1)
         mock_info.assert_called_once_with("Test message")
 
@@ -169,9 +180,9 @@ class TestLogFunction:
         for level in ["info", "warning", "error", "critical", "success"]:
             mock_level_fn = MagicMock()
             setattr(mock_opt.return_value, level, mock_level_fn)
-            
+
             log("Test message", level=level)
-            
+
             mock_level_fn.assert_called_once_with("Test message")
             mock_level_fn.reset_mock()
 
@@ -181,18 +192,18 @@ class TestLogFunction:
         """Test that the once parameter prevents duplicate logs."""
         # Return a consistent call site ID for testing
         mock_get_id.return_value = "test_file.py:100"
-        
+
         mock_info = MagicMock()
         mock_opt.return_value.info = mock_info
-        
+
         # First call should log
         log("Test message", once=True)
         assert mock_info.call_count == 1
-        
+
         # Second call should be suppressed
         log("Test message again", once=True)
         assert mock_info.call_count == 1
-        
+
         # Different call site should log
         mock_get_id.return_value = "different_file.py:20"
         log("Different call site", once=True)
@@ -204,19 +215,19 @@ class TestLogFunction:
         """Test that the interval parameter rate-limits logs."""
         # Return a consistent call site ID for testing
         mock_get_id.return_value = "test_file.py:100"
-        
+
         mock_info = MagicMock()
         mock_opt.return_value.info = mock_info
-        
+
         # First call should log
         with freeze_time("2023-01-01 12:00:00"):
             log("Test message", interval=5.0)
             assert mock_info.call_count == 1
-            
+
             # Call within interval should be suppressed
             log("Too soon", interval=5.0)
             assert mock_info.call_count == 1
-        
+
         # Call after interval should log
         with freeze_time("2023-01-01 12:00:06"):
             log("After interval", interval=5.0)
@@ -228,19 +239,19 @@ class TestRateLimitCache:
         """Test that the _RateLimitCache correctly evicts oldest items."""
         # Set a small cache size for testing
         setup_logger(max_cache_entries=3)
-        
+
         # Fill the cache
         _last_log_times["test1.py:10"] = 100
         _last_log_times["test2.py:20"] = 200
         _last_log_times["test3.py:30"] = 300
-        
+
         # Cache should have 3 items
         assert len(_last_log_times) == 3
         assert "test1.py:10" in _last_log_times
-        
+
         # Add one more, the oldest should be evicted
         _last_log_times["test4.py:40"] = 400
-        
+
         assert len(_last_log_times) == 3
         assert "test1.py:10" not in _last_log_times
         assert "test4.py:40" in _last_log_times
@@ -249,18 +260,18 @@ class TestRateLimitCache:
         """Test that accessing an existing item moves it to the end of eviction order."""
         # Set a small cache size for testing
         setup_logger(max_cache_entries=3)
-        
+
         # Fill the cache
         _last_log_times["test1.py:10"] = 100
         _last_log_times["test2.py:20"] = 200
         _last_log_times["test3.py:30"] = 300
-        
+
         # Access the oldest item to refresh it
         _last_log_times["test1.py:10"] = 400
-        
+
         # Add one more, test2 should be evicted now instead of test1
         _last_log_times["test4.py:40"] = 500
-        
+
         assert len(_last_log_times) == 3
         assert "test1.py:10" in _last_log_times
         assert "test2.py:20" not in _last_log_times

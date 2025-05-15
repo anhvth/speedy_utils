@@ -6,11 +6,12 @@ import os.path as osp
 import pickle
 import uuid
 from typing import Any, List, Literal
-from loguru import logger
+
 import cachetools
 import pandas as pd
-from pydantic import BaseModel
 import xxhash
+from loguru import logger
+from pydantic import BaseModel
 
 from .utils_io import dump_json_or_pickle, load_json_or_pickle
 from .utils_misc import mkdir_or_exist
@@ -135,7 +136,9 @@ def _disk_memoize(func, keys, cache_dir, ignore_self, verbose):
                     dump_json_or_pickle(result, cache_path)
             return result
         except Exception as e:
-            logger.opt(depth=1).warning(f"Failed to cache {func.__name__}: {e}, continue to recompute without cache")
+            logger.opt(depth=1).warning(
+                f"Failed to cache {func.__name__}: {e}, continue to recompute without cache"
+            )
             return func(*args, **kwargs)
 
     return wrapper
@@ -258,4 +261,4 @@ def memoize(
     return decorator(_func)
 
 
-__all__ = ["memoize","identify","identify_uuid"]
+__all__ = ["memoize", "identify", "identify_uuid"]

@@ -1,7 +1,9 @@
 import functools
 import inspect
 from collections.abc import Iterable
-from typing import Any, Callable, Dict, List, Union
+from typing import Any, Dict, List, Union
+from collections.abc import Callable
+
 import pandas as pd
 
 # Example object
@@ -18,8 +20,8 @@ def _get_original_func(func):
 
 
 def handle_inputs(
-    f: Callable, inputs: Union[List[Dict[str, Any]], List[Any], pd.DataFrame]
-) -> List[Dict[str, Any]]:
+    f: Callable, inputs: list[dict[str, Any]] | list[Any] | pd.DataFrame
+) -> list[dict[str, Any]]:
     # 1. Unwrap in case f is decorated (e.g., by @memoize).
     real_func = _get_original_func(f)
 

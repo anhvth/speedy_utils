@@ -8,11 +8,13 @@ import time
 from glob import glob
 from pathlib import Path
 from typing import Any, Dict, List, Union
+
 from json_repair import loads as jloads
+
 from .utils_misc import mkdir_or_exist
 
 
-def dump_jsonl(list_dictionaries: List[Dict], file_name: str = "output.jsonl") -> None:
+def dump_jsonl(list_dictionaries: list[dict], file_name: str = "output.jsonl") -> None:
     """
     Dumps a list of dictionaries to a file in JSON Lines format.
     """
@@ -55,7 +57,7 @@ def load_json_or_pickle(fname: str, counter=0) -> Any:
     Load an object from a file, supporting both JSON and pickle formats.
     """
     if fname.endswith(".json") or fname.endswith(".jsonl"):
-        with open(fname, "r", encoding="utf-8") as f:
+        with open(fname, encoding="utf-8") as f:
             return json.load(f)
     else:
         try:
@@ -74,11 +76,11 @@ def load_json_or_pickle(fname: str, counter=0) -> Any:
 
 
 def load_jsonl(path):
-    lines = open(path, "r", encoding="utf-8").read().splitlines()
+    lines = open(path, encoding="utf-8").read().splitlines()
     return [json.loads(line) for line in lines]
 
 
-def load_by_ext(fname: Union[str, List[str]], do_memoize: bool = False) -> Any:
+def load_by_ext(fname: str | list[str], do_memoize: bool = False) -> Any:
     """
     Load data based on file extension.
     """
@@ -86,9 +88,9 @@ def load_by_ext(fname: Union[str, List[str]], do_memoize: bool = False) -> Any:
         fname = str(fname)
     from speedy_utils import multi_process
 
-    from .utils_cache import (
+    from .utils_cache import (  # Adjust import based on your actual multi_worker module
         memoize,
-    )  # Adjust import based on your actual multi_worker module
+    )
 
     try:
         if isinstance(fname, str) and "*" in fname:
@@ -104,8 +106,8 @@ def load_by_ext(fname: Union[str, List[str]], do_memoize: bool = False) -> Any:
 
             return pd.read_csv(path, engine="pyarrow", **pd_kwargs)
 
-        def load_txt(path: str) -> List[str]:
-            with open(path, "r", encoding="utf-8") as f:
+        def load_txt(path: str) -> list[str]:
+            with open(path, encoding="utf-8") as f:
                 return f.read().splitlines()
 
         def load_default(path: str) -> Any:
@@ -144,6 +146,7 @@ def load_by_ext(fname: Union[str, List[str]], do_memoize: bool = False) -> Any:
 def jdumps(obj, ensure_ascii=False, indent=2, **kwargs):
     return json.dumps(obj, ensure_ascii=ensure_ascii, indent=indent, **kwargs)
 
+
 __all__ = [
     "dump_json_or_pickle",
     "dump_jsonl",
@@ -153,4 +156,3 @@ __all__ = [
     "jdumps",
     "jloads",
 ]
-
