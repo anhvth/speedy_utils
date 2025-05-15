@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "speedy-utils"
-version = "0.1.27"
+version = "0.1.28"
 description = "Fast and easy-to-use package for data science"
 authors = ["AnhVTH <anhvth.226@gmail.com>"]
 readme = "README.md"
