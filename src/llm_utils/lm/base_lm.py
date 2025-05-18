@@ -28,6 +28,7 @@ from openai.types.chat import (
 )
 from openai.types.chat.parsed_chat_completion import ParsedChatCompletion
 from pydantic import BaseModel
+import warnings
 
 # --------------------------------------------------------------------------- #
 # type helpers
@@ -98,7 +99,6 @@ class LM:
     # single implementation
     def __call__(
         self,
-        *,
         prompt: Optional[str] = None,
         messages: Optional[RawMsgs] = None,
         response_format: Union[type[str], Type[BaseModel]] = str,
@@ -142,7 +142,6 @@ class LM:
     def _call_raw(
         self,
         messages: Sequence[ChatCompletionMessageParam],
-        *,
         response_format: Union[type[str], Type[BaseModel]],
         use_cache: bool,
         **kw: Any,
@@ -156,11 +155,13 @@ class LM:
         try:
             # structured mode
             if response_format is not str and issubclass(response_format, BaseModel):
-                rsp: ParsedChatCompletion[BaseModel] = self.client.beta.chat.completions.parse(
-                    model=self.model,
-                    messages=list(messages),
-                    response_format=response_format,  # type: ignore[arg-type]
-                    **kw,
+                rsp: ParsedChatCompletion[BaseModel] = (
+                    self.client.beta.chat.completions.parse(
+                        model=self.model,
+                        messages=list(messages),
+                        response_format=response_format,  # type: ignore[arg-type]
+                        **kw,
+                    )
                 )
                 result: Any = rsp.choices[0].message.parsed  # already a model
             # plain-text mode
@@ -276,3 +277,18 @@ class LM:
                 return json.load(fh)
         except Exception:  # pragma: no cover
             return None
+
+
+class OAI_LM(LM):
+    """
+    OpenAI wrapper for the `LM` class.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        # deprecated
+        warnings.warn(
+            "OAI_LM is deprecated and will be removed in a future release. Use LM instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
