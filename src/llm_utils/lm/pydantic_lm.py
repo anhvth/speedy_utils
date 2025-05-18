@@ -1,4 +1,5 @@
 import random
+import time
 from typing import Any, List, Optional, Type, Union, cast, TypeVar, Generic
 
 from pydantic import BaseModel
@@ -6,29 +7,28 @@ from pydantic import BaseModel
 from speedy_utils.common.logger import logger
 from speedy_utils.common.utils_cache import identify_uuid
 
-from .base_lm import OAI_LM
+from .base_lm import LM
 
 T = TypeVar("T", bound=BaseModel)
 
 
-class PydanticLM(OAI_LM):
+class PydanticLM(LM):
     """
     Language model that returns outputs as Pydantic models.
     """
 
     def _generate_cache_key(
         self,
-        prompt: Optional[str],
-        messages: Optional[List[Any]],
+        messages: List[Any],
         response_format: Optional[Type[BaseModel]],
         kwargs: dict,
     ) -> str:
         """
         Generate a cache key based on input parameters.
         """
-        cache_key_base = self._generate_cache_key_base(prompt, messages, kwargs)
+        cache_key_base = self._generate_cache_key_base(messages, kwargs)
         cache_key_base.insert(
-            2, (response_format.model_json_schema() if response_format else None)
+            1, (response_format.model_json_schema() if response_format else None)
         )
         return identify_uuid(str(cache_key_base))
 
@@ -73,8 +73,7 @@ class PydanticLM(OAI_LM):
     def _check_cache(
         self,
         effective_cache: bool,
-        prompt: Optional[str],
-        messages: Optional[List[Any]],
+        messages: List[Any],
         response_format: Optional[Type[BaseModel]],
         effective_kwargs: dict,
     ):
@@ -82,9 +81,7 @@ class PydanticLM(OAI_LM):
         if not effective_cache:
             return None, None
 
-        cache_id = self._generate_cache_key(
-            prompt, messages, response_format, effective_kwargs
-        )
+        cache_id = self._generate_cache_key(messages, response_format, effective_kwargs)
         cached_result = self.load_cache(cache_id)
         parsed_cache = self._parse_cached_result(cached_result, response_format)
 
@@ -92,32 +89,57 @@ class PydanticLM(OAI_LM):
 
     def _call_llm(
         self,
-        dspy_main_input: Union[str, List[Any]],
-        response_format: Optional[Type[BaseModel]],
+        dspy_main_input: List[Any],
+        response_format: Type[BaseModel],
         current_port: Optional[int],
         use_loadbalance: Optional[bool],
         **kwargs,
     ):
-        """Call the LLM with response format support."""
-        kwargs_with_format = kwargs.copy()
-        if response_format:
-            kwargs_with_format["response_format"] = response_format
+        """Call the LLM with response format support using OpenAI's parse method."""
+        retry_count = 0
+        max_retries = self.num_retries
 
-        return super()._call_llm(
-            dspy_main_input, current_port, use_loadbalance, **kwargs_with_format
-        )
+        while retry_count <= max_retries:
+            try:
+                # Use messages directly
+                messages = dspy_main_input
+
+                # Use OpenAI's parse method for structured output
+                response = self.openai_client.beta.chat.completions.parse(
+                    model=self.model,
+                    messages=messages,
+                    response_format=response_format,
+                    **kwargs,
+                )
+
+                # Update port usage stats if needed
+                if current_port and use_loadbalance is True:
+                    self._update_port_use(current_port, -1)
+
+                return response.choices[0].message.parsed
+
+            except Exception as e:
+                retry_count += 1
+                if retry_count <= max_retries:
+                    backoff_time = 2**retry_count  # Exponential backoff
+                    logger.warning(
+                        f"API call failed: {e}. Retrying in {backoff_time}s..."
+                    )
+                    time.sleep(backoff_time)
+                else:
+                    logger.error(f"API call failed after {max_retries} retries: {e}")
+                    raise
 
     def _parse_llm_output(
         self, llm_output: Any, response_format: Optional[Type[BaseModel]]
     ) -> BaseModel:
         """Parse the LLM output into the correct format."""
-        if isinstance(llm_output, dict):
-            import json
-
-            llm_output = json.dumps(llm_output)
-
         if isinstance(llm_output, BaseModel):
             return llm_output
+        elif isinstance(llm_output, dict):
+            if not response_format:
+                raise ValueError("response_format required to parse dict output.")
+            return response_format.model_validate(llm_output)
         elif isinstance(llm_output, str):
             if not response_format:
                 raise ValueError("response_format required to parse string output.")
@@ -138,11 +160,10 @@ class PydanticLM(OAI_LM):
                 effective_cache, cache_id, result.model_dump_json()
             )
 
-    def __call__(
+    def forward_messages(
         self,
         response_format: Type[T],
-        prompt: Optional[str] = None,
-        messages: Optional[List[Any]] = None,
+        messages: List[Any],
         cache: Optional[bool] = None,
         port: Optional[int] = None,
         use_loadbalance: Optional[bool] = None,
@@ -152,18 +173,18 @@ class PydanticLM(OAI_LM):
         # 1. Prepare inputs
         effective_kwargs, effective_cache, current_port, dspy_main_input = (
             self._prepare_call_inputs(
-                prompt, messages, max_tokens, port, use_loadbalance, cache, **kwargs
+                messages, max_tokens, port, use_loadbalance, cache, **kwargs
             )
         )
 
         # 2. Check cache
         cache_id, cached_result = self._check_cache(
-            effective_cache, prompt, messages, response_format, effective_kwargs
+            effective_cache, messages, response_format, effective_kwargs
         )
         if cached_result:
             return cast(T, cached_result)
 
-        # 3. Call LLM
+        # 3. Call LLM using OpenAI's parse method
         llm_output = self._call_llm(
             dspy_main_input,
             response_format,

@@ -12,7 +12,8 @@ import fcntl
 
 T = Type[BaseModel]
 
-class OAI_LM:
+
+class LM:
     def __init__(
         self,
         model: Optional[str] = None,
@@ -22,22 +23,24 @@ class OAI_LM:
         cache: bool = True,
         callbacks: Optional[Any] = None,
         num_retries: int = 3,
-        provider=None,
-        finetuning_model: Optional[str] = None,
-        launch_kwargs: Optional[dict[str, Any]] = None,
         host: str = "localhost",
         port: Optional[int] = None,
         ports: Optional[List[int]] = None,
         api_key: Optional[str] = None,
         **kwargs,
     ):
-        import dspy
+        from openai import OpenAI
+
         self.ports = ports
         self.host = host
         self.api_key = api_key or os.getenv("OPENAI_API_KEY", "abc")
         resolved_base_url_from_kwarg = kwargs.get("base_url")
-        if resolved_base_url_from_kwarg is not None and not isinstance(resolved_base_url_from_kwarg, str):
-            logger.warning(f"base_url in kwargs was not a string ({type(resolved_base_url_from_kwarg)}), ignoring.")
+        if resolved_base_url_from_kwarg is not None and not isinstance(
+            resolved_base_url_from_kwarg, str
+        ):
+            logger.warning(
+                f"base_url in kwargs was not a string ({type(resolved_base_url_from_kwarg)}), ignoring."
+            )
             resolved_base_url_from_kwarg = None
         resolved_base_url: Optional[str] = resolved_base_url_from_kwarg
         if resolved_base_url is None:
@@ -47,16 +50,19 @@ class OAI_LM:
             if selected_port is not None:
                 resolved_base_url = f"http://{host}:{selected_port}/v1"
         self.base_url = resolved_base_url
+
         if model is None:
             if self.base_url:
                 try:
                     model_list = self.list_models()
                     if model_list:
                         model_name_from_list = model_list[0]
-                        model = f"openai/{model_name_from_list}"
+                        model = model_name_from_list
                         logger.info(f"Using default model: {model}")
                     else:
-                        logger.warning(f"No models found at {self.base_url}. Please specify a model.")
+                        logger.warning(
+                            f"No models found at {self.base_url}. Please specify a model."
+                        )
                 except Exception as e:
                     example_cmd = (
                         "LM.start_server('unsloth/gemma-3-1b-it')\n"
@@ -68,35 +74,30 @@ class OAI_LM:
                         f"Example to start a server:\n{example_cmd}"
                     )
             else:
-                logger.warning("base_url not configured, cannot fetch default model. Please specify a model.")
-        assert model is not None, "Model name must be provided or discoverable via list_models"
-        if not model.startswith("openai/"):
-            model = f"openai/{model}"
-        dspy_lm_kwargs = kwargs.copy()
-        dspy_lm_kwargs["api_key"] = self.api_key
-        if self.base_url and "base_url" not in dspy_lm_kwargs:
-            dspy_lm_kwargs["base_url"] = self.base_url
-        elif self.base_url and "base_url" in dspy_lm_kwargs and dspy_lm_kwargs["base_url"] != self.base_url:
-            self.base_url = dspy_lm_kwargs["base_url"]
-        self._dspy_lm = dspy.LM(
-            model=model,
-            model_type=model_type,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            callbacks=callbacks,
-            num_retries=num_retries,
-            provider=provider,
-            finetuning_model=finetuning_model,
-            launch_kwargs=launch_kwargs,
-            **dspy_lm_kwargs,
-        )
-        self.kwargs = self._dspy_lm.kwargs
-        self.model = self._dspy_lm.model
-        self.base_url = self.kwargs.get("base_url")
-        self.api_key = self.kwargs.get("api_key")
-        self.do_cache = cache
+                logger.warning(
+                    "base_url not configured, cannot fetch default model. Please specify a model."
+                )
+        assert (
+            model is not None
+        ), "Model name must be provided or discoverable via list_models"
 
-    def dump_cache(self, id: str, result: Union[str, BaseModel, List[Union[str, BaseModel]]]):
+        # Remove 'openai/' prefix if present
+        if model.startswith("openai/"):
+            model = model[7:]
+
+        self.kwargs = {"temperature": temperature, "max_tokens": max_tokens, **kwargs}
+        self.model = model
+        self.model_type = model_type
+        self.num_retries = num_retries
+        self.do_cache = cache
+        self.callbacks = callbacks
+
+        # Initialize OpenAI client
+        self.openai_client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+
+    def dump_cache(
+        self, id: str, result: Union[str, BaseModel, List[Union[str, BaseModel]]]
+    ):
         try:
             cache_file = f"~/.cache/oai_lm/{self.model}/{id}.pkl"
             cache_file = os.path.expanduser(cache_file)
@@ -104,7 +105,9 @@ class OAI_LM:
         except Exception as e:
             logger.warning(f"Cache dump failed: {e}")
 
-    def load_cache(self, id: str) -> Optional[Union[str, BaseModel, List[Union[str, BaseModel]]]]:
+    def load_cache(
+        self, id: str
+    ) -> Optional[Union[str, BaseModel, List[Union[str, BaseModel]]]]:
         try:
             cache_file = f"~/.cache/oai_lm/{self.model}/{id}.pkl"
             cache_file = os.path.expanduser(cache_file)
@@ -116,18 +119,27 @@ class OAI_LM:
             return None
 
     def list_models(self) -> List[str]:
-        import openai
+        from openai import OpenAI
+
         if not self.base_url:
             raise ValueError("Cannot list models: base_url is not configured.")
         if not self.api_key:
-            logger.warning("API key not available for listing models. Using default 'abc'.")
+            logger.warning(
+                "API key not available for listing models. Using default 'abc'."
+            )
         api_key_str = str(self.api_key) if self.api_key is not None else "abc"
         base_url_str = str(self.base_url) if self.base_url is not None else None
         if isinstance(self.base_url, float):
-            raise TypeError(f"base_url must be a string or None, got float: {self.base_url}")
-        client = openai.OpenAI(base_url=base_url_str, api_key=api_key_str)
-        page = client.models.list()
-        return [d.id for d in page.data]
+            raise TypeError(
+                f"base_url must be a string or None, got float: {self.base_url}"
+            )
+        client = OpenAI(base_url=base_url_str, api_key=api_key_str)
+        try:
+            page = client.models.list()
+            return [d.id for d in page.data]
+        except Exception as e:
+            logger.error(f"Error listing models: {e}")
+            return []
 
     def get_least_used_port(self) -> int:
         if self.ports is None:
@@ -155,7 +167,9 @@ class OAI_LM:
                     port_use[port] = counter[0]
                 if not port_use:
                     if ports:
-                        raise ValueError("Port usage data is empty, cannot pick a port.")
+                        raise ValueError(
+                            "Port usage data is empty, cannot pick a port."
+                        )
                     else:
                         raise ValueError("No ports provided to pick from.")
                 lsp = min(port_use, key=lambda k: port_use[k])
@@ -192,14 +206,13 @@ class OAI_LM:
 
     def _prepare_call_inputs(
         self,
-        prompt: Optional[str],
-        messages: Optional[List[Any]],
+        messages: List[Any],
         max_tokens: Optional[int],
         port: Optional[int],
         use_loadbalance: Optional[bool],
         cache: Optional[bool],
-        **kwargs
-    ) -> Tuple[dict, bool, Optional[int], Union[str, List[Any]]]:
+        **kwargs,
+    ) -> Tuple[dict, bool, Optional[int], List[Any]]:
         """Prepare inputs for the LLM call."""
         # Prepare kwargs
         effective_kwargs = {**self.kwargs, **kwargs}
@@ -218,55 +231,58 @@ class OAI_LM:
                 else random.choice(self.ports)
             )
         if current_port:
-            effective_kwargs["base_url"] = f"http://{self.host}:{current_port}/v1"
+            base_url = f"http://{self.host}:{current_port}/v1"
+            effective_kwargs["base_url"] = base_url
+            # Update client with new base_url
+            from openai import OpenAI
 
-        # Prepare main input
-        dspy_main_input: Union[str, List[Any]]
-        if messages is not None:
-            dspy_main_input = messages
-        elif prompt is not None:
-            dspy_main_input = prompt
-        else:
-            raise ValueError("Either 'prompt' or 'messages' must be provided.")
+            self.openai_client = OpenAI(api_key=self.api_key, base_url=base_url)
 
-        return effective_kwargs, effective_cache, current_port, dspy_main_input
+        return effective_kwargs, effective_cache, current_port, messages
 
     def _call_llm(
         self,
-        dspy_main_input: Union[str, List[Any]],
+        dspy_main_input: List[Any],
         current_port: Optional[int],
         use_loadbalance: Optional[bool],
-        **kwargs
+        **kwargs,
     ) -> Any:
-        """Call the LLM and get raw output."""
-        llm_outputs_list = self._dspy_lm(
-            dspy_main_input,
-            **kwargs,
-        )
-        if not llm_outputs_list:
-            raise ValueError("LLM call returned an empty list.")
+        """Call the OpenAI API directly and get raw output."""
+        retry_count = 0
+        max_retries = self.num_retries
 
-        llm_output = (
-            llm_outputs_list[0]
-            if isinstance(llm_outputs_list, list)
-            else llm_outputs_list
-        )
+        while retry_count <= max_retries:
+            try:
+                # Handle message list
+                response = self.openai_client.chat.completions.create(
+                    model=self.model, messages=dspy_main_input, **kwargs
+                )
 
-        # Update port usage stats if needed
-        if current_port and use_loadbalance is True:
-            self._update_port_use(current_port, -1)
+                # Update port usage stats if needed
+                if current_port and use_loadbalance is True:
+                    self._update_port_use(current_port, -1)
 
-        return llm_output
+                return response.choices[0].message.content
+
+            except Exception as e:
+                retry_count += 1
+                if retry_count <= max_retries:
+                    backoff_time = 2**retry_count  # Exponential backoff
+                    logger.warning(
+                        f"API call failed: {e}. Retrying in {backoff_time}s..."
+                    )
+                    time.sleep(backoff_time)
+                else:
+                    logger.error(f"API call failed after {max_retries} retries: {e}")
+                    raise
 
     def _generate_cache_key_base(
         self,
-        prompt: Optional[str],
-        messages: Optional[List[Any]],
+        messages: List[Any],
         effective_kwargs: dict,
     ) -> List[Any]:
         """Base method to generate cache key components."""
         return [
-            prompt,
             messages,
             effective_kwargs.get("temperature"),
             effective_kwargs.get("max_tokens"),
@@ -279,4 +295,3 @@ class OAI_LM:
         """Base method to store result in cache if caching is enabled."""
         if effective_cache and id_for_cache:
             self.dump_cache(id_for_cache, result)
-

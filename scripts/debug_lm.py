@@ -10,7 +10,9 @@ class Output(BaseModel):
 
 
 lm_pydantic = PydanticLM("gpt-4.1-nano", cache=False)
-output = lm_pydantic(prompt="Hello world", response_format=Output)
+output = lm_pydantic(
+    messages=[{"role": "user", "content": "Hello world"}], response_format=Output
+)
 
 lm_text = TextLM("gpt-4.1-nano", cache=False)
-output_text = lm_text(prompt="Hello world")
+output_text = lm_text(messages=[{"role": "user", "content": "Hello world"}])
