@@ -1,7 +1,18 @@
 import os
 import random
 import time
-from typing import Any, List, Literal, Optional, Type, Union, Dict, overload, Tuple
+from typing import (
+    Any,
+    List,
+    Literal,
+    Optional,
+    Type,
+    TypeVar,
+    Union,
+    Dict,
+    overload,
+    Tuple,
+)
 from pydantic import BaseModel
 from speedy_utils import dump_json_or_pickle, identify_uuid, load_json_or_pickle
 from loguru import logger
@@ -10,10 +21,9 @@ import numpy as np
 import tempfile
 import fcntl
 
-T = Type[BaseModel]
-
 
 class LM:
+
     def __init__(
         self,
         model: Optional[str] = None,
@@ -27,6 +37,7 @@ class LM:
         port: Optional[int] = None,
         ports: Optional[List[int]] = None,
         api_key: Optional[str] = None,
+        system_prompt: Optional[str] = None,
         **kwargs,
     ):
         from openai import OpenAI
@@ -94,6 +105,7 @@ class LM:
 
         # Initialize OpenAI client
         self.openai_client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+        self.system_prompt = system_prompt
 
     def dump_cache(
         self, id: str, result: Union[str, BaseModel, List[Union[str, BaseModel]]]
@@ -247,34 +259,23 @@ class LM:
         use_loadbalance: Optional[bool],
         **kwargs,
     ) -> Any:
-        """Call the OpenAI API directly and get raw output."""
-        retry_count = 0
-        max_retries = self.num_retries
+        raise NotImplementedError("This method should be implemented in subclasses.")
+    #     """Call the OpenAI API directly and get raw output (no retries)."""
+    #     try:
+    #         # Handle message list
+    #         response = self.openai_client.chat.completions.create(
+    #             model=self.model, messages=dspy_main_input, **kwargs
+    #         )
 
-        while retry_count <= max_retries:
-            try:
-                # Handle message list
-                response = self.openai_client.chat.completions.create(
-                    model=self.model, messages=dspy_main_input, **kwargs
-                )
+    #         # Update port usage stats if needed
+    #         if current_port and use_loadbalance is True:
+    #             self._update_port_use(current_port, -1)
 
-                # Update port usage stats if needed
-                if current_port and use_loadbalance is True:
-                    self._update_port_use(current_port, -1)
+    #         return response.choices[0].message.content
 
-                return response.choices[0].message.content
-
-            except Exception as e:
-                retry_count += 1
-                if retry_count <= max_retries:
-                    backoff_time = 2**retry_count  # Exponential backoff
-                    logger.warning(
-                        f"API call failed: {e}. Retrying in {backoff_time}s..."
-                    )
-                    time.sleep(backoff_time)
-                else:
-                    logger.error(f"API call failed after {max_retries} retries: {e}")
-                    raise
+    #     except Exception as e:
+    #         logger.error(f"API call failed: {e}")
+    #         raise
 
     def _generate_cache_key_base(
         self,
@@ -295,3 +296,42 @@ class LM:
         """Base method to store result in cache if caching is enabled."""
         if effective_cache and id_for_cache:
             self.dump_cache(id_for_cache, result)
+
+    def __call__(
+        self,
+        prompt: Optional[str] = None,
+        system_prompt: Optional[str] = None,
+        messages: Optional[List[Any]] = None,
+        **kwargs,
+    ) -> Any:
+        """
+        If have prompt but not messages, convert prompt to messages.
+        If both raise
+        If neither, raise
+        """
+        if prompt is not None and messages is not None:
+            raise ValueError("Cannot provide both prompt and messages.")
+        if prompt is None and messages is None:
+            raise ValueError("Either prompt or messages must be provided.")
+
+        # Convert prompt to messages if needed
+        if prompt is not None:
+            effective_system_prompt = system_prompt or self.system_prompt
+            if effective_system_prompt is not None:
+                messages = [
+                    {"role": "system", "content": effective_system_prompt},
+                    {"role": "user", "content": prompt},
+                ]
+            else:
+                messages = [{"role": "user", "content": prompt}]
+
+        # Call the LLM with the prepared inputs
+        assert messages is not None, "messages must not be None"
+        return self.forward_messages(messages=messages, **kwargs)
+
+    def forward_messages(
+        self,
+        messages: List[Any],
+        **kwargs,
+    ) -> str:
+        raise NotImplementedError

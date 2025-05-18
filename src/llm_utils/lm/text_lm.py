@@ -99,9 +99,32 @@ class TextLM(LM):
         )
 
         # 4. Parse output
-        result = self._parse_llm_output(llm_output)
+        result: str = self._parse_llm_output(llm_output)
 
         # 5. Store in cache
         self._store_in_cache(effective_cache, cache_id, result)
 
         return result
+
+    def _call_llm(
+        self,
+        dspy_main_input: List[Any],
+        current_port: Optional[int],
+        use_loadbalance: Optional[bool],
+        **kwargs,
+    ):
+        """Call the LLM and return the output as plain text (no retry)."""
+        # Use messages directly
+        messages = dspy_main_input
+
+        response = self.openai_client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            **kwargs,
+        )
+
+        # Update port usage stats if needed
+        if current_port and use_loadbalance is True:
+            self._update_port_use(current_port, -1)
+
+        return response.choices[0].message.content

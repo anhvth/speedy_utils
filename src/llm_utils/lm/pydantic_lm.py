@@ -2,6 +2,7 @@ import random
 import time
 from typing import Any, List, Optional, Type, Union, cast, TypeVar, Generic
 
+from openai import AuthenticationError, RateLimitError
 from pydantic import BaseModel
 
 from speedy_utils.common.logger import logger
@@ -96,39 +97,31 @@ class PydanticLM(LM):
         **kwargs,
     ):
         """Call the LLM with response format support using OpenAI's parse method."""
-        retry_count = 0
-        max_retries = self.num_retries
+        # Use messages directly
+        messages = dspy_main_input
 
-        while retry_count <= max_retries:
-            try:
-                # Use messages directly
-                messages = dspy_main_input
+        # Use OpenAI's parse method for structured output
+        try:
+            response = self.openai_client.beta.chat.completions.parse(
+                model=self.model,
+                messages=messages,
+                response_format=response_format,
+                **kwargs,
+            )
+        except AuthenticationError as e:
+            logger.error(f"Authentication error: {e}")
+            raise
+        except TimeoutError as e:
+            logger.error(f"Timeout error: {e}")
+            raise
+        except RateLimitError as e:
+            logger.error(f"Rate limit exceeded: {e}")
+            raise
+        # Update port usage stats if needed
+        if current_port and use_loadbalance is True:
+            self._update_port_use(current_port, -1)
 
-                # Use OpenAI's parse method for structured output
-                response = self.openai_client.beta.chat.completions.parse(
-                    model=self.model,
-                    messages=messages,
-                    response_format=response_format,
-                    **kwargs,
-                )
-
-                # Update port usage stats if needed
-                if current_port and use_loadbalance is True:
-                    self._update_port_use(current_port, -1)
-
-                return response.choices[0].message.parsed
-
-            except Exception as e:
-                retry_count += 1
-                if retry_count <= max_retries:
-                    backoff_time = 2**retry_count  # Exponential backoff
-                    logger.warning(
-                        f"API call failed: {e}. Retrying in {backoff_time}s..."
-                    )
-                    time.sleep(backoff_time)
-                else:
-                    logger.error(f"API call failed after {max_retries} retries: {e}")
-                    raise
+        return response.choices[0].message.parsed
 
     def _parse_llm_output(
         self, llm_output: Any, response_format: Optional[Type[BaseModel]]
