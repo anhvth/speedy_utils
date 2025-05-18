@@ -1,7 +1,7 @@
 import os
 import warnings
 import pytest
-from llm_utils import OAI_LM
+from llm_utils import PydanticLM
 
 # Filter out specific deprecation warnings - need to be more specific with the exact text pattern
 warnings.filterwarnings("ignore", message=".*There is no current event loop.*")
