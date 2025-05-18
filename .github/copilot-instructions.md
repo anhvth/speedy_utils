@@ -15,6 +15,7 @@
     `assert foo is not None`, or early `if foo is None: return`
   - Use `typing.cast` or pattern‑matching to narrow types explicitly
   - Provide `@overload` signatures when return type varies by argument
+  - Always add type when declare variable
 - **Comparisons**
   - Use `is` / `is not` for `None`, `True`, `False`
   - Use `==` / `!=` for value comparison
