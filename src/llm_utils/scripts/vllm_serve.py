@@ -23,10 +23,12 @@ import argparse
 import requests
 import openai
 
+from speedy_utils.common.utils_io import load_by_ext
 
-LORA_DIR = os.environ.get("LORA_DIR", "/loras")
+
+LORA_DIR: str = os.environ.get("LORA_DIR", "/loras")
 LORA_DIR = os.path.abspath(LORA_DIR)
-HF_HOME = os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
+HF_HOME: str = os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
 logger.info(f"LORA_DIR: {LORA_DIR}")
 
 
@@ -145,15 +147,14 @@ def serve(
     enable_lora: bool = False,
     is_bnb: bool = False,
     eager: bool = False,
-    chat_template: Optional[str] = None,
     lora_modules: Optional[List[str]] = None,  # Updated type
-):
+) -> None:
     """Main function to start or kill vLLM containers."""
 
     """Start vLLM containers with dynamic args."""
     print("Starting vLLM containers...,")
-    gpu_groups_arr = gpu_groups.split(",")
-    VLLM_BINARY = get_vllm()
+    gpu_groups_arr: List[str] = gpu_groups.split(",")
+    VLLM_BINARY: str = get_vllm()
     if enable_lora:
         VLLM_BINARY = "VLLM_ALLOW_RUNTIME_LORA_UPDATING=True " + VLLM_BINARY
 
@@ -208,9 +209,6 @@ def serve(
         if enable_lora:
             cmd.extend(["--fully-sharded-loras", "--enable-lora"])
 
-        if chat_template:
-            chat_template = get_chat_template(chat_template)
-            cmd.extend(["--chat-template", chat_template])  # Add chat_template argument
         if lora_modules:
             # for lora_module in lora_modules:
             # len must be even and we will join tuple with `=`
@@ -312,11 +310,11 @@ def get_args():
         type=int,
         help="Number of pipeline parallel stages",
     )
-    # parser.add_argument(
-    #     "--extra_args",
-    #     nargs=argparse.REMAINDER,
-    #     help="Additional arguments for the serve command",
-    # )
+    parser.add_argument(
+        "--extra_args",
+        nargs=argparse.REMAINDER,
+        help="Additional arguments for the serve command",
+    )
     parser.add_argument(
         "--host_port",
         "-hp",
@@ -326,11 +324,6 @@ def get_args():
     )
     parser.add_argument("--eager", action="store_true", help="Enable eager execution")
     parser.add_argument(
-        "--chat_template",
-        type=str,
-        help="Path to the chat template file",
-    )
-    parser.add_argument(
         "--lora_modules",
         "-lm",
         nargs="+",
@@ -338,64 +331,6 @@ def get_args():
         help="List of LoRA modules in the format lora_name lora_module",
     )
     return parser.parse_args()
-
-
-from speedy_utils import jloads, load_by_ext, memoize
-
-
-def fetch_chat_template(template_name: str = "qwen") -> str:
-    """
-    Fetches a chat template file from a remote repository or local cache.
-
-    Args:
-        template_name (str): Name of the chat template. Defaults to 'qwen'.
-
-    Returns:
-        str: Path to the downloaded or cached chat template file.
-
-    Raises:
-        AssertionError: If the template_name is not supported.
-        ValueError: If the file URL is invalid.
-    """
-    supported_templates = [
-        "alpaca",
-        "chatml",
-        "gemma-it",
-        "llama-2-chat",
-        "mistral-instruct",
-        "qwen2.5-instruct",
-        "saiga",
-        "vicuna",
-        "qwen",
-    ]
-    assert template_name in supported_templates, (
-        f"Chat template '{template_name}' not supported. "
-        f"Please choose from {supported_templates}."
-    )
-
-    # Map 'qwen' to 'qwen2.5-instruct'
-    if template_name == "qwen":
-        template_name = "qwen2.5-instruct"
-
-    remote_url = (
-        f"https://raw.githubusercontent.com/chujiezheng/chat_templates/"
-        f"main/chat_templates/{template_name}.jinja"
-    )
-    local_cache_path = f"/tmp/chat_template_{template_name}.jinja"
-
-    if remote_url.startswith("http"):
-        import requests
-
-        response = requests.get(remote_url)
-        with open(local_cache_path, "w") as file:
-            file.write(response.text)
-        return local_cache_path
-
-    raise ValueError("The file URL must be a valid HTTP URL.")
-
-
-def get_chat_template(template_name: str) -> str:
-    return fetch_chat_template(template_name)
 
 
 def main():
@@ -448,7 +383,6 @@ def main():
             args.enable_lora,
             args.bnb,
             args.eager,
-            args.chat_template,
             args.lora_modules,
         )
 
