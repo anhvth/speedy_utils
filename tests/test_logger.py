@@ -177,11 +177,13 @@ class TestLogFunction:
     @patch("speedy_utils.common.logger.logger.opt")
     def test_different_log_levels(self, mock_opt, reset_log_state):
         """Test that the log function respects the level parameter."""
+        from typing import Literal
+
         for level in ["info", "warning", "error", "critical", "success"]:
             mock_level_fn = MagicMock()
             setattr(mock_opt.return_value, level, mock_level_fn)
 
-            log("Test message", level=level)
+            log("Test message", level=level)  # type: ignore[arg-type]
 
             mock_level_fn.assert_called_once_with("Test message")
             mock_level_fn.reset_mock()

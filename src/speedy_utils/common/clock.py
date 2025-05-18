@@ -96,6 +96,11 @@ class Clock:
             )
             return
         current_time = time.time()
+        if self.last_checkpoint is None:
+            logger.opt(depth=2).warning(
+                "Last checkpoint is not set. Please call start() before using this method."
+            )
+            return
         elapsed = current_time - self.last_checkpoint
         self.last_checkpoint = current_time
         return elapsed
@@ -109,6 +114,11 @@ class Clock:
             # raise ValueError("Timer has not been started.")
             logger.opt(depth=2).warning(
                 "Timer has not been started. Please call start() before using this method."
+            )
+            return
+        if self.last_checkpoint is None:
+            logger.opt(depth=2).warning(
+                "Last checkpoint is not set. Please call start() before using this method."
             )
             return
         return time.time() - self.last_checkpoint

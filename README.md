@@ -225,29 +225,6 @@ Ensure all dependencies are installed before running tests:
 pip install -r requirements.txt
 ```
 
-## Data Arguments
-
-Define and parse data arguments using a dataclass:
-
-```python
-from dataclasses import dataclass
-from speedy_utils.common.dataclass_parser import ArgsParser
-
-@dataclass
-class ExampleArgs(ArgsParser):
-    from_peft: str = "./outputs/llm_hn_qw32b/hn_results_r3/"
-    model_name_or_path: str = "Qwen/Qwen2.5-32B-Instruct-AWQ"
-    use_fp16: bool = False
-    batch_size: int = 1
-    max_length: int = 512
-    cache_dir: str = ".cache/run_embeds"
-    output_dir: str = ".cache"
-    input_file: str = ".cache/doc.csv"
-    output_name: str = "qw32b_r3"
-
-args = ExampleArgs.parse_args()
-print(args)
-```
 
 Run the script to parse and display the arguments:
 
