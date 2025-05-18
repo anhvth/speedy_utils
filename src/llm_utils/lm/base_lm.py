@@ -26,6 +26,7 @@ from openai.types.chat import (
     ChatCompletionToolMessageParam,
     ChatCompletionUserMessageParam,
 )
+from openai.types.chat.parsed_chat_completion import ParsedChatCompletion
 from pydantic import BaseModel
 
 # --------------------------------------------------------------------------- #
@@ -155,7 +156,7 @@ class LM:
         try:
             # structured mode
             if response_format is not str and issubclass(response_format, BaseModel):
-                rsp = self.client.beta.chat.completions.parse(
+                rsp: ParsedChatCompletion[BaseModel] = self.client.beta.chat.completions.parse(
                     model=self.model,
                     messages=list(messages),
                     response_format=response_format,  # type: ignore[arg-type]
