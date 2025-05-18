@@ -17,8 +17,10 @@ from typing import (
     cast,
 )
 
+from httpx import URL
 from loguru import logger
 from openai import OpenAI, AuthenticationError, RateLimitError
+from openai.pagination import SyncPage
 from openai.types.chat import (
     ChatCompletionAssistantMessageParam,
     ChatCompletionMessageParam,
@@ -27,6 +29,7 @@ from openai.types.chat import (
     ChatCompletionUserMessageParam,
 )
 from openai.types.chat.parsed_chat_completion import ParsedChatCompletion
+from openai.types.model import Model
 from pydantic import BaseModel
 import warnings
 
@@ -52,7 +55,7 @@ class LM:
     # --------------------------------------------------------------------- #
     def __init__(
         self,
-        model: str,
+        model: str | None = None,
         *,
         temperature: float = 0.0,
         max_tokens: int = 2_000,
@@ -72,6 +75,10 @@ class LM:
         self.do_cache = cache
 
         self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+
+    def set_model(self, model: str) -> None:
+        """Set the model name after initialization."""
+        self.model = model
 
     # --------------------------------------------------------------------- #
     # public API – typed overloads
@@ -114,6 +121,7 @@ class LM:
             messages = [{"role": "user", "content": prompt}]
 
         assert messages is not None  # for type-checker
+        assert self.model is not None, "Model must be set before calling."
         openai_msgs: Messages = (
             self._convert_messages(cast(LegacyMsgs, messages))
             if isinstance(messages[0], dict)  # legacy style
@@ -146,6 +154,8 @@ class LM:
         use_cache: bool,
         **kw: Any,
     ):
+        assert self.model is not None, "Model must be set before making a call."
+        model: str = self.model
         cache_key = (
             self._cache_key(messages, kw, response_format) if use_cache else None
         )
@@ -157,7 +167,7 @@ class LM:
             if response_format is not str and issubclass(response_format, BaseModel):
                 rsp: ParsedChatCompletion[BaseModel] = (
                     self.client.beta.chat.completions.parse(
-                        model=self.model,
+                        model=model,
                         messages=list(messages),
                         response_format=response_format,  # type: ignore[arg-type]
                         **kw,
@@ -167,7 +177,7 @@ class LM:
             # plain-text mode
             else:
                 rsp = self.client.chat.completions.create(
-                    model=self.model,
+                    model=model,
                     messages=list(messages),
                     **kw,
                 )
@@ -278,17 +288,17 @@ class LM:
         except Exception:  # pragma: no cover
             return None
 
-
-class OAI_LM(LM):
-    """
-    OpenAI wrapper for the `LM` class.
-    """
-
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        # deprecated
-        warnings.warn(
-            "OAI_LM is deprecated and will be removed in a future release. Use LM instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
+    @staticmethod
+    def list_models(port=None) -> List[str]:
+        """
+        List available models.
+        """
+        try:
+            client: OpenAI = LM(port=port).client
+            base_url: URL = client.base_url
+            logger.debug(f"Base URL: {base_url}")
+            models: SyncPage[Model] = client.models.list()
+            return [model.id for model in models.data]
+        except Exception as exc:
+            logger.error(f"Failed to list models: {exc}")
+            return []
