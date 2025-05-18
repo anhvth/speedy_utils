@@ -8,7 +8,7 @@ from .chat_format import (
     build_chatml_input,
     format_msgs,
 )
-from .lm import PydanticLM, TextLM
+from .lm import LM
 from .group_messages import (
     split_indices_by_length,
     group_messages_by_len,
@@ -25,6 +25,4 @@ __all__ = [
     "format_msgs",
     "split_indices_by_length",
     "group_messages_by_len",
-    "PydanticLM",
-    "TextLM",
 ]

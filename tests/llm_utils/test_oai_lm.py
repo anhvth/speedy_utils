@@ -1,7 +1,7 @@
 import os
 import warnings
 import pytest
-from llm_utils import PydanticLM
+from llm_utils import LM
 
 # Filter out specific deprecation warnings - need to be more specific with the exact text pattern
 warnings.filterwarnings("ignore", message=".*There is no current event loop.*")
@@ -13,8 +13,8 @@ def oai_key():
 
 def test_forward(oai_key):
     prompt = "say this is a test"
-    model = OAI_LM(model="gpt-4.1-nano")
-    response = model(prompt)
+    model = LM(model="gpt-4.1-nano")
+    response = model(prompt=prompt)
     assert response is not None
     assert isinstance(response, str)
     assert len(response) > 0
