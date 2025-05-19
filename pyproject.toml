@@ -61,3 +61,5 @@ packaging = ">=23.2,<25"
 
 [tool.poetry.scripts]
 mpython = "speedy_utils.scripts.mpython:main"
+svllm = "llm_utils.scripts.vllm_serve:main"
+svllm-lb = "llm_utils.scripts.vllm_load_balancer:run_load_balancer"
