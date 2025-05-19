@@ -132,8 +132,8 @@ class LM:
             self.openai_kwargs,
             temperature=self.temperature,
             max_tokens=max_tokens or self.max_tokens,
-            **kwargs,
         )
+        kw.update(kwargs)
         use_cache = self.do_cache if cache is None else cache
 
         raw = self._call_raw(
@@ -289,7 +289,7 @@ class LM:
             return None
 
     @staticmethod
-    def list_models(port=None, host='localhost') -> List[str]:
+    def list_models(port=None, host="localhost") -> List[str]:
         """
         List available models.
         """
