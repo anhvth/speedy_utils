@@ -4,19 +4,19 @@ from collections import defaultdict
 import time
 from tabulate import tabulate
 import contextlib
-import aiohttp # <-- Import aiohttp
+import aiohttp  # <-- Import aiohttp
 from loguru import logger
 
 # --- Configuration ---
-LOAD_BALANCER_HOST = '0.0.0.0'
+LOAD_BALANCER_HOST = "0.0.0.0"
 LOAD_BALANCER_PORT = 8008
 
-SCAN_TARGET_HOST = 'localhost'
+SCAN_TARGET_HOST = "localhost"
 SCAN_PORT_START = 8150
-SCAN_PORT_END = 8170 # Inclusive
+SCAN_PORT_END = 8170  # Inclusive
 SCAN_INTERVAL = 30
 # Timeout applies to the HTTP health check request now
-HEALTH_CHECK_TIMEOUT = 2.0 # Increased slightly for HTTP requests
+HEALTH_CHECK_TIMEOUT = 2.0  # Increased slightly for HTTP requests
 
 STATUS_PRINT_INTERVAL = 5
 BUFFER_SIZE = 4096
@@ -25,6 +25,7 @@ BUFFER_SIZE = 4096
 available_servers = []
 connection_counts = defaultdict(int)
 state_lock = asyncio.Lock()
+
 
 # --- Helper Functions --- (relay_data and safe_close_writer remain the same)
 async def relay_data(reader, writer, direction):
@@ -55,6 +56,7 @@ async def relay_data(reader, writer, direction):
                     f"Error closing writer for {direction} (might be expected): {close_err}"
                 )
 
+
 @contextlib.asynccontextmanager
 async def safe_close_writer(writer):
     """Async context manager to safely close an asyncio StreamWriter."""
@@ -68,7 +70,9 @@ async def safe_close_writer(writer):
             except Exception as e:
                 logger.debug(f"Error closing writer in context manager: {e}")
 
+
 # --- Server Scanning and Health Check (Modified) ---
+
 
 async def check_server_health(session, host, port):
     """Performs an HTTP GET request to the /health endpoint."""
@@ -106,6 +110,7 @@ async def check_server_health(session, host, port):
         logger.error(f"Unexpected health check error for {url}: {e}")
         return False
 
+
 async def scan_and_update_servers():
     """Periodically scans ports using HTTP /health check and updates available servers."""
     global available_servers
@@ -122,18 +127,26 @@ async def scan_and_update_servers():
             async with aiohttp.ClientSession() as session:
                 # Create health check tasks for all ports, passing the shared session
                 for port in ports_to_scan:
-                    task = asyncio.create_task(check_server_health(session, SCAN_TARGET_HOST, port))
+                    task = asyncio.create_task(
+                        check_server_health(session, SCAN_TARGET_HOST, port)
+                    )
                     scan_tasks.append((task, port))
 
                 # Wait for all health checks to complete
                 # return_exceptions=True prevents gather from stopping if one check fails
-                await asyncio.gather(*(task for task, port in scan_tasks), return_exceptions=True)
+                await asyncio.gather(
+                    *(task for task, port in scan_tasks), return_exceptions=True
+                )
 
                 # Collect results from completed tasks
                 for task, port in scan_tasks:
                     try:
                         # Check if task finished, wasn't cancelled, and returned True
-                        if task.done() and not task.cancelled() and task.result() is True:
+                        if (
+                            task.done()
+                            and not task.cancelled()
+                            and task.result() is True
+                        ):
                             current_scan_results.append((SCAN_TARGET_HOST, port))
                     except Exception as e:
                         logger.error(
@@ -174,7 +187,7 @@ async def scan_and_update_servers():
             break
         except Exception as e:
             logger.error(f"Error in scan_and_update_servers loop: {e}")
-            await asyncio.sleep(SCAN_INTERVAL / 2) # Avoid tight loop on error
+            await asyncio.sleep(SCAN_INTERVAL / 2)  # Avoid tight loop on error
 
         await asyncio.sleep(SCAN_INTERVAL)
 
@@ -182,7 +195,7 @@ async def scan_and_update_servers():
 # --- Core Load Balancer Logic (handle_client remains the same) ---
 async def handle_client(client_reader, client_writer):
     """Handles a single client connection."""
-    client_addr = client_writer.get_extra_info('peername')
+    client_addr = client_writer.get_extra_info("peername")
     logger.info(f"Accepted connection from {client_addr}")
 
     backend_server = None
@@ -193,7 +206,9 @@ async def handle_client(client_reader, client_writer):
     try:
         # --- Select Backend Server (Least Connections from Available) ---
         selected_server = None
-        async with state_lock: # Lock to safely access available_servers and connection_counts
+        async with (
+            state_lock
+        ):  # Lock to safely access available_servers and connection_counts
             if not available_servers:
                 logger.warning(
                     f"No backend servers available (failed health checks?) for client {client_addr}. Closing connection."
@@ -202,9 +217,13 @@ async def handle_client(client_reader, client_writer):
                     pass
                 return
 
-            min_connections = float('inf')
+            min_connections = float("inf")
             least_used_available_servers = []
-            for server in available_servers: # Iterate only over servers that passed health check
+            for (
+                server
+            ) in (
+                available_servers
+            ):  # Iterate only over servers that passed health check
                 count = connection_counts.get(server, 0)
                 if count < min_connections:
                     min_connections = count
@@ -253,13 +272,13 @@ async def handle_client(client_reader, client_writer):
             logger.error(
                 f"Connection refused by selected backend server {backend_server} for {client_addr}"
             )
-            async with state_lock: # Decrement count under lock
+            async with state_lock:  # Decrement count under lock
                 if (
                     backend_server in connection_counts
                     and connection_counts[backend_server] > 0
                 ):
                     connection_counts[backend_server] -= 1
-            server_selected = False # Mark failure
+            server_selected = False  # Mark failure
             async with safe_close_writer(client_writer):
                 pass
             return
@@ -267,19 +286,19 @@ async def handle_client(client_reader, client_writer):
             logger.error(
                 f"Failed to connect to selected backend server {backend_server} for {client_addr}: {e}"
             )
-            async with state_lock: # Decrement count under lock
+            async with state_lock:  # Decrement count under lock
                 if (
                     backend_server in connection_counts
                     and connection_counts[backend_server] > 0
                 ):
                     connection_counts[backend_server] -= 1
-            server_selected = False # Mark failure
+            server_selected = False  # Mark failure
             async with safe_close_writer(client_writer):
                 pass
             return
 
         # --- Relay Data Bidirectionally ---
-        async with safe_close_writer(backend_writer): # Ensure backend writer is closed
+        async with safe_close_writer(backend_writer):  # Ensure backend writer is closed
             client_to_backend = asyncio.create_task(
                 relay_data(
                     client_reader, backend_writer, f"{client_addr} -> {backend_server}"
@@ -291,7 +310,8 @@ async def handle_client(client_reader, client_writer):
                 )
             )
             done, pending = await asyncio.wait(
-                [client_to_backend, backend_to_client], return_when=asyncio.FIRST_COMPLETED
+                [client_to_backend, backend_to_client],
+                return_when=asyncio.FIRST_COMPLETED,
             )
             for task in pending:
                 task.cancel()
@@ -322,6 +342,7 @@ async def handle_client(client_reader, client_writer):
                             f"Attempted to decrement count below zero for {backend_server} on close"
                         )
                         connection_counts[backend_server] = 0
+
 
 # --- Status Reporting Task (print_status_periodically remains the same) ---
 async def print_status_periodically():
@@ -378,7 +399,7 @@ async def main():
         handle_client, LOAD_BALANCER_HOST, LOAD_BALANCER_PORT
     )
 
-    addrs = ', '.join(str(sock.getsockname()) for sock in server.sockets)
+    addrs = ", ".join(str(sock.getsockname()) for sock in server.sockets)
     logger.info(f"Load balancer serving on {addrs}")
     logger.info(
         f"Dynamically discovering servers via HTTP /health on {SCAN_TARGET_HOST}:{SCAN_PORT_START}-{SCAN_PORT_END}"
@@ -399,6 +420,7 @@ async def main():
                 pass
             logger.info("Background tasks finished.")
 
+
 def run_load_balancer():
     # Make sure to install aiohttp: pip install aiohttp
     try:
@@ -407,6 +429,7 @@ def run_load_balancer():
         logger.info("Shutdown requested by user.")
     except Exception as e:
         logger.critical(f"Critical error in main execution: {e}")
+
 
 if __name__ == "__main__":
     run_load_balancer()

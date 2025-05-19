@@ -2,6 +2,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Callable, Dict, List, Sequence
 
+
 def identify_format(item):
     if isinstance(item, list) and "role" in item[0]:
         return "chatml"
@@ -138,6 +139,7 @@ def transform_messages_to_chatml(input_data, input_format="auto"):
                 input_data.append({"role": role.strip(), "content": content.strip()})
 
     return input_data
+
 
 __all__ = [
     "identify_format",

@@ -216,7 +216,7 @@ def display_conversations(data1: Any, data2: Any, theme: str = "light") -> None:
     import warnings
 
     warnings.warn(
-        'display_conversations will be deprecated in the next version.',
+        "display_conversations will be deprecated in the next version.",
         DeprecationWarning,
         stacklevel=2,
     )
