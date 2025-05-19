@@ -289,12 +289,12 @@ class LM:
             return None
 
     @staticmethod
-    def list_models(port=None) -> List[str]:
+    def list_models(port=None, host='localhost') -> List[str]:
         """
         List available models.
         """
         try:
-            client: OpenAI = LM(port=port).client
+            client: OpenAI = LM(port=port, host=host).client
             base_url: URL = client.base_url
             logger.debug(f"Base URL: {base_url}")
             models: SyncPage[Model] = client.models.list()
