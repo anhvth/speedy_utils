@@ -1,4 +1,4 @@
-from .base_lm import LM
+from .lm import LM
 
 OAI_LM = LM
 
