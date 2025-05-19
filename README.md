@@ -47,6 +47,18 @@ cd speedy-utils
 pip install .
 ```
 
+## Updating from previous versions
+
+To update from previous versions or switch to v1.x, first uninstall any old
+packages, then install the latest version:
+
+```bash
+pip uninstall speedy_llm_utils speedy_utils
+pip install -e ./  # for local development
+# or
+pip install speedy_utils -U  # for PyPI upgrade
+```
+
 ## Usage
 
 Below are examples demonstrating how to utilize various features of **Speedy Utils**.
