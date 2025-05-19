@@ -17,9 +17,6 @@
   - [Data Manipulation](#data-manipulation)
   - [Utility Functions](#utility-functions)
 - [Testing](#testing)
-- [Deployment](#deployment)
-- [Contributing](#contributing)
-- [License](#license)
 
 ## Features
 
@@ -236,7 +233,6 @@ Ensure all dependencies are installed before running tests:
 ```bash
 pip install -r requirements.txt
 ```
-
 
 Run the script to parse and display the arguments:
 
