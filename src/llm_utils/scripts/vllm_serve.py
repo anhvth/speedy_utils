@@ -9,19 +9,17 @@ Serve a base model:
 svllm serve --model MODEL_NAME --gpus GPU_GROUPS
 
 Add a LoRA to a served model:
-svllm add-lora --lora LORA_NAME LORA_PATH --host_port host:port (if add then the port must be specify)
+svllm add-lora --lora LORA_NAME LORA_PATH --host_port host:port
+(if add then the port must be specify)
 """
 
-from glob import glob
 import os
 import subprocess
-import time
-from typing import List, Literal, Optional
-from fastcore.script import call_parse
-from loguru import logger
+from typing import List, Optional
 import argparse
 import requests
 import openai
+from loguru import logger
 
 from speedy_utils.common.utils_io import load_by_ext
 
@@ -32,54 +30,12 @@ HF_HOME: str = os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingfac
 logger.info(f"LORA_DIR: {LORA_DIR}")
 
 
-def model_list(host_port, api_key="abc"):
+def model_list(host_port: str, api_key: str = "abc") -> None:
+    """List models from the vLLM server."""
     client = openai.OpenAI(base_url=f"http://{host_port}/v1", api_key=api_key)
     models = client.models.list()
     for model in models:
         print(f"Model ID: {model.id}")
-
-
-def kill_existing_vllm(vllm_binary: Optional[str] = None) -> None:
-    """Kill selected vLLM processes using fzf."""
-    if not vllm_binary:
-        vllm_binary = get_vllm()
-
-    # List running vLLM processes
-    result = subprocess.run(
-        f"ps aux | grep {vllm_binary} | grep -v grep",
-        shell=True,
-        capture_output=True,
-        text=True,
-    )
-    processes = result.stdout.strip().split("\n")
-
-    if not processes or processes == [""]:
-        print("No running vLLM processes found.")
-        return
-
-    # Use fzf to select processes to kill
-    fzf = subprocess.Popen(
-        ["fzf", "--multi"],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        text=True,
-    )
-    selected, _ = fzf.communicate("\n".join(processes))
-
-    if not selected:
-        print("No processes selected.")
-        return
-
-    # Extract PIDs and kill selected processes
-    pids = [line.split()[1] for line in selected.strip().split("\n")]
-    for pid in pids:
-        subprocess.run(
-            f"kill -9 {pid}",
-            shell=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    print(f"Killed processes: {', '.join(pids)}")
 
 
 def add_lora(
@@ -87,8 +43,9 @@ def add_lora(
     host_port: str,
     url: str = "http://HOST:PORT/v1/load_lora_adapter",
     served_model_name: Optional[str] = None,
-    lora_module: Optional[str] = None,  # Added parameter
+    lora_module: Optional[str] = None,
 ) -> dict:
+    """Add a LoRA adapter to a running vLLM server."""
     url = url.replace("HOST:PORT", host_port)
     headers = {"Content-Type": "application/json"}
 
@@ -96,15 +53,12 @@ def add_lora(
         "lora_name": served_model_name,
         "lora_path": os.path.abspath(lora_name_or_path),
     }
-    if lora_module:  # Include lora_module if provided
+    if lora_module:
         data["lora_module"] = lora_module
     logger.info(f"{data=}, {headers}, {url=}")
-    # logger.warning(f"Failed to unload LoRA adapter: {str(e)}")
     try:
-        response = requests.post(url, headers=headers, json=data)
+        response = requests.post(url, headers=headers, json=data, timeout=10)
         response.raise_for_status()
-
-        # Handle potential non-JSON responses
         try:
             return response.json()
         except ValueError:
@@ -116,113 +70,100 @@ def add_lora(
                     else "Request completed with empty response"
                 ),
             }
-
     except requests.exceptions.RequestException as e:
         logger.error(f"Request failed: {str(e)}")
         return {"error": f"Request failed: {str(e)}"}
 
 
-def unload_lora(lora_name, host_port):
+def unload_lora(lora_name: str, host_port: str) -> Optional[dict]:
+    """Unload a LoRA adapter from a running vLLM server."""
     try:
         url = f"http://{host_port}/v1/unload_lora_adapter"
         logger.info(f"{url=}")
         headers = {"Content-Type": "application/json"}
         data = {"lora_name": lora_name}
         logger.info(f"Unloading LoRA adapter: {data=}")
-        response = requests.post(url, headers=headers, json=data)
+        response = requests.post(url, headers=headers, json=data, timeout=10)
         response.raise_for_status()
         logger.success(f"Unloaded LoRA adapter: {lora_name}")
     except requests.exceptions.RequestException as e:
         return {"error": f"Request failed: {str(e)}"}
 
 
-def serve(
-    model: str,
-    gpu_groups: str,
-    served_model_name: Optional[str] = None,
-    port_start: int = 8155,
-    gpu_memory_utilization: float = 0.93,
-    dtype: str = "bfloat16",
-    max_model_len: int = 8192,
-    enable_lora: bool = False,
-    is_bnb: bool = False,
-    eager: bool = False,
-    lora_modules: Optional[List[str]] = None,  # Updated type
-) -> None:
-    """Main function to start or kill vLLM containers."""
-
+def serve(args) -> None:
     """Start vLLM containers with dynamic args."""
     print("Starting vLLM containers...,")
-    gpu_groups_arr: List[str] = gpu_groups.split(",")
-    VLLM_BINARY: str = get_vllm()
-    if enable_lora:
-        VLLM_BINARY = "VLLM_ALLOW_RUNTIME_LORA_UPDATING=True " + VLLM_BINARY
+    gpu_groups_arr: List[str] = args.gpu_groups.split(",")
+    vllm_binary: str = get_vllm()
+    if args.enable_lora:
+        vllm_binary = "VLLM_ALLOW_RUNTIME_LORA_UPDATING=True " + vllm_binary
 
-    # Auto-detect quantization based on model name if not explicitly set
-    if not is_bnb and model and ("bnb" in model.lower() or "4bit" in model.lower()):
-        is_bnb = True
-        print(f"Auto-detected quantization for model: {model}")
+    if (
+        not args.bnb
+        and args.model
+        and ("bnb" in args.model.lower() or "4bit" in args.model.lower())
+    ):
+        args.bnb = True
+        print(f"Auto-detected quantization for model: {args.model}")
 
-    # Set environment variables for LoRA if needed
-    if enable_lora:
+    if args.enable_lora:
         os.environ["VLLM_ALLOW_RUNTIME_LORA_UPDATING"] = "True"
         print("Enabled runtime LoRA updating")
 
     for i, gpu_group in enumerate(gpu_groups_arr):
-        port = port_start + i
+        port = int(args.host_port.split(":")[-1]) + i
         gpu_group = ",".join([str(x) for x in gpu_group])
         tensor_parallel = len(gpu_group.split(","))
 
         cmd = [
             f"CUDA_VISIBLE_DEVICES={gpu_group}",
-            VLLM_BINARY,
+            vllm_binary,
             "serve",
-            model,
+            args.model,
             "--port",
             str(port),
             "--tensor-parallel",
             str(tensor_parallel),
             "--gpu-memory-utilization",
-            str(gpu_memory_utilization),
+            str(args.gpu_memory_utilization),
             "--dtype",
-            dtype,
+            args.dtype,
             "--max-model-len",
-            str(max_model_len),
+            str(args.max_model_len),
             "--enable-prefix-caching",
             "--disable-log-requests",
             "--uvicorn-log-level critical",
         ]
         if HF_HOME:
-            # insert
             cmd.insert(0, f"HF_HOME={HF_HOME}")
-        if eager:
+        if args.eager:
             cmd.append("--enforce-eager")
 
-        if served_model_name:
-            cmd.extend(["--served-model-name", served_model_name])
+        if args.served_model_name:
+            cmd.extend(["--served-model-name", args.served_model_name])
 
-        if is_bnb:
+        if args.bnb:
             cmd.extend(
                 ["--quantization", "bitsandbytes", "--load-format", "bitsandbytes"]
             )
 
-        if enable_lora:
+        if args.enable_lora:
             cmd.extend(["--fully-sharded-loras", "--enable-lora"])
 
-        if lora_modules:
-            # for lora_module in lora_modules:
-            # len must be even and we will join tuple with `=`
-            assert len(lora_modules) % 2 == 0, "lora_modules must be even"
-            # lora_modulle = [f'{name}={module}' for name, module in zip(lora_module[::2], lora_module[1::2])]
-            # import ipdb;ipdb.set_trace()
+        if args.lora_modules:
+            assert len(args.lora_modules) % 2 == 0, "lora_modules must be even"
             s = ""
-            for i in range(0, len(lora_modules), 2):
-                name = lora_modules[i]
-                module = lora_modules[i + 1]
+            for i in range(0, len(args.lora_modules), 2):
+                name = args.lora_modules[i]
+                module = args.lora_modules[i + 1]
                 s += f"{name}={module} "
-
             cmd.extend(["--lora-modules", s])
-        # add kwargs
+
+        if hasattr(args, "enable_reasoning") and args.enable_reasoning:
+            cmd.extend(["--enable-reasoning", "--reasoning-parser", "deepseek_r1"])
+            # Add VLLM_USE_V1=0 to the environment for reasoning mode
+            cmd.insert(0, "VLLM_USE_V1=0")
+
         final_cmd = " ".join(cmd)
         log_file = f"/tmp/vllm_{port}.txt"
         final_cmd_with_log = f'"{final_cmd} 2>&1 | tee {log_file}"'
@@ -235,14 +176,15 @@ def serve(
         os.system(run_in_tmux)
 
 
-def get_vllm():
-    VLLM_BINARY = subprocess.check_output("which vllm", shell=True, text=True).strip()
-    VLLM_BINARY = os.getenv("VLLM_BINARY", VLLM_BINARY)
-    logger.info(f"vLLM binary: {VLLM_BINARY}")
+def get_vllm() -> str:
+    """Get the vLLM binary path."""
+    vllm_binary = subprocess.check_output("which vllm", shell=True, text=True).strip()
+    vllm_binary = os.getenv("VLLM_BINARY", vllm_binary)
+    logger.info(f"vLLM binary: {vllm_binary}")
     assert os.path.exists(
-        VLLM_BINARY
-    ), f"vLLM binary not found at {VLLM_BINARY}, please set VLLM_BINARY env variable"
-    return VLLM_BINARY
+        vllm_binary
+    ), f"vLLM binary not found at {vllm_binary}, please set VLLM_BINARY env variable"
+    return vllm_binary
 
 
 def get_args():
@@ -330,6 +272,9 @@ def get_args():
         type=str,
         help="List of LoRA modules in the format lora_name lora_module",
     )
+    parser.add_argument(
+        "--enable-reasoning", action="store_true", help="Enable reasoning"
+    )
     return parser.parse_args()
 
 
@@ -371,23 +316,8 @@ def main():
                 logger.info(f"Model name from LoRA config: {model_name}")
                 args.model = model_name
         # port_start from hostport
-        port_start = int(args.host_port.split(":")[-1])
-        serve(
-            args.model,
-            args.gpu_groups,
-            args.served_model_name,
-            port_start,
-            args.gpu_memory_utilization,
-            args.dtype,
-            args.max_model_len,
-            args.enable_lora,
-            args.bnb,
-            args.eager,
-            args.lora_modules,
-        )
+        serve(args)
 
-    elif args.mode == "kill":
-        kill_existing_vllm(args.vllm_binary)
     elif args.mode == "add_lora":
         if args.lora:
             lora_name, lora_path = args.lora
