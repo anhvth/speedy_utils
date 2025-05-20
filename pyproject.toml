@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "speedy-utils"
-version = "1.0.10"
+version = "1.0.11"
 description = "Fast and easy-to-use package for data science"
 authors = ["AnhVTH <anhvth.226@gmail.com>"]
 readme = "README.md"
@@ -11,7 +11,7 @@ packages = [
 ]
 
 [build-system]
-requires = ["poetry-core>=1.0.10"]
+requires = ["poetry-core>=1.0.11"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.black]
