@@ -18,7 +18,9 @@ from typing import (
 )
 
 from httpx import URL
+from huggingface_hub import repo_info
 from loguru import logger
+from numpy import isin
 from openai import OpenAI, AuthenticationError, RateLimitError
 from openai.pagination import SyncPage
 from openai.types.chat import (
@@ -40,6 +42,29 @@ TModel = TypeVar("TModel", bound=BaseModel)
 Messages = List[ChatCompletionMessageParam]  # final, already-typed messages
 LegacyMsgs = List[Dict[str, str]]  # old “…role/content…” dicts
 RawMsgs = Union[Messages, LegacyMsgs]  # what __call__ accepts
+
+
+# --------------------------------------------------------------------------- #
+# color formatting helpers
+# --------------------------------------------------------------------------- #
+def _red(text: str) -> str:
+    """Format text with red color."""
+    return f"\x1b[31m{text}\x1b[0m"
+
+
+def _green(text: str) -> str:
+    """Format text with green color."""
+    return f"\x1b[32m{text}\x1b[0m"
+
+
+def _blue(text: str) -> str:
+    """Format text with blue color."""
+    return f"\x1b[34m{text}\x1b[0m"
+
+
+def _yellow(text: str) -> str:
+    """Format text with yellow color."""
+    return f"\x1b[33m{text}\x1b[0m"
 
 
 class LM:
@@ -90,6 +115,7 @@ class LM:
         prompt: str | None = ...,
         messages: RawMsgs | None = ...,
         response_format: type[str] = str,
+        return_openai_response: bool = ...,
         **kwargs: Any,
     ) -> str: ...
 
@@ -100,6 +126,7 @@ class LM:
         prompt: str | None = ...,
         messages: RawMsgs | None = ...,
         response_format: Type[TModel],
+        return_openai_response: bool = ...,
         **kwargs: Any,
     ) -> TModel: ...
 
@@ -111,6 +138,7 @@ class LM:
         response_format: Union[type[str], Type[BaseModel]] = str,
         cache: Optional[bool] = None,
         max_tokens: Optional[int] = None,
+        return_openai_response: bool = False,
         **kwargs: Any,
     ):
         # argument validation ------------------------------------------------
@@ -136,13 +164,113 @@ class LM:
         kw.update(kwargs)
         use_cache = self.do_cache if cache is None else cache
 
-        raw = self._call_raw(
+        raw_response = self._call_raw(
             openai_msgs,
             response_format=response_format,
             use_cache=use_cache,
             **kw,
         )
-        return self._parse_output(raw, response_format)
+        
+        if return_openai_response:
+            response = raw_response
+        else:
+            response = self._parse_output(raw_response, response_format)
+
+        self.last_log = [prompt, messages, raw_response]
+        return response
+
+    def inspect_history(self) -> None:
+        if not hasattr(self, "last_log"):
+            raise ValueError("No history available. Please call the model first.")
+        
+        prompt, messages, response = self.last_log
+        # Ensure response is a dictionary
+        if hasattr(response, "model_dump"):
+            response = response.model_dump()
+            
+        if not messages:
+            messages = [{"role": "user", "content": prompt}]
+        
+        print("\n\n")
+        print(_blue("[Conversation History]") + "\n")
+        
+        # Print all messages in the conversation
+        for msg in messages:
+            role = msg["role"]
+            content = msg["content"]
+            print(_red(f"{role.capitalize()}:"))
+            
+            if isinstance(content, str):
+                print(content.strip())
+            elif isinstance(content, list):
+                # Handle multimodal content
+                for item in content:
+                    if item.get("type") == "text":
+                        print(item["text"].strip())
+                    elif item.get("type") == "image_url":
+                        image_url = item["image_url"]["url"]
+                        if "base64" in image_url:
+                            len_base64 = len(image_url.split("base64,")[1])
+                            print(_blue(f"<IMAGE BASE64 ENCODED({len_base64})>"))
+                        else:
+                            print(_blue(f"<image_url: {image_url}>"))
+            print("\n")
+        
+        # Print the response - now always an OpenAI completion
+        print(_red("Response:"))
+        
+        # Handle OpenAI response object
+        if isinstance(response, dict) and 'choices' in response and response['choices']:
+            message = response['choices'][0].get('message', {})
+
+            # Check for reasoning content (if available)
+            reasoning = message.get('reasoning_content')
+
+            # Check for parsed content (structured mode)
+            parsed = message.get('parsed')
+
+            # Get regular content
+            content = message.get('content')
+
+            # Display reasoning if available
+            if reasoning:
+                print(_yellow('<think>'))
+                print(reasoning.strip())
+                print(_yellow('</think>'))
+                print()
+
+            # Display parsed content for structured responses
+            if parsed:
+                # print(_green('<Parsed Structure>'))
+                if hasattr(parsed, 'model_dump'):
+                    print(json.dumps(parsed.model_dump(), indent=2))
+                else:
+                    print(json.dumps(parsed, indent=2))
+                # print(_green('</Parsed Structure>'))
+                print()
+            
+            else:
+                if content:
+                    # print(_green("<Content>"))
+                    print(content.strip())
+                    # print(_green("</Content>"))
+                else:
+                    print(_green("[No content]"))
+            
+            # Show if there were multiple completions
+            if len(response['choices']) > 1:
+                print(_blue(f"\n(Plus {len(response['choices']) - 1} other completions)"))
+        else:
+            # Fallback for non-standard response objects or cached responses
+            print(_yellow("Warning: Not a standard OpenAI response object"))
+            if isinstance(response, str):
+                print(_green(response.strip()))
+            elif isinstance(response, dict):
+                print(_green(json.dumps(response, indent=2)))
+            else:
+                print(_green(str(response)))
+        
+        # print("\n\n")
 
     # --------------------------------------------------------------------- #
     # low-level OpenAI call
@@ -156,8 +284,11 @@ class LM:
     ):
         assert self.model is not None, "Model must be set before making a call."
         model: str = self.model
+
         cache_key = (
-            self._cache_key(messages, kw, response_format) if use_cache else None
+            self._cache_key(messages, kw, response_format)
+            if use_cache
+            else None
         )
         if cache_key and (hit := self._load_cache(cache_key)) is not None:
             return hit
@@ -165,31 +296,28 @@ class LM:
         try:
             # structured mode
             if response_format is not str and issubclass(response_format, BaseModel):
-                rsp: ParsedChatCompletion[BaseModel] = (
-                    self.client.beta.chat.completions.parse(
-                        model=model,
-                        messages=list(messages),
-                        response_format=response_format,  # type: ignore[arg-type]
-                        **kw,
-                    )
+                openai_response = self.client.beta.chat.completions.parse(
+                    model=model,
+                    messages=list(messages),
+                    response_format=response_format,  # type: ignore[arg-type]
+                    **kw,
                 )
-                result: Any = rsp.choices[0].message.parsed  # already a model
             # plain-text mode
             else:
-                rsp = self.client.chat.completions.create(
+                openai_response = self.client.chat.completions.create(
                     model=model,
                     messages=list(messages),
                     **kw,
                 )
-                result = rsp.choices[0].message.content  # str
+
         except (AuthenticationError, RateLimitError) as exc:  # pragma: no cover
             logger.error(exc)
             raise
 
         if cache_key:
-            self._dump_cache(cache_key, result)
+            self._dump_cache(cache_key, openai_response)
 
-        return result
+        return openai_response
 
     # --------------------------------------------------------------------- #
     # legacy → typed messages
@@ -232,36 +360,68 @@ class LM:
     # --------------------------------------------------------------------- #
     @staticmethod
     def _parse_output(
-        raw: Any,
+        raw_response: Any,
         response_format: Union[type[str], Type[BaseModel]],
     ) -> str | BaseModel:
+        # Convert any object to dict if needed
+        if hasattr(raw_response, 'model_dump'):
+            raw_response = raw_response.model_dump()
+            
         if response_format is str:
-            return cast(str, raw)
-
+            # Extract the content from OpenAI response dict
+            if isinstance(raw_response, dict) and 'choices' in raw_response:
+                message = raw_response['choices'][0]['message']
+                return message.get('content', '') or ''
+            return cast(str, raw_response)
+        
         # For the type-checker: we *know* it's a BaseModel subclass here.
         model_cls = cast(Type[BaseModel], response_format)
 
-        if isinstance(raw, model_cls):
-            return raw
-        if isinstance(raw, dict):
-            return model_cls.model_validate(raw)
+        # Handle structured response
+        if isinstance(raw_response, dict) and 'choices' in raw_response:
+            message = raw_response['choices'][0]['message']
+            
+            # Check if already parsed by OpenAI client
+            if 'parsed' in message:
+                return model_cls.model_validate(message['parsed'])
+            
+            # Need to parse the content
+            content = message.get('content')
+            if content is None:
+                raise ValueError("Model returned empty content")
+            
+            try:
+                data = json.loads(content)
+                return model_cls.model_validate(data)
+            except Exception as exc:
+                raise ValueError(f"Failed to parse model output as JSON:\n{content}") from exc
+        
+        # Handle cached response or other formats
+        if isinstance(raw_response, model_cls):
+            return raw_response
+        if isinstance(raw_response, dict):
+            return model_cls.model_validate(raw_response)
+        
+        # Try parsing as JSON string
         try:
-            data = json.loads(raw)
-        except Exception as exc:  # noqa: BLE001
-            raise ValueError(f"Model did not return JSON:\n---\n{raw}") from exc
-        return model_cls.model_validate(data)
+            data = json.loads(raw_response)
+            return model_cls.model_validate(data)
+        except Exception as exc:
+            raise ValueError(f"Model did not return valid JSON:\n---\n{raw_response}") from exc
 
     # --------------------------------------------------------------------- #
     # tiny disk cache
     # --------------------------------------------------------------------- #
     @staticmethod
     def _cache_key(
-        messages: Any, kw: Any, response_format: Union[type[str], Type[BaseModel]]
+        messages: Any,
+        kw: Any,
+        response_format: Union[type[str], Type[BaseModel]],
     ) -> str:
         tag = response_format.__name__ if response_format is not str else "text"
         blob = json.dumps([messages, kw, tag], sort_keys=True).encode()
         return base64.urlsafe_b64encode(hashlib.sha256(blob).digest()).decode()[:22]
-
+    
     @staticmethod
     def _cache_path(key: str) -> str:
         return os.path.expanduser(f"~/.cache/lm/{key}.json")
