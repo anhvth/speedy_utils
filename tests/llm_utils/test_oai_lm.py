@@ -13,6 +13,7 @@ def oai_key():
     assert (
         os.getenv("OPENAI_API_KEY") is not None
     ), "OPENAI_API_KEY environment variable is not set."
+    
     return os.getenv("OPENAI_API_KEY")
 
 

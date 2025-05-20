@@ -90,6 +90,7 @@ class LM:
         prompt: str | None = ...,
         messages: RawMsgs | None = ...,
         response_format: type[str] = str,
+        return_openai_response: bool = ...,
         **kwargs: Any,
     ) -> str: ...
 
@@ -100,6 +101,7 @@ class LM:
         prompt: str | None = ...,
         messages: RawMsgs | None = ...,
         response_format: Type[TModel],
+        return_openai_response: bool = ...,
         **kwargs: Any,
     ) -> TModel: ...
 
@@ -111,6 +113,7 @@ class LM:
         response_format: Union[type[str], Type[BaseModel]] = str,
         cache: Optional[bool] = None,
         max_tokens: Optional[int] = None,
+        return_openai_response: bool = False,
         **kwargs: Any,
     ):
         # argument validation ------------------------------------------------
@@ -140,8 +143,11 @@ class LM:
             openai_msgs,
             response_format=response_format,
             use_cache=use_cache,
+            return_openai_response=return_openai_response,
             **kw,
         )
+        if return_openai_response:
+            return raw
         return self._parse_output(raw, response_format)
 
     # --------------------------------------------------------------------- #
@@ -152,12 +158,16 @@ class LM:
         messages: Sequence[ChatCompletionMessageParam],
         response_format: Union[type[str], Type[BaseModel]],
         use_cache: bool,
+        return_openai_response: bool = False,
         **kw: Any,
     ):
         assert self.model is not None, "Model must be set before making a call."
         model: str = self.model
+
         cache_key = (
-            self._cache_key(messages, kw, response_format) if use_cache else None
+            self._cache_key(messages, kw, response_format, return_openai_response)
+            if use_cache
+            else None
         )
         if cache_key and (hit := self._load_cache(cache_key)) is not None:
             return hit
@@ -165,7 +175,7 @@ class LM:
         try:
             # structured mode
             if response_format is not str and issubclass(response_format, BaseModel):
-                rsp: ParsedChatCompletion[BaseModel] = (
+                openai_response: ParsedChatCompletion[BaseModel] = (
                     self.client.beta.chat.completions.parse(
                         model=model,
                         messages=list(messages),
@@ -173,15 +183,19 @@ class LM:
                         **kw,
                     )
                 )
-                result: Any = rsp.choices[0].message.parsed  # already a model
+                result = openai_response.choices[0].message.parsed  # already a model
             # plain-text mode
             else:
-                rsp = self.client.chat.completions.create(
+                openai_response = self.client.chat.completions.create(
                     model=model,
                     messages=list(messages),
                     **kw,
                 )
-                result = rsp.choices[0].message.content  # str
+                result = openai_response.choices[0].message.content  # str
+
+            if return_openai_response:
+                return openai_response
+
         except (AuthenticationError, RateLimitError) as exc:  # pragma: no cover
             logger.error(exc)
             raise
@@ -256,9 +270,14 @@ class LM:
     # --------------------------------------------------------------------- #
     @staticmethod
     def _cache_key(
-        messages: Any, kw: Any, response_format: Union[type[str], Type[BaseModel]]
+        messages: Any,
+        kw: Any,
+        response_format: Union[type[str], Type[BaseModel]],
+        return_openai_response: bool = False,
     ) -> str:
         tag = response_format.__name__ if response_format is not str else "text"
+        if return_openai_response:
+            tag += "_raw"
         blob = json.dumps([messages, kw, tag], sort_keys=True).encode()
         return base64.urlsafe_b64encode(hashlib.sha256(blob).digest()).decode()[:22]
 
