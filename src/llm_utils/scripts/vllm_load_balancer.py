@@ -5,18 +5,19 @@ import time
 from tabulate import tabulate
 import contextlib
 import aiohttp  # <-- Import aiohttp
+from speedy_utils import setup_logger
 from loguru import logger
-
+setup_logger(min_interval=5)
 # --- Configuration ---
 LOAD_BALANCER_HOST = "0.0.0.0"
 LOAD_BALANCER_PORT = 8008
 
 SCAN_TARGET_HOST = "localhost"
-SCAN_PORT_START = 8150
+SCAN_PORT_START = 8140
 SCAN_PORT_END = 8170  # Inclusive
 SCAN_INTERVAL = 30
 # Timeout applies to the HTTP health check request now
-HEALTH_CHECK_TIMEOUT = 2.0  # Increased slightly for HTTP requests
+HEALTH_CHECK_TIMEOUT = 2  # Increased slightly for HTTP requests
 
 STATUS_PRINT_INTERVAL = 5
 BUFFER_SIZE = 4096
@@ -83,14 +84,14 @@ async def check_server_health(session, host, port):
             # Check for a successful status code (2xx range)
             if 200 <= response.status < 300:
                 logger.debug(
-                    f"Health check success for {url} (Status: {response.status})"
+                    f"[{LOAD_BALANCER_PORT=}] Health check success for {url} (Status: {response.status})"
                 )
                 # Ensure the connection is released back to the pool
                 await response.release()
                 return True
             else:
                 logger.debug(
-                    f"Health check failed for {url} (Status: {response.status})"
+                    f"[{LOAD_BALANCER_PORT=}] Health check failed for {url} (Status: {response.status})"
                 )
                 await response.release()
                 return False
@@ -180,7 +181,7 @@ async def scan_and_update_servers():
                     if server not in connection_counts:
                         connection_counts[server] = 0
 
-            logger.debug(f"Scan complete. Active servers: {available_servers}")
+            logger.debug(f"[{LOAD_BALANCER_PORT=}]Scan complete. Active servers: {available_servers}")
 
         except asyncio.CancelledError:
             logger.info("Server scan task cancelled.")

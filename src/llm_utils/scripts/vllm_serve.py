@@ -132,7 +132,7 @@ def serve(args) -> None:
             str(args.max_model_len),
             "--enable-prefix-caching",
             "--disable-log-requests",
-            "--uvicorn-log-level critical",
+            # "--uvicorn-log-level critical",
         ]
         if HF_HOME:
             cmd.insert(0, f"HF_HOME={HF_HOME}")
@@ -234,11 +234,11 @@ def get_args():
         "--max_model_len", "-mml", type=int, default=8192, help="Maximum model length"
     )
     parser.add_argument(
-        "--disable_lora",
+        "--enable_lora",
         dest="enable_lora",
-        action="store_false",
+        action="store_true",
         help="Disable LoRA support",
-        default=True,
+        default=False,
     )
     parser.add_argument("--bnb", action="store_true", help="Enable quantization")
     parser.add_argument(
