@@ -9,7 +9,7 @@ from .chat_format import (
     format_msgs,
     display_chat_messages_as_html,
 )
-from .lm import LM
+from .lm.lm import LM, LMReasoner
 from .lm.alm import AsyncLM
 from .group_messages import (
     split_indices_by_length,
@@ -28,6 +28,7 @@ __all__ = [
     "split_indices_by_length",
     "group_messages_by_len",
     "LM",
+    "LMReasoner",
     "AsyncLM",
     "display_chat_messages_as_html",
 ]
