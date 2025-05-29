@@ -159,7 +159,7 @@ class LM:
                 available_models = self.list_models(port=port)
                 if available_models:
                     self.model = available_models[0]
-                    logger.info(f"Auto-selected model: {self.model}")
+                    logger.debug(f"Auto-selected model: {self.model}")
                 else:
                     raise ValueError("No models available to select from.")
             else:
