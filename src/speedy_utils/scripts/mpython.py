@@ -85,6 +85,7 @@ def main():
 
     cpu_per_process = max(args.total_cpu // args.total_fold, 1)
     cmds = []
+    path_python = shutil.which("python")
     for i in range(args.total_fold):
         gpu = gpus[i % num_gpus]
         cpu_start = (i * cpu_per_process) % args.total_cpu
@@ -92,10 +93,10 @@ def main():
         ENV = f"CUDA_VISIBLE_DEVICES={gpu} MP_ID={i} MP_TOTAL={args.total_fold}"
         if taskset_path:
             fold_cmd = (
-                f"{ENV} {taskset_path} -c {cpu_start}-{cpu_end}  python {cmd_str}"
+                f"{ENV} {taskset_path} -c {cpu_start}-{cpu_end}  {path_python} {cmd_str}"
             )
         else:
-            fold_cmd = f"{ENV} python {cmd_str}"
+            fold_cmd = f"{ENV} {path_python} {cmd_str}"
 
         cmds.append(fold_cmd)
 
