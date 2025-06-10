@@ -4,7 +4,6 @@ import base64
 import hashlib
 import json
 import os
-from token import OP
 from typing import (
     Any,
     Dict,
@@ -14,15 +13,13 @@ from typing import (
     Type,
     TypeVar,
     Union,
-    overload,
     cast,
+    overload,
 )
 
 from httpx import URL
-from huggingface_hub import repo_info
 from loguru import logger
-from numpy import isin
-from openai import OpenAI, AuthenticationError, RateLimitError
+from openai import AuthenticationError, OpenAI, RateLimitError
 from openai.pagination import SyncPage
 from openai.types.chat import (
     ChatCompletionAssistantMessageParam,
@@ -31,10 +28,8 @@ from openai.types.chat import (
     ChatCompletionToolMessageParam,
     ChatCompletionUserMessageParam,
 )
-from openai.types.chat.parsed_chat_completion import ParsedChatCompletion
 from openai.types.model import Model
 from pydantic import BaseModel
-import warnings
 
 # --------------------------------------------------------------------------- #
 # type helpers
@@ -92,7 +87,7 @@ class LM:
         cache: bool = True,
         **openai_kwargs: Any,
     ) -> None:
-        self.model = model
+        self._model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.base_url = base_url or (f"http://{host}:{port}/v1" if port else None)
@@ -101,11 +96,17 @@ class LM:
         self.do_cache = cache
         self._init_port = port  # <-- store the port provided at init
 
-        self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+        self.client: OpenAI = OpenAI(api_key=self.api_key, base_url=self.base_url)
 
-    def set_model(self, model: str) -> None:
-        """Set the model name after initialization."""
-        self.model = model
+    @property
+    def model(self) -> str | None:
+        if not hasattr(self, "_model") or self._model is None:
+            first_model = (
+                self.list_models(self._init_port)[0] if self._init_port else None
+            )
+            logger.debug(f"Model not set, using first available model: {first_model}")
+            self._model = first_model
+        return self._model
 
     # --------------------------------------------------------------------- #
     # public API – typed overloads
@@ -116,7 +117,7 @@ class LM:
         *,
         prompt: str | None = ...,
         messages: RawMsgs | None = ...,
-        response_format: type[str] = str,
+        response_format: Type[str] = str,
         return_openai_response: bool = ...,
         **kwargs: Any,
     ) -> str: ...
@@ -137,13 +138,16 @@ class LM:
         self,
         prompt: Optional[str] = None,
         messages: Optional[RawMsgs] = None,
-        response_format: Union[type[str], Type[BaseModel]] = str,
+        response_format: Optional[Union[Type[str], Type[BaseModel]]] = str,
         cache: Optional[bool] = None,
         max_tokens: Optional[int] = None,
         return_openai_response: bool = False,
         **kwargs: Any,
     ):
         # argument validation ------------------------------------------------
+
+        if response_format is None:
+            response_format = str
         if (prompt is None) == (messages is None):
             raise ValueError("Provide *either* `prompt` or `messages` (but not both).")
 
@@ -295,7 +299,7 @@ class LM:
     def _call_raw(
         self,
         messages: Sequence[ChatCompletionMessageParam],
-        response_format: Union[type[str], Type[BaseModel]],
+        response_format: Union[Type[str], Type[BaseModel]],
         use_cache: bool,
         **kw: Any,
     ):
@@ -376,7 +380,7 @@ class LM:
     @staticmethod
     def _parse_output(
         raw_response: Any,
-        response_format: Union[type[str], Type[BaseModel]],
+        response_format: Union[Type[str], Type[BaseModel]],
     ) -> str | BaseModel:
         # Convert any object to dict if needed
         if hasattr(raw_response, "model_dump"):
@@ -481,78 +485,3 @@ class LM:
         except Exception as exc:
             logger.error(f"Failed to list models: {exc}")
             return []
-
-
-from functools import cache
-from llm_utils.lm.lm import LM, RawMsgs
-from pydantic import BaseModel
-import re
-import json
-from typing import *
-import re
-
-
-class LMReasoner(LM):
-    "Regex-based reasoning wrapper for LM."
-
-    def build_regex_from_pydantic(self, model: type[BaseModel]) -> str:
-        """
-        Build a regex pattern string for validating output that should match a Pydantic model.
-
-        Args:
-            model: A Pydantic BaseModel class
-
-        Returns:
-            A regex string that matches a JSON representation of the model
-        """
-        # regex = f"<think>\\n.*?\\n</think>\\n\\n\\```json\\n.*"
-        print(f"{regex=}")
-
-        return regex
-
-    def __call__(
-        self,
-        response_format: type[BaseModel],
-        prompt: Optional[str] = None,
-        messages: Optional[RawMsgs] = None,
-        **kwargs,
-    ):
-
-        if prompt is not None:
-            output = super().__call__(
-                prompt=prompt
-                + "\nresponse_format:"
-                + str(response_format.model_json_schema()),
-                response_format=str,
-                # extra_body={"guided_regex": regex},
-                **kwargs,
-            )  # type: ignore
-        elif messages is not None:
-            # append last message with the json schema
-            messages[-1]["content"] += "\nresponse_format:" + str(  # type: ignore
-                response_format.model_json_schema()
-            )
-            output = super().__call__(
-                messages=messages,
-                response_format=str,
-                # extra_body={"guided_regex": regex},
-                **kwargs,
-            )
-        else:
-            raise ValueError("Either prompt or messages must be provided.")
-        # import ipdb; ipdb.set_trace()
-        # parse using regex
-        pattern = re.compile(
-            r"<think>\n(?P<think>.*?)\n</think>\n\n(?P<json>\{.*\})",
-            re.DOTALL,
-        )
-        match = pattern.search(output)
-        if not match:
-            raise ValueError("Output does not match expected format")
-        parsed_output = match.group(0)
-        think_part = match.group("think")
-        json_part = match.group("json")
-
-        pydantic_object = response_format.model_validate(json.loads(json_part))
-        return pydantic_object
-

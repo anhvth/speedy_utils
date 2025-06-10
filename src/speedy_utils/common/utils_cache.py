@@ -80,9 +80,9 @@ def identify(obj: Any, depth=0, max_depth=2) -> str:
     elif obj is None:
         return identify("None", depth + 1, max_depth)
     else:
-        primitive_types = [int, float, str, bool]
-        if not type(obj) in primitive_types:
-            logger.warning(f"Unknown type: {type(obj)}")
+        # primitive_types = [int, float, str, bool]
+        # if not type(obj) in primitive_types:
+        #     logger.warning(f"Unknown type: {type(obj)}")
         return xxhash.xxh64_hexdigest(fast_serialize(obj), seed=0)
 
 
