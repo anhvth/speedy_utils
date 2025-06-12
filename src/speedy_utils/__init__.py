@@ -43,6 +43,10 @@ from .common.utils_print import (
 from .multi_worker.process import multi_process
 from .multi_worker.thread import multi_thread
 
+
+# notebook
+from .common.notebook_utils import change_dir
+
 # Define __all__ explicitly
 __all__ = [
     # Clock module
@@ -79,6 +83,8 @@ __all__ = [
     # Multi-worker processing
     "multi_process",
     "multi_thread",
+    # Notebook utilities
+    "change_dir",
 ]
 
 # Setup default logger
