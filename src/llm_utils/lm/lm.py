@@ -655,15 +655,20 @@ class LM:
     def last_messages(self, add_think: bool = True) -> Optional[List[Dict[str, str]]]:
         last_conv = self.last_log
         messages = last_conv[1] if len(last_conv) > 1 else None
-        if hasattr(last_conv[2].choices[0].message, "reasoning_content"):
-            reasoning = last_conv[2].choices[0].message.reasoning_content
-        else:
-            reasoning = None
-        answer = last_conv[2].choices[0].message.content
+        last_msg = last_conv[2]
+        if not isinstance(last_msg, dict):
+            last_conv[2] = last_conv[2].model_dump()  # type: ignore
+        msg = last_conv[2]
+        # Ensure msg is a dict
+        if hasattr(msg, "model_dump"):
+            msg = msg.model_dump()
+        message = msg["choices"][0]["message"]
+        reasoning = message.get("reasoning_content")
+        answer = message.get("content")
         if reasoning and add_think:
-            final_answer = "<think>\n" + reasoning + "\n</think>\n" + answer
+            final_answer = f"<think>\n{reasoning}\n</think>\n{answer}"
         else:
-            final_answer = "<think>\n\n</think>\n" + answer
+            final_answer = f"<think>\n\n</think>\n{answer}"
         assistant = {"role": "assistant", "content": final_answer}
         messages = messages + [assistant]  # type: ignore
         return messages if messages else None
