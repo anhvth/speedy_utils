@@ -4,22 +4,26 @@ import base64
 import hashlib
 import json
 import os
+from token import OP
 from typing import (
     Any,
     Dict,
     List,
+    Literal,
     Optional,
     Sequence,
     Type,
     TypeVar,
     Union,
-    cast,
     overload,
+    cast,
 )
 
 from httpx import URL
+from huggingface_hub import repo_info
 from loguru import logger
-from openai import AuthenticationError, OpenAI, RateLimitError
+from numpy import isin
+from openai import OpenAI, AuthenticationError, RateLimitError
 from openai.pagination import SyncPage
 from openai.types.chat import (
     ChatCompletionAssistantMessageParam,
@@ -28,8 +32,10 @@ from openai.types.chat import (
     ChatCompletionToolMessageParam,
     ChatCompletionUserMessageParam,
 )
+from openai.types.chat.parsed_chat_completion import ParsedChatCompletion
 from openai.types.model import Model
 from pydantic import BaseModel
+import warnings
 
 # --------------------------------------------------------------------------- #
 # type helpers
@@ -63,6 +69,17 @@ def _yellow(text: str) -> str:
     return f"\x1b[33m{text}\x1b[0m"
 
 
+# from functools import lru_cache
+
+
+# @lru_cache(maxsize=10)
+# def get_tok(tokenizer_name):
+#     from transformers import AutoTokenizer
+
+#     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, trust_remote_code=True)
+#     return tokenizer
+
+
 class LM:
     """
     Unified language-model wrapper.
@@ -87,7 +104,7 @@ class LM:
         cache: bool = True,
         **openai_kwargs: Any,
     ) -> None:
-        self._model = model
+        self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.base_url = base_url or (f"http://{host}:{port}/v1" if port else None)
@@ -96,17 +113,11 @@ class LM:
         self.do_cache = cache
         self._init_port = port  # <-- store the port provided at init
 
-        self.client: OpenAI = OpenAI(api_key=self.api_key, base_url=self.base_url)
+        self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
 
-    @property
-    def model(self) -> str | None:
-        if not hasattr(self, "_model") or self._model is None:
-            first_model = (
-                self.list_models(self._init_port)[0] if self._init_port else None
-            )
-            logger.debug(f"Model not set, using first available model: {first_model}")
-            self._model = first_model
-        return self._model
+    def set_model(self, model: str) -> None:
+        """Set the model name after initialization."""
+        self.model = model
 
     # --------------------------------------------------------------------- #
     # public API – typed overloads
@@ -117,7 +128,7 @@ class LM:
         *,
         prompt: str | None = ...,
         messages: RawMsgs | None = ...,
-        response_format: Type[str] = str,
+        response_format: type[str] = str,
         return_openai_response: bool = ...,
         **kwargs: Any,
     ) -> str: ...
@@ -138,16 +149,13 @@ class LM:
         self,
         prompt: Optional[str] = None,
         messages: Optional[RawMsgs] = None,
-        response_format: Optional[Union[Type[str], Type[BaseModel]]] = str,
+        response_format: Union[type[str], Type[BaseModel]] = str,
         cache: Optional[bool] = None,
         max_tokens: Optional[int] = None,
         return_openai_response: bool = False,
         **kwargs: Any,
     ):
         # argument validation ------------------------------------------------
-
-        if response_format is None:
-            response_format = str
         if (prompt is None) == (messages is None):
             raise ValueError("Provide *either* `prompt` or `messages` (but not both).")
 
@@ -299,7 +307,7 @@ class LM:
     def _call_raw(
         self,
         messages: Sequence[ChatCompletionMessageParam],
-        response_format: Union[Type[str], Type[BaseModel]],
+        response_format: Union[type[str], Type[BaseModel]],
         use_cache: bool,
         **kw: Any,
     ):
@@ -380,7 +388,7 @@ class LM:
     @staticmethod
     def _parse_output(
         raw_response: Any,
-        response_format: Union[Type[str], Type[BaseModel]],
+        response_format: Union[type[str], Type[BaseModel]],
     ) -> str | BaseModel:
         # Convert any object to dict if needed
         if hasattr(raw_response, "model_dump"):
@@ -472,16 +480,310 @@ class LM:
             return None
 
     @staticmethod
-    def list_models(port=None, host="localhost") -> List[str]:
-        """
-        List available models.
-        """
+    def list_models(
+        port=None, host="localhost", base_url: Optional[str] = None
+    ) -> List[str]:
+        """List available models from OpenAI-compatible API server."""
         try:
-            client: OpenAI = LM(port=port, host=host).client
-            base_url: URL = client.base_url
-            logger.debug(f"Base URL: {base_url}")
+            client: OpenAI = OpenAI(
+                api_key=os.getenv("OPENAI_API_KEY", "abc"),
+                base_url=f"http://{host}:{port}/v1" if port else base_url or None,
+            )
             models: SyncPage[Model] = client.models.list()
             return [model.id for model in models.data]
         except Exception as exc:
-            logger.error(f"Failed to list models: {exc}")
-            return []
+            endpoint = f"http://{host}:{port}/v1" if port else base_url
+            error_msg = str(exc)
+
+            if "404" in error_msg or "Not Found" in error_msg:
+                raise ValueError(
+                    f"No OpenAI-compatible API found at {endpoint}. "
+                    f"The endpoint appears to be running a different service "
+                    f"(possibly Jupyter Server). Please check the port number."
+                ) from exc
+            elif "Connection" in error_msg:
+                raise ValueError(
+                    f"Cannot connect to {endpoint}. "
+                    f"Please verify the service is running and accessible."
+                ) from exc
+            else:
+                raise ValueError(
+                    f"Failed to list models from {endpoint}: {error_msg}"
+                ) from exc
+
+    def parse(
+        self,
+        response_model: Type[BaseModel],
+        instruction: Optional[str] = None,
+        prompt: Optional[str] = None,
+        messages: Optional[RawMsgs] = None,
+        think: Literal[True, False, None] = None,
+        add_json_schema_to_instruction: bool = False,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        return_openai_response: bool = False,
+        cache: Optional[bool] = True,
+        **kwargs,
+    ):
+        if messages is None:
+            assert instruction is not None, "Instruction must be provided."
+            assert prompt is not None, "Prompt must be provided."
+            messages = [
+                {
+                    "role": "system",
+                    "content": instruction,
+                },
+                {
+                    "role": "user",
+                    "content": prompt,
+                },
+            ]  # type: ignore
+
+        post_fix = ""
+        json_schema = response_model.model_json_schema()
+        if add_json_schema_to_instruction and response_model:
+            _schema = f"\n\n<output_json_schema>\n{json.dumps(json_schema, indent=2)}\n</output_json_schema>"
+            post_fix += _schema
+
+        if think:
+            post_fix += "\n\n/think"
+        elif think == False:
+            post_fix += "\n\n/no_think"
+
+        assert isinstance(messages, list), "Messages must be a list."
+        assert len(messages) > 0, "Messages cannot be empty."
+        assert (
+            messages[0]["role"] == "system"
+        ), "First message must be a system message with instruction."
+        messages[0]["content"] += post_fix  # type: ignore
+
+        model_kwargs = {}
+        if temperature is not None:
+            model_kwargs["temperature"] = temperature
+        if max_tokens is not None:
+            model_kwargs["max_tokens"] = max_tokens
+        model_kwargs.update(kwargs)
+        print(f"Model kwargs: {model_kwargs}")
+
+        use_cache = self.do_cache if cache is None else cache
+        cache_key = None
+        if use_cache:
+            cache_data = {
+                "messages": messages,
+                "model_kwargs": model_kwargs,
+                "guided_json": json_schema,
+                "response_format": response_model.__name__,
+            }
+            cache_key = self._cache_key(cache_data, {}, response_model)
+            cached_response = self._load_cache(cache_key)
+            self.last_log = [prompt, messages, cached_response]
+            if cached_response is not None:
+                if return_openai_response:
+                    return cached_response
+                return self._parse_complete_output(cached_response, response_model)
+
+        completion = self.client.chat.completions.create(
+            model=self.model,  # type: ignore
+            messages=messages,  # type: ignore
+            extra_body={"guided_json": json_schema},
+            **model_kwargs,
+        )
+
+        if cache_key:
+            self._dump_cache(cache_key, completion)
+
+        self.last_log = [prompt, messages, completion]
+        if return_openai_response:
+            return completion
+        return self._parse_complete_output(completion, response_model)
+
+    def _parse_complete_output(
+        self, completion: Any, response_model: Type[BaseModel]
+    ) -> BaseModel:
+        """Parse completion output to response model."""
+        if hasattr(completion, "model_dump"):
+            completion = completion.model_dump()
+
+        if "choices" not in completion or not completion["choices"]:
+            raise ValueError("No choices in OpenAI response")
+
+        content = completion["choices"][0]["message"]["content"]
+        if not content:
+            raise ValueError("Empty content in response")
+
+        try:
+            data = json.loads(content)
+            return response_model.model_validate(data)
+        except Exception as exc:
+            raise ValueError(
+                f"Failed to parse response as {response_model.__name__}: {content}"
+            ) from exc
+
+    def inspect_word_probs(
+        self,
+        messages: Optional[List[Dict[str, Any]]] = None,
+        tokenizer: Optional[Any] = None,
+        do_print=True,
+        add_think: bool = True,
+    ) -> tuple[List[Dict[str, Any]], Any, str]:
+        """
+        Inspect word probabilities in a language model response.
+
+        Args:
+            tokenizer: Tokenizer instance to encode words.
+            messages: List of messages to analyze.
+
+        Returns:
+            A tuple containing:
+            - List of word probabilities with their log probabilities.
+            - Token log probability dictionaries.
+            - Rendered string with colored word probabilities.
+        """
+        if messages is None:
+            messages = self.last_messages(add_think=add_think)
+            if messages is None:
+                raise ValueError("No messages provided and no last messages available.")
+
+        if tokenizer is None:
+            tokenizer = get_tokenizer(self.model)
+
+        ret = inspect_word_probs(self, tokenizer, messages)
+        if do_print:
+            print(ret[-1])
+        return ret
+
+    def last_messages(self, add_think: bool = True) -> Optional[List[Dict[str, str]]]:
+        last_conv = self.last_log
+        messages = last_conv[1] if len(last_conv) > 1 else None
+        if hasattr(last_conv[2].choices[0].message, "reasoning_content"):
+            reasoning = last_conv[2].choices[0].message.reasoning_content
+        else:
+            reasoning = None
+        answer = last_conv[2].choices[0].message.content
+        if reasoning and add_think:
+            final_answer = "<think>\n" + reasoning + "\n</think>\n" + answer
+        else:
+            final_answer = "<think>\n\n</think>\n" + answer
+        assistant = {"role": "assistant", "content": final_answer}
+        messages = messages + [assistant]  # type: ignore
+        return messages if messages else None
+
+
+from functools import lru_cache
+
+
+@lru_cache(maxsize=10)
+def get_tokenizer(model_name: str) -> Any:
+    from transformers import AutoTokenizer
+
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    return tokenizer
+
+
+def inspect_word_probs(lm, tokenizer, messages):
+    from typing import Any, Dict, List
+    import numpy as np
+    import re
+
+    def compute_word_log_probs(
+        tokenizer: Any,
+        lm_client: Any,
+    ) -> tuple[List[Dict[str, Any]], Any]:
+        # Build a prompt that preserves literal newlines
+        prompt = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,  # Don't tokenize yet, we need raw text
+            add_generation_prompt=False,  # No generation prompt needed
+        )
+
+        # Request token logprobs
+        response = lm_client.client.completions.create(
+            model=lm_client.model,  # type: ignore
+            prompt=prompt,
+            max_tokens=1,
+            logprobs=1,
+            extra_body={"prompt_logprobs": 0},
+        )
+        token_logprob_dicts = response.choices[0].prompt_logprobs  # type: ignore
+
+        # Override first token to known start marker
+        start_id = tokenizer.encode("<|im_start|>")[0]
+        token_logprob_dicts[0] = {
+            str(start_id): {
+                "logprob": -1,
+                "rank": 1,
+                "decoded_token": "<|im_start|>",
+            }
+        }
+
+        # Flatten tokens
+        tokens: List[Dict[str, Any]] = [
+            {"id": int(tid), **tdata}
+            for td in token_logprob_dicts
+            for tid, tdata in td.items()
+        ]
+
+        # Validate tokenization
+        tokenized = tokenizer.tokenize(prompt)
+        if len(tokenized) != len(tokens):
+            raise ValueError(f"Token count mismatch: {len(tokenized)} vs {len(tokens)}")
+        for idx, tok in enumerate(tokens):
+            if tokenized[idx] != tok["decoded_token"]:
+                raise AssertionError(
+                    f"Token mismatch at {idx}: "
+                    f"{tokenized[idx]} != {tok['decoded_token']}"
+                )
+
+        # Split on newline sentinel
+        split_prompt = prompt.replace("\n", " <NL> ")
+        words = split_prompt.split()
+
+        word_log_probs: List[Dict[str, Any]] = []
+        token_idx = 0
+
+        for word in words:
+            # Map sentinel back to actual newline for encoding
+            target = "\n" if word == "<NL>" else word
+            sub_ids = tokenizer.encode(target, add_special_tokens=False)
+            count = len(sub_ids)
+            if count == 0:
+                continue
+
+            subs = tokens[token_idx : token_idx + count]
+            avg_logprob = sum(s["logprob"] for s in subs) / count
+            prob = float(np.exp(avg_logprob))
+            word_log_probs.append({"word": target, "probability": prob})
+            token_idx += count
+
+        return word_log_probs, token_logprob_dicts  # type: ignore
+
+    def render_by_logprob(word_log_probs: List[Dict[str, Any]]) -> str:
+        """
+        Return an ANSI-colored string for word probabilities (red → green).
+        """
+        if not word_log_probs:
+            return ""
+
+        probs = [entry["probability"] for entry in word_log_probs]
+        min_p, max_p = min(probs), max(probs)
+        parts: List[str] = []
+
+        for entry in word_log_probs:
+            word = entry["word"]
+            # Preserve actual line breaks
+            if word == "\n":
+                parts.append("\n")
+                continue
+
+            p = entry["probability"]
+            norm = (p - min_p) / (max_p - min_p or 1.0)
+            r = int(255 * (1 - norm))  # red component (high when prob is low)
+            g = int(255 * norm)  # green component (high when prob is high)
+            b = 0  # no blue for red-green gradient
+            colored = f"\x1b[38;2;{r};{g};{b}m{word}\x1b[0m"
+            parts.append(colored + " ")
+
+        return "".join(parts).rstrip()
+
+    word_probs, token_logprob_dicts = compute_word_log_probs(tokenizer, lm)
+    return word_probs, token_logprob_dicts, render_by_logprob(word_probs)
