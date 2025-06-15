@@ -39,10 +39,10 @@ Homepage = "https://github.com/anhvth/speedy"
 Repository = "https://github.com/anhvth/speedy"
 
 [project.scripts]
-mpython = "src.speedy_utils.scripts.mpython:main"
-svllm = "src.llm_utils.scripts.vllm_serve:main"
-svllm-lb = "src.llm_utils.scripts.vllm_load_balancer:run_load_balancer"
-openapi_client_codegen = "src.speedy_utils.scripts.openapi_client_codegen:main"
+mpython = "speedy_utils.scripts.mpython:main"
+svllm = "llm_utils.scripts.vllm_serve:main"
+svllm-lb = "llm_utils.scripts.vllm_load_balancer:run_load_balancer"
+openapi_client_codegen = "speedy_utils.scripts.openapi_client_codegen:main"
 
 
 [tool.setuptools.packages.find]
