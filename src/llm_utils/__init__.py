@@ -12,6 +12,7 @@ from .chat_format import (
 from .group_messages import group_messages_by_len, split_indices_by_length
 from .lm.alm import AsyncLM
 from .lm.lm import LM
+from .lm.lm_inspect import LMInspect
 
 __all__ = [
     "transform_messages",
@@ -26,5 +27,5 @@ __all__ = [
     "group_messages_by_len",
     "AsyncLM",
     "display_chat_messages_as_html",
-    "LM",
+    "LM","LMInspect"
 ]

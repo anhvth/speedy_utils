@@ -20,7 +20,6 @@ from typing import (
 )
 
 from httpx import URL
-from huggingface_hub import repo_info
 from loguru import logger
 from numpy import isin
 from openai import OpenAI, AuthenticationError, RateLimitError
@@ -36,6 +35,7 @@ from openai.types.chat.parsed_chat_completion import ParsedChatCompletion
 from openai.types.model import Model
 from pydantic import BaseModel
 import warnings
+from functools import lru_cache
 
 # --------------------------------------------------------------------------- #
 # type helpers
@@ -46,6 +46,12 @@ LegacyMsgs = List[Dict[str, str]]  # old “…role/content…” dicts
 RawMsgs = Union[Messages, LegacyMsgs]  # what __call__ accepts
 
 
+@lru_cache(maxsize=10)
+def get_tokenizer(model_name: str) -> Any:
+    from transformers import AutoTokenizer
+
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    return tokenizer
 # --------------------------------------------------------------------------- #
 # color formatting helpers
 # --------------------------------------------------------------------------- #
@@ -563,7 +569,6 @@ class LM:
         if max_tokens is not None:
             model_kwargs["max_tokens"] = max_tokens
         model_kwargs.update(kwargs)
-        print(f"Model kwargs: {model_kwargs}")
 
         use_cache = self.do_cache if cache is None else cache
         cache_key = None
@@ -619,176 +624,26 @@ class LM:
                 f"Failed to parse response as {response_model.__name__}: {content}"
             ) from exc
 
-    def inspect_word_probs(
-        self,
-        messages: Optional[List[Dict[str, Any]]] = None,
-        tokenizer: Optional[Any] = None,
-        do_print=True,
-        add_think: bool = True,
-    ) -> tuple[List[Dict[str, Any]], Any, str]:
-        """
-        Inspect word probabilities in a language model response.
 
-        Args:
-            tokenizer: Tokenizer instance to encode words.
-            messages: List of messages to analyze.
+    @property
+    def tokenizer(self) -> Any:
+        """
+        Get the tokenizer for the current model.
 
         Returns:
-            A tuple containing:
-            - List of word probabilities with their log probabilities.
-            - Token log probability dictionaries.
-            - Rendered string with colored word probabilities.
+            The tokenizer instance.
         """
-        if messages is None:
-            messages = self.last_messages(add_think=add_think)
-            if messages is None:
-                raise ValueError("No messages provided and no last messages available.")
+        if hasattr(self, "_tokenizer"):
+            return self._tokenizer
+        if self.model is None:
 
-        if tokenizer is None:
-            tokenizer = get_tokenizer(self.model)
-
-        ret = inspect_word_probs(self, tokenizer, messages)
-        if do_print:
-            print(ret[-1])
-        return ret
-
-    def last_messages(self, add_think: bool = True) -> Optional[List[Dict[str, str]]]:
-        last_conv = self.last_log
-        messages = last_conv[1] if len(last_conv) > 1 else None
-        last_msg = last_conv[2]
-        if not isinstance(last_msg, dict):
-            last_conv[2] = last_conv[2].model_dump()  # type: ignore
-        msg = last_conv[2]
-        # Ensure msg is a dict
-        if hasattr(msg, "model_dump"):
-            msg = msg.model_dump()
-        message = msg["choices"][0]["message"]
-        reasoning = message.get("reasoning_content")
-        answer = message.get("content")
-        if reasoning and add_think:
-            final_answer = f"<think>\n{reasoning}\n</think>\n{answer}"
-        else:
-            final_answer = f"<think>\n\n</think>\n{answer}"
-        assistant = {"role": "assistant", "content": final_answer}
-        messages = messages + [assistant]  # type: ignore
-        return messages if messages else None
-
-
-from functools import lru_cache
-
-
-@lru_cache(maxsize=10)
-def get_tokenizer(model_name: str) -> Any:
-    from transformers import AutoTokenizer
-
-    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-    return tokenizer
-
-
-def inspect_word_probs(lm, tokenizer, messages):
-    from typing import Any, Dict, List
-    import numpy as np
-    import re
-
-    def compute_word_log_probs(
-        tokenizer: Any,
-        lm_client: Any,
-    ) -> tuple[List[Dict[str, Any]], Any]:
-        # Build a prompt that preserves literal newlines
-        prompt = tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,  # Don't tokenize yet, we need raw text
-            add_generation_prompt=False,  # No generation prompt needed
-        )
-
-        # Request token logprobs
-        response = lm_client.client.completions.create(
-            model=lm_client.model,  # type: ignore
-            prompt=prompt,
-            max_tokens=1,
-            logprobs=1,
-            extra_body={"prompt_logprobs": 0},
-        )
-        token_logprob_dicts = response.choices[0].prompt_logprobs  # type: ignore
-
-        # Override first token to known start marker
-        start_id = tokenizer.encode("<|im_start|>")[0]
-        token_logprob_dicts[0] = {
-            str(start_id): {
-                "logprob": -1,
-                "rank": 1,
-                "decoded_token": "<|im_start|>",
-            }
-        }
-
-        # Flatten tokens
-        tokens: List[Dict[str, Any]] = [
-            {"id": int(tid), **tdata}
-            for td in token_logprob_dicts
-            for tid, tdata in td.items()
-        ]
-
-        # Validate tokenization
-        tokenized = tokenizer.tokenize(prompt)
-        if len(tokenized) != len(tokens):
-            raise ValueError(f"Token count mismatch: {len(tokenized)} vs {len(tokens)}")
-        for idx, tok in enumerate(tokens):
-            if tokenized[idx] != tok["decoded_token"]:
-                raise AssertionError(
-                    f"Token mismatch at {idx}: "
-                    f"{tokenized[idx]} != {tok['decoded_token']}"
-                )
-
-        # Split on newline sentinel
-        split_prompt = prompt.replace("\n", " <NL> ")
-        words = split_prompt.split()
-
-        word_log_probs: List[Dict[str, Any]] = []
-        token_idx = 0
-
-        for word in words:
-            # Map sentinel back to actual newline for encoding
-            target = "\n" if word == "<NL>" else word
-            sub_ids = tokenizer.encode(target, add_special_tokens=False)
-            count = len(sub_ids)
-            if count == 0:
-                continue
-
-            subs = tokens[token_idx : token_idx + count]
-            avg_logprob = sum(s["logprob"] for s in subs) / count
-            prob = float(np.exp(avg_logprob))
-            word_log_probs.append({"word": target, "probability": prob})
-            token_idx += count
-
-        return word_log_probs, token_logprob_dicts  # type: ignore
-
-    def render_by_logprob(word_log_probs: List[Dict[str, Any]]) -> str:
-        """
-        Return an ANSI-colored string for word probabilities (red → green).
-        """
-        if not word_log_probs:
-            return ""
-
-        probs = [entry["probability"] for entry in word_log_probs]
-        min_p, max_p = min(probs), max(probs)
-        parts: List[str] = []
-
-        for entry in word_log_probs:
-            word = entry["word"]
-            # Preserve actual line breaks
-            if word == "\n":
-                parts.append("\n")
-                continue
-
-            p = entry["probability"]
-            norm = (p - min_p) / (max_p - min_p or 1.0)
-            r = int(255 * (1 - norm))  # red component (high when prob is low)
-            g = int(255 * norm)  # green component (high when prob is high)
-            b = 0  # no blue for red-green gradient
-            colored = f"\x1b[38;2;{r};{g};{b}m{word}\x1b[0m"
-            parts.append(colored + " ")
-
-        return "".join(parts).rstrip()
-
-    word_probs, token_logprob_dicts = compute_word_log_probs(tokenizer, lm)
-    return word_probs, token_logprob_dicts, render_by_logprob(word_probs)
+            self.model = self.list_models(port=self._init_port)[0]
+            logger.debug(f"Auto-selected model: {self.model}")
+        if not hasattr(self, "_tokenizer"):
+            self._tokenizer = get_tokenizer(self.model)
+        if self._tokenizer is None:
+            raise ValueError(
+                f"Tokenizer not found for model {self.model}. "
+                "Ensure the model is valid and the tokenizer is installed."
+            )
+        return get_tokenizer(self.model)

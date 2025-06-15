@@ -1,18 +1,53 @@
-[tool.poetry]
+[project]
 name = "speedy-utils"
 version = "1.0.14"
 description = "Fast and easy-to-use package for data science"
-authors = ["AnhVTH <anhvth.226@gmail.com>"]
+authors = [{ name = "AnhVTH", email = "anhvth.226@gmail.com" }]
 readme = "README.md"
-homepage = "https://github.com/anhvth/speedy"
-packages = [
-    { include = "speedy_utils", from = "src" },
-    { include = "llm_utils", from = "src" },
+requires-python = ">=3.9"
+dependencies = [
+    "numpy",
+    "requests",
+    "xxhash",
+    "loguru",
+    "fastcore",
+    "debugpy",
+    "ipywidgets",
+    "jupyterlab",
+    "ipdb",
+    "scikit-learn",
+    "matplotlib",
+    "pandas",
+    "tabulate",
+    "pydantic",
+    "tqdm",
+    "cachetools",
+    "bump2version",
+    "json-repair>=0.40.0,<0.41.0",
+    "fastprogress",
+    "freezegun>=1.5.1",
+    "packaging>=23.2,<25",
 ]
 
+[project.urls]
+Homepage = "https://github.com/anhvth/speedy"
+Repository = "https://github.com/anhvth/speedy"
+
+[project.scripts]
+mpython = "speedy_utils.scripts.mpython:main"
+svllm = "llm_utils.scripts.vllm_serve:main"
+svllm-lb = "llm_utils.scripts.vllm_load_balancer:run_load_balancer"
+openapi_client_codegen = "speedy_utils.scripts.openapi_client_codegen:main"
+
 [build-system]
-requires = ["poetry-core>=1.0.14"]
-build-backend = "poetry.core.masonry.api"
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-dir]
+"" = "src"
 
 [tool.black]
 line-length = 88
