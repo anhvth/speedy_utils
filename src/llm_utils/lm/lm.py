@@ -36,6 +36,8 @@ from openai.types.model import Model
 from pydantic import BaseModel
 import warnings
 
+from speedy_utils.common.utils_io import jdumps
+
 # --------------------------------------------------------------------------- #
 # type helpers
 # --------------------------------------------------------------------------- #
@@ -258,9 +260,9 @@ class LM:
             if parsed:
                 # print(_green('<Parsed Structure>'))
                 if hasattr(parsed, "model_dump"):
-                    print(json.dumps(parsed.model_dump(), indent=2))
+                    print(jdumps(parsed.model_dump(), indent=2))
                 else:
-                    print(json.dumps(parsed, indent=2))
+                    print(jdumps(parsed, indent=2))
                 # print(_green('</Parsed Structure>'))
                 print()
 
@@ -481,78 +483,4 @@ class LM:
         except Exception as exc:
             logger.error(f"Failed to list models: {exc}")
             return []
-
-
-from functools import cache
-from llm_utils.lm.lm import LM, RawMsgs
-from pydantic import BaseModel
-import re
-import json
-from typing import *
-import re
-
-
-class LMReasoner(LM):
-    "Regex-based reasoning wrapper for LM."
-
-    def build_regex_from_pydantic(self, model: type[BaseModel]) -> str:
-        """
-        Build a regex pattern string for validating output that should match a Pydantic model.
-
-        Args:
-            model: A Pydantic BaseModel class
-
-        Returns:
-            A regex string that matches a JSON representation of the model
-        """
-        # regex = f"<think>\\n.*?\\n</think>\\n\\n\\```json\\n.*"
-        print(f"{regex=}")
-
-        return regex
-
-    def __call__(
-        self,
-        response_format: type[BaseModel],
-        prompt: Optional[str] = None,
-        messages: Optional[RawMsgs] = None,
-        **kwargs,
-    ):
-
-        if prompt is not None:
-            output = super().__call__(
-                prompt=prompt
-                + "\nresponse_format:"
-                + str(response_format.model_json_schema()),
-                response_format=str,
-                # extra_body={"guided_regex": regex},
-                **kwargs,
-            )  # type: ignore
-        elif messages is not None:
-            # append last message with the json schema
-            messages[-1]["content"] += "\nresponse_format:" + str(  # type: ignore
-                response_format.model_json_schema()
-            )
-            output = super().__call__(
-                messages=messages,
-                response_format=str,
-                # extra_body={"guided_regex": regex},
-                **kwargs,
-            )
-        else:
-            raise ValueError("Either prompt or messages must be provided.")
-        # import ipdb; ipdb.set_trace()
-        # parse using regex
-        pattern = re.compile(
-            r"<think>\n(?P<think>.*?)\n</think>\n\n(?P<json>\{.*\})",
-            re.DOTALL,
-        )
-        match = pattern.search(output)
-        if not match:
-            raise ValueError("Output does not match expected format")
-        parsed_output = match.group(0)
-        think_part = match.group("think")
-        json_part = match.group("json")
-
-        pydantic_object = response_format.model_validate(json.loads(json_part))
-        return pydantic_object
 

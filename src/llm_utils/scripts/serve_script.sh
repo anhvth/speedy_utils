@@ -1,0 +1,2 @@
+HF_HOME=/home/anhvth5/.cache/huggingface CUDA_VISIBLE_DEVICES=0 /home/anhvth5/miniconda3/envs/unsloth_env/bin/vllm serve ./outputs/8B_selfeval_retranslate/Qwen3-8B_2025_05_30/ls_response_only_r8_a8_sq8192_lr5e_06_bz64_ep1_4/ --port 8140 --tensor-parallel 1 --gpu-memory-utilization 0.9 --dtype auto --max-model-len 8192 --enable-prefix-caching --disable-log-requests --served-model-name selfeval_8b
+Logging to /tmp/vllm_8140.txt
