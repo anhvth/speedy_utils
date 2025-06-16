@@ -75,6 +75,7 @@ def multi_process(
     timeout: float | None = None,
     stop_on_error: bool = True,
     process_update_interval=10,
+    for_loop: bool = False,
     **fixed_kwargs,
 ) -> list[Any]:
     """
@@ -95,6 +96,12 @@ def multi_process(
                     substitute failing result with ``None``.
     **fixed_kwargs – static keyword args forwarded to every ``func()`` call.
     """
+    if for_loop:
+        ret = []
+        for arg in inputs:
+            ret.append(func(arg, **fixed_kwargs))
+        return ret
+
     if workers is None:
         workers = os.cpu_count() or 1
     if inflight is None:

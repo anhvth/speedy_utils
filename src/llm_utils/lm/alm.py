@@ -34,7 +34,7 @@ from typing import (
 )
 
 from httpx import URL
-from openai import AsyncOpenAI, AuthenticationError, RateLimitError
+from openai import AsyncOpenAI, AuthenticationError, BadRequestError, RateLimitError
 
 # from openai.pagination import AsyncSyncPage
 from openai.types.chat import (
@@ -108,6 +108,7 @@ class AsyncLM:
         # if have multiple ports
         if self.ports:
             import random
+
             port = random.choice(self.ports)
             api_base = f"http://{self.host}:{port}/v1"
             logger.debug(f"Using port: {port}")
@@ -213,6 +214,13 @@ class AsyncLM:
             self._cache_key(messages, kw, response_format) if use_cache else None
         )
         if cache_key and (hit := self._load_cache(cache_key)) is not None:
+            # Check if cached value is an error
+            if isinstance(hit, dict) and hit.get("error"):
+                error_type = hit.get("error_type", "Unknown")
+                error_msg = hit.get("error_message", "Cached error")
+                logger.warning(f"Found cached error ({error_type}): {error_msg}")
+                # Re-raise as a ValueError with meaningful message
+                raise ValueError(f"Cached {error_type}: {error_msg}")
             return hit
 
         try:
@@ -230,8 +238,21 @@ class AsyncLM:
                     **kw,
                 )
 
-        except (AuthenticationError, RateLimitError) as exc:
-            logger.error(exc)
+        except (AuthenticationError, RateLimitError, BadRequestError) as exc:
+            error_msg = f"OpenAI API error ({type(exc).__name__}): {exc}"
+            logger.error(error_msg)
+
+            # Cache the error if it's a BadRequestError to avoid repeated calls
+            if isinstance(exc, BadRequestError) and cache_key:
+                error_response = {
+                    "error": True,
+                    "error_type": "BadRequestError",
+                    "error_message": str(exc),
+                    "choices": [],
+                }
+                self._dump_cache(cache_key, error_response)
+                logger.debug(f"Cached BadRequestError for key: {cache_key}")
+
             raise
 
         if cache_key:
