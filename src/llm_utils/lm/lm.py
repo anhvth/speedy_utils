@@ -4,7 +4,8 @@ import base64
 import hashlib
 import json
 import os
-from token import OP
+import warnings
+from abc import ABC
 from typing import (
     Any,
     Dict,
@@ -15,15 +16,15 @@ from typing import (
     Type,
     TypeVar,
     Union,
-    overload,
     cast,
+    overload,
 )
 
 from httpx import URL
 from huggingface_hub import repo_info
 from loguru import logger
 from numpy import isin
-from openai import OpenAI, AuthenticationError, RateLimitError
+from openai import AuthenticationError, OpenAI, RateLimitError
 from openai.pagination import SyncPage
 from openai.types.chat import (
     ChatCompletionAssistantMessageParam,
@@ -35,7 +36,6 @@ from openai.types.chat import (
 from openai.types.chat.parsed_chat_completion import ParsedChatCompletion
 from openai.types.model import Model
 from pydantic import BaseModel
-import warnings
 
 from speedy_utils.common.utils_io import jdumps
 
@@ -565,7 +565,6 @@ class LM:
         if max_tokens is not None:
             model_kwargs["max_tokens"] = max_tokens
         model_kwargs.update(kwargs)
-        print(f"Model kwargs: {model_kwargs}")
 
         use_cache = self.do_cache if cache is None else cache
         cache_key = None
@@ -668,7 +667,7 @@ class LM:
         reasoning = message.get("reasoning_content")
         answer = message.get("content")
         if reasoning and add_think:
-            final_answer = f"<think>\n{reasoning}\n</think>\n{answer}"
+            final_answer = f"<think>{reasoning}</think>\n{answer}"
         else:
             final_answer = f"<think>\n\n</think>\n{answer}"
         assistant = {"role": "assistant", "content": final_answer}
@@ -688,9 +687,10 @@ def get_tokenizer(model_name: str) -> Any:
 
 
 def inspect_word_probs(lm, tokenizer, messages):
-    from typing import Any, Dict, List
-    import numpy as np
     import re
+    from typing import Any, Dict, List
+
+    import numpy as np
 
     def compute_word_log_probs(
         tokenizer: Any,
@@ -794,3 +794,81 @@ def inspect_word_probs(lm, tokenizer, messages):
 
     word_probs, token_logprob_dicts = compute_word_log_probs(tokenizer, lm)
     return word_probs, token_logprob_dicts, render_by_logprob(word_probs)
+
+
+class LLMTask(ABC):
+    """
+    Callable wrapper around an LM endpoint.
+
+    Sub-classes must set:
+      • lm              – the language-model instance
+      • InputModel      – a Pydantic input class
+      • OutputModel     – a Pydantic output class
+
+    Optional flags:
+      • temperature     – float (default 0.6)
+      • think           – bool  (if the backend supports “chain-of-thought”)
+      • add_json_schema – bool  (include schema in the instruction)
+
+    The **docstring** of each sub-class is sent as the LM instruction.
+    Example
+    ```python
+        class DemoTask(LLMTask):
+            "TODO: SYSTEM_PROMPT_INSTURCTION HERE"
+
+            lm = LM(port=8130, cache=False, model="gpt-3.5-turbo")
+
+            class InputModel(BaseModel):
+                text_to_translate:str
+
+            class OutputModel(BaseModel):
+                translation:str
+                glossary_use:str
+
+            temperature = 0.6
+            think=False
+            
+        demo_task = DemoTask()
+        demo_task({'text_to_translate': 'Translate from english to vietnamese: Hello how are you'})
+    ```
+    """
+
+    lm: "LM"
+    InputModel: Type[BaseModel]
+    OutputModel: Type[BaseModel]
+
+    temperature: float = 0.6
+    think: bool = False
+    add_json_schema: bool = False
+
+    def __call__(self, data: BaseModel | dict) -> BaseModel:
+        if (
+            not hasattr(self, "InputModel")
+            or not hasattr(self, "OutputModel")
+            or not hasattr(self, "lm")
+        ):
+            raise NotImplementedError(
+                f"{self.__class__.__name__} must define lm, InputModel, and OutputModel as class attributes."
+            )
+
+        item = data if isinstance(data, BaseModel) else self.InputModel(**data)
+
+        return self.lm.parse(
+            prompt=item.model_dump_json(),
+            instruction=self.__doc__ or "",
+            response_model=self.OutputModel,
+            temperature=self.temperature,
+            think=self.think,
+            add_json_schema_to_instruction=self.add_json_schema,
+        )
+
+    def generate_training_data(
+        self, input_dict: Dict[str, Any], output: Dict[str, Any]
+    ):
+        "Return share gpt like format"
+        system_prompt = self.__doc__ or ""
+        user_msg = self.InputModel(**input_dict).model_dump_json()  # type: ignore[attr-defined]
+        assistant_msg = self.OutputModel(**output).model_dump_json()  # type: ignore[attr-defined]
+        return get_conversation_one_turn(
+            system_msg=system_prompt, user_msg=user_msg, assistant_msg=assistant_msg
+        )
