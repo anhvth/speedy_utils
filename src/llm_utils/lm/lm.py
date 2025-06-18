@@ -37,6 +37,7 @@ from openai.types.chat.parsed_chat_completion import ParsedChatCompletion
 from openai.types.model import Model
 from pydantic import BaseModel
 
+from llm_utils.chat_format.display import get_conversation_one_turn
 from speedy_utils.common.utils_io import jdumps
 
 # --------------------------------------------------------------------------- #

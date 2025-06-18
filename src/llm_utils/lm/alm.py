@@ -24,6 +24,7 @@ from typing import (
     Any,
     Dict,
     List,
+    Literal,
     Optional,
     Sequence,
     Type,
@@ -49,6 +50,9 @@ from openai.types.model import Model
 from pydantic import BaseModel
 from loguru import logger
 from openai.pagination import AsyncPage as AsyncSyncPage
+
+from llm_utils.chat_format.display import get_conversation_one_turn
+from speedy_utils.common.utils_io import jdumps
 
 # --------------------------------------------------------------------------- #
 # type helpers
@@ -100,6 +104,7 @@ class AsyncLM:
         self.openai_kwargs = openai_kwargs
         self.do_cache = cache
         self.ports = ports
+        self._init_port = port  # <-- store the port provided at init
 
         # Async client
 
@@ -376,9 +381,179 @@ class AsyncLM:
             return None
 
     # ------------------------------------------------------------------ #
+    # Missing methods from LM class
+    # ------------------------------------------------------------------ #
+    async def parse(
+        self,
+        response_model: Type[BaseModel],
+        instruction: Optional[str] = None,
+        prompt: Optional[str] = None,
+        messages: Optional[RawMsgs] = None,
+        think: Literal[True, False, None] = None,
+        add_json_schema_to_instruction: bool = False,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        return_openai_response: bool = False,
+        cache: Optional[bool] = True,
+        **kwargs,
+    ):
+        """Parse response using guided JSON generation."""
+        if messages is None:
+            assert instruction is not None, "Instruction must be provided."
+            assert prompt is not None, "Prompt must be provided."
+            messages = [
+                {
+                    "role": "system",
+                    "content": instruction,
+                },
+                {
+                    "role": "user",
+                    "content": prompt,
+                },
+            ]  # type: ignore
+
+        post_fix = ""
+        json_schema = response_model.model_json_schema()
+        if add_json_schema_to_instruction and response_model:
+            _schema = f"\n\n<output_json_schema>\n{json.dumps(json_schema, indent=2)}\n</output_json_schema>"
+            post_fix += _schema
+
+        if think:
+            post_fix += "\n\n/think"
+        elif think == False:
+            post_fix += "\n\n/no_think"
+
+        assert isinstance(messages, list), "Messages must be a list."
+        assert len(messages) > 0, "Messages cannot be empty."
+        assert (
+            messages[0]["role"] == "system"
+        ), "First message must be a system message with instruction."
+        messages[0]["content"] += post_fix  # type: ignore
+
+        model_kwargs = {}
+        if temperature is not None:
+            model_kwargs["temperature"] = temperature
+        if max_tokens is not None:
+            model_kwargs["max_tokens"] = max_tokens
+        model_kwargs.update(kwargs)
+
+        use_cache = self.do_cache if cache is None else cache
+        cache_key = None
+        if use_cache:
+            cache_data = {
+                "messages": messages,
+                "model_kwargs": model_kwargs,
+                "guided_json": json_schema,
+                "response_format": response_model.__name__,
+            }
+            cache_key = self._cache_key(cache_data, {}, response_model)
+            cached_response = self._load_cache(cache_key)
+            self.last_log = [prompt, messages, cached_response]
+            if cached_response is not None:
+                if return_openai_response:
+                    return cached_response
+                return self._parse_complete_output(cached_response, response_model)
+
+        completion = await self.client.chat.completions.create(
+            model=self.model,  # type: ignore
+            messages=messages,  # type: ignore
+            extra_body={"guided_json": json_schema},
+            **model_kwargs,
+        )
+
+        if cache_key:
+            self._dump_cache(cache_key, completion)
+
+        self.last_log = [prompt, messages, completion]
+        if return_openai_response:
+            return completion
+        return self._parse_complete_output(completion, response_model)
+
+    def _parse_complete_output(
+        self, completion: Any, response_model: Type[BaseModel]
+    ) -> BaseModel:
+        """Parse completion output to response model."""
+        if hasattr(completion, "model_dump"):
+            completion = completion.model_dump()
+
+        if "choices" not in completion or not completion["choices"]:
+            raise ValueError("No choices in OpenAI response")
+
+        content = completion["choices"][0]["message"]["content"]
+        if not content:
+            raise ValueError("Empty content in response")
+
+        try:
+            data = json.loads(content)
+            return response_model.model_validate(data)
+        except Exception as exc:
+            raise ValueError(
+                f"Failed to parse response as {response_model.__name__}: {content}"
+            ) from exc
+
+    async def inspect_word_probs(
+        self,
+        messages: Optional[List[Dict[str, Any]]] = None,
+        tokenizer: Optional[Any] = None,
+        do_print=True,
+        add_think: bool = True,
+    ) -> tuple[List[Dict[str, Any]], Any, str]:
+        """
+        Inspect word probabilities in a language model response.
+
+        Args:
+            tokenizer: Tokenizer instance to encode words.
+            messages: List of messages to analyze.
+
+        Returns:
+            A tuple containing:
+            - List of word probabilities with their log probabilities.
+            - Token log probability dictionaries.
+            - Rendered string with colored word probabilities.
+        """
+        if messages is None:
+            messages = await self.last_messages(add_think=add_think)
+            if messages is None:
+                raise ValueError("No messages provided and no last messages available.")
+
+        if tokenizer is None:
+            tokenizer = get_tokenizer(self.model)
+
+        ret = await inspect_word_probs_async(self, tokenizer, messages)
+        if do_print:
+            print(ret[-1])
+        return ret
+
+    async def last_messages(self, add_think: bool = True) -> Optional[List[Dict[str, str]]]:
+        """Get the last conversation messages including assistant response."""
+        if not hasattr(self, "last_log"):
+            return None
+            
+        last_conv = self.last_log
+        messages = last_conv[1] if len(last_conv) > 1 else None
+        last_msg = last_conv[2]
+        if not isinstance(last_msg, dict):
+            last_conv[2] = last_conv[2].model_dump()  # type: ignore
+        msg = last_conv[2]
+        # Ensure msg is a dict
+        if hasattr(msg, "model_dump"):
+            msg = msg.model_dump()
+        message = msg["choices"][0]["message"]
+        reasoning = message.get("reasoning_content")
+        answer = message.get("content")
+        if reasoning and add_think:
+            final_answer = f"<think>{reasoning}</think>\n{answer}"
+        else:
+            final_answer = f"<think>\n\n</think>\n{answer}"
+        assistant = {"role": "assistant", "content": final_answer}
+        messages = messages + [assistant]  # type: ignore
+        return messages if messages else None
+
+    # ------------------------------------------------------------------ #
     # Utility helpers
     # ------------------------------------------------------------------ #
     async def inspect_history(self) -> None:
+        """Inspect the conversation history with proper formatting."""
         if not hasattr(self, "last_log"):
             raise ValueError("No history available. Please call the model first.")
 
@@ -466,3 +641,215 @@ class AsyncLM:
         except Exception as exc:
             logger.error(f"Failed to list models: {exc}")
             return []
+
+
+# --------------------------------------------------------------------------- #
+# Module-level utility functions (async versions)
+# --------------------------------------------------------------------------- #
+
+from functools import lru_cache
+
+
+@lru_cache(maxsize=10)
+def get_tokenizer(model_name: str) -> Any:
+    """Get tokenizer for the given model."""
+    from transformers import AutoTokenizer  # type: ignore
+
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    return tokenizer
+
+
+async def inspect_word_probs_async(lm, tokenizer, messages):
+    """Async version of inspect_word_probs."""
+    import re
+    from typing import Any, Dict, List
+    import numpy as np
+
+    async def compute_word_log_probs(
+        tokenizer: Any,
+        lm_client: Any,
+    ) -> tuple[List[Dict[str, Any]], Any]:
+        # Build a prompt that preserves literal newlines
+        prompt = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,  # Don't tokenize yet, we need raw text
+            add_generation_prompt=False,  # No generation prompt needed
+        )
+
+        # Request token logprobs
+        response = await lm_client.client.completions.create(
+            model=lm_client.model,  # type: ignore
+            prompt=prompt,
+            max_tokens=1,
+            logprobs=1,
+            extra_body={"prompt_logprobs": 0},
+        )
+        token_logprob_dicts = response.choices[0].prompt_logprobs  # type: ignore
+
+        # Override first token to known start marker
+        start_id = tokenizer.encode("<|im_start|>")[0]
+        token_logprob_dicts[0] = {
+            str(start_id): {
+                "logprob": -1,
+                "rank": 1,
+                "decoded_token": "<|im_start|>",
+            }
+        }
+
+        # Flatten tokens
+        tokens: List[Dict[str, Any]] = [
+            {"id": int(tid), **tdata}
+            for td in token_logprob_dicts
+            for tid, tdata in td.items()
+        ]
+
+        # Validate tokenization
+        tokenized = tokenizer.tokenize(prompt)
+        if len(tokenized) != len(tokens):
+            raise ValueError(f"Token count mismatch: {len(tokenized)} vs {len(tokens)}")
+        for idx, tok in enumerate(tokens):
+            if tokenized[idx] != tok["decoded_token"]:
+                raise AssertionError(
+                    f"Token mismatch at {idx}: "
+                    f"{tokenized[idx]} != {tok['decoded_token']}"
+                )
+
+        # Split on newline sentinel
+        split_prompt = prompt.replace("\n", " <NL> ")
+        words = split_prompt.split()
+
+        word_log_probs: List[Dict[str, Any]] = []
+        token_idx = 0
+
+        for word in words:
+            # Map sentinel back to actual newline for encoding
+            target = "\n" if word == "<NL>" else word
+            sub_ids = tokenizer.encode(target, add_special_tokens=False)
+            count = len(sub_ids)
+            if count == 0:
+                continue
+
+            subs = tokens[token_idx : token_idx + count]
+            avg_logprob = sum(s["logprob"] for s in subs) / count
+            prob = float(np.exp(avg_logprob))
+            word_log_probs.append({"word": target, "probability": prob})
+            token_idx += count
+
+        return word_log_probs, token_logprob_dicts  # type: ignore
+
+    def render_by_logprob(word_log_probs: List[Dict[str, Any]]) -> str:
+        """
+        Return an ANSI-colored string for word probabilities (red → green).
+        """
+        if not word_log_probs:
+            return ""
+
+        probs = [entry["probability"] for entry in word_log_probs]
+        min_p, max_p = min(probs), max(probs)
+        parts: List[str] = []
+
+        for entry in word_log_probs:
+            word = entry["word"]
+            # Preserve actual line breaks
+            if word == "\n":
+                parts.append("\n")
+                continue
+
+            p = entry["probability"]
+            norm = (p - min_p) / (max_p - min_p or 1.0)
+            r = int(255 * (1 - norm))  # red component (high when prob is low)
+            g = int(255 * norm)  # green component (high when prob is high)
+            b = 0  # no blue for red-green gradient
+            colored = f"\x1b[38;2;{r};{g};{b}m{word}\x1b[0m"
+            parts.append(colored + " ")
+
+        return "".join(parts).rstrip()
+
+    word_probs, token_logprob_dicts = await compute_word_log_probs(tokenizer, lm)
+    return word_probs, token_logprob_dicts, render_by_logprob(word_probs)
+
+
+# --------------------------------------------------------------------------- #
+# Async LLMTask class
+# --------------------------------------------------------------------------- #
+
+from abc import ABC
+
+
+class AsyncLLMTask(ABC):
+    """
+    Async callable wrapper around an AsyncLM endpoint.
+
+    Sub-classes must set:
+      • lm              – the async language-model instance
+      • InputModel      – a Pydantic input class
+      • OutputModel     – a Pydantic output class
+
+    Optional flags:
+      • temperature     – float (default 0.6)
+      • think           – bool  (if the backend supports "chain-of-thought")
+      • add_json_schema – bool  (include schema in the instruction)
+
+    The **docstring** of each sub-class is sent as the LM instruction.
+    Example
+    ```python
+        class DemoTask(AsyncLLMTask):
+            "TODO: SYSTEM_PROMPT_INSTURCTION HERE"
+
+            lm = AsyncLM(port=8130, cache=False, model="gpt-3.5-turbo")
+
+            class InputModel(BaseModel):
+                text_to_translate:str
+
+            class OutputModel(BaseModel):
+                translation:str
+                glossary_use:str
+
+            temperature = 0.6
+            think=False
+            
+        demo_task = DemoTask()
+        result = await demo_task({'text_to_translate': 'Translate from english to vietnamese: Hello how are you'})
+    ```
+    """
+
+    lm: "AsyncLM"
+    InputModel: Type[BaseModel]
+    OutputModel: Type[BaseModel]
+
+    temperature: float = 0.6
+    think: bool = False
+    add_json_schema: bool = False
+
+    async def __call__(self, data: BaseModel | dict) -> BaseModel:
+        if (
+            not hasattr(self, "InputModel")
+            or not hasattr(self, "OutputModel")
+            or not hasattr(self, "lm")
+        ):
+            raise NotImplementedError(
+                f"{self.__class__.__name__} must define lm, InputModel, and OutputModel as class attributes."
+            )
+
+        item = data if isinstance(data, BaseModel) else self.InputModel(**data)
+
+        return await self.lm.parse(
+            prompt=item.model_dump_json(),
+            instruction=self.__doc__ or "",
+            response_model=self.OutputModel,
+            temperature=self.temperature,
+            think=self.think,
+            add_json_schema_to_instruction=self.add_json_schema,
+        )
+
+    def generate_training_data(
+        self, input_dict: Dict[str, Any], output: Dict[str, Any]
+    ):
+        """Return share gpt like format"""
+        system_prompt = self.__doc__ or ""
+        user_msg = self.InputModel(**input_dict).model_dump_json()  # type: ignore[attr-defined]
+        assistant_msg = self.OutputModel(**output).model_dump_json()  # type: ignore[attr-defined]
+        messages = get_conversation_one_turn(
+            system_msg=system_prompt, user_msg=user_msg, assistant_msg=assistant_msg
+        )
+        return {"messages": messages}
