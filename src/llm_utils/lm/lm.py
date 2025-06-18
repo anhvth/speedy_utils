@@ -680,7 +680,7 @@ from functools import lru_cache
 
 @lru_cache(maxsize=10)
 def get_tokenizer(model_name: str) -> Any:
-    from transformers import AutoTokenizer
+    from transformers import AutoTokenizer # type: ignore
 
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
     return tokenizer
