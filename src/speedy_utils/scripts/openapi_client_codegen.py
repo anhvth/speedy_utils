@@ -10,12 +10,8 @@ Usage:
 
 import argparse
 import json
-import os
-import signal
-import subprocess
 import sys
-import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 
 def pascal_case(s: str) -> str:

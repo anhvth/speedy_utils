@@ -5,10 +5,8 @@ that properly handles the multiprocessing context
 """
 
 import multiprocessing as mp
-import os
 import time
 
-import pytest
 
 from speedy_utils.multi_worker.process import multi_process
 

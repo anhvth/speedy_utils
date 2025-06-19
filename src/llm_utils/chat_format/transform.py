@@ -1,6 +1,5 @@
 from __future__ import annotations
 from copy import deepcopy
-from typing import Callable, Dict, List, Sequence
 
 
 def identify_format(item):
@@ -114,7 +113,7 @@ def transform_messages(
 
 def transform_messages_to_chatml(input_data, input_format="auto"):
     if input_format == "auto":
-        input_data = raw_data = deepcopy(input_data)
+        input_data = deepcopy(input_data)
         if isinstance(input_data, list):
             input_format = "chatlm"
             assert (

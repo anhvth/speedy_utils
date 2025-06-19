@@ -2,7 +2,6 @@ import os
 from collections import defaultdict
 from datetime import datetime
 
-from fastcore.all import threaded
 
 
 class ReportManager:
@@ -40,7 +39,7 @@ class ReportManager:
 
         md_content.extend(
             [
-                f"\n### Results Overview",
+                "\n### Results Overview",
                 f"- Total items processed: {len(results)}",
                 f"- Success rate: {(len(results) - len(errors))/len(results)*100:.1f}%",
                 f"- Total errors: {len(errors)}",
@@ -61,7 +60,7 @@ class ReportManager:
             for error_type, errs in error_groups.items():
                 md_content.extend(
                     [
-                        f"\n<details>",
+                        "\n<details>",
                         f"<summary><b>{error_type}</b> ({len(errs)} occurrences)</summary>\n",
                         "| Index | Input | Error Message |",
                         "|-------|-------|---------------|",

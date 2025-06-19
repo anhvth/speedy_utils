@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import List, Tuple, Sequence, Any, Dict, Optional
+from typing import Any, Optional
 from IPython.display import HTML, display
 from difflib import SequenceMatcher
 

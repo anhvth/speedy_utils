@@ -1,7 +1,5 @@
 # tests/test_multi_thread.py
-import random
 import time
-from concurrent.futures import ThreadPoolExecutor
 
 from speedy_utils.multi_worker.thread import multi_thread_standard, multi_thread
 

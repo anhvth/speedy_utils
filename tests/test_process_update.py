@@ -2,11 +2,9 @@
 Tests for the updated multi_process functionality with process_update_interval.
 """
 
-import multiprocessing
 import time
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from speedy_utils.multi_worker.process import multi_process
 

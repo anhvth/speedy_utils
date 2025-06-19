@@ -5,7 +5,7 @@ import re
 import sys
 import time
 from collections import OrderedDict
-from typing import Annotated, Literal, Optional
+from typing import Annotated, Literal
 
 from loguru import logger
 

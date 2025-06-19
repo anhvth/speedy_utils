@@ -2,9 +2,8 @@
 
 import inspect
 import os
-import sys
 from collections.abc import Callable
-from typing import Any, List
+from typing import Any
 
 from pydantic import BaseModel
 

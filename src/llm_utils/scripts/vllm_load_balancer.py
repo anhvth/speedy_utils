@@ -1,7 +1,6 @@
 import asyncio
 import random
 from collections import defaultdict
-import time
 from tabulate import tabulate
 import contextlib
 import aiohttp  # <-- Import aiohttp

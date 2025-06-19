@@ -76,7 +76,7 @@ def group_messages_by_len(
     """
     if messages is None:
         raise ValueError("messages parameter cannot be None")
-    from transformers.models.auto.tokenization_auto import AutoTokenizer
+    from transformers.models.auto.tokenization_auto import AutoTokenizer # type: ignore
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 

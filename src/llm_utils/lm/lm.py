@@ -4,8 +4,8 @@ import base64
 import hashlib
 import json
 import os
-import warnings
 from abc import ABC
+from functools import lru_cache
 from typing import (
     Any,
     Dict,
@@ -20,10 +20,7 @@ from typing import (
     overload,
 )
 
-from httpx import URL
-from huggingface_hub import repo_info
 from loguru import logger
-from numpy import isin
 from openai import AuthenticationError, OpenAI, RateLimitError
 from openai.pagination import SyncPage
 from openai.types.chat import (
@@ -33,7 +30,6 @@ from openai.types.chat import (
     ChatCompletionToolMessageParam,
     ChatCompletionUserMessageParam,
 )
-from openai.types.chat.parsed_chat_completion import ParsedChatCompletion
 from openai.types.model import Model
 from pydantic import BaseModel
 
@@ -550,7 +546,7 @@ class LM:
 
         if think:
             post_fix += "\n\n/think"
-        elif think == False:
+        elif not think:
             post_fix += "\n\n/no_think"
 
         assert isinstance(messages, list), "Messages must be a list."
@@ -676,9 +672,6 @@ class LM:
         return messages if messages else None
 
 
-from functools import lru_cache
-
-
 @lru_cache(maxsize=10)
 def get_tokenizer(model_name: str) -> Any:
     from transformers import AutoTokenizer # type: ignore
@@ -688,8 +681,6 @@ def get_tokenizer(model_name: str) -> Any:
 
 
 def inspect_word_probs(lm, tokenizer, messages):
-    import re
-    from typing import Any, Dict, List
 
     import numpy as np
 

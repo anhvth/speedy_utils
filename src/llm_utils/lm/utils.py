@@ -82,7 +82,7 @@ def retry_on_exception(max_retries=10, exceptions=(Exception,), sleep_time=3):
                 try:
                     return func(self, *args, **kwargs)
                 except exceptions as e:
-                    import litellm
+                    import litellm # type: ignore
 
                     if isinstance(
                         e, (litellm.exceptions.APIError, litellm.exceptions.Timeout)

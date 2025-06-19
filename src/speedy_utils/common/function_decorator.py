@@ -2,7 +2,7 @@ import functools
 import time
 import traceback
 from collections.abc import Callable
-from typing import Any, Tuple, Type, Union
+from typing import Any
 
 from loguru import logger
 
@@ -26,8 +26,6 @@ def retry_runtime(
     def decorator(func: Callable) -> Callable:
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
-            last_exception = None
-
             for attempt in range(1, max_retry + 1):
                 try:
                     return func(*args, **kwargs)
@@ -40,7 +38,6 @@ def retry_runtime(
                     raise
 
                 except exceptions as e:
-                    last_exception = e
                     if attempt == max_retry:
                         logger.opt(depth=1).error(
                             f"Function {func.__name__} failed after {max_retry} retries: {str(e)}"

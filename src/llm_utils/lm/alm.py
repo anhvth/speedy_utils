@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """An **asynchronous** drop‑in replacement for the original `LM` class.
 
 Usage example (Python ≥3.8):
@@ -15,11 +13,12 @@ Usage example (Python ≥3.8):
     asyncio.run(main())
 """
 
-import asyncio
 import base64
 import hashlib
 import json
 import os
+from abc import ABC
+from functools import lru_cache
 from typing import (
     Any,
     Dict,
@@ -30,12 +29,14 @@ from typing import (
     Type,
     TypeVar,
     Union,
-    overload,
     cast,
+    overload,
 )
 
 from httpx import URL
+from loguru import logger
 from openai import AsyncOpenAI, AuthenticationError, BadRequestError, RateLimitError
+from openai.pagination import AsyncPage as AsyncSyncPage
 
 # from openai.pagination import AsyncSyncPage
 from openai.types.chat import (
@@ -45,14 +46,10 @@ from openai.types.chat import (
     ChatCompletionToolMessageParam,
     ChatCompletionUserMessageParam,
 )
-from openai.types.chat.parsed_chat_completion import ParsedChatCompletion
 from openai.types.model import Model
 from pydantic import BaseModel
-from loguru import logger
-from openai.pagination import AsyncPage as AsyncSyncPage
 
 from llm_utils.chat_format.display import get_conversation_one_turn
-from speedy_utils.common.utils_io import jdumps
 
 # --------------------------------------------------------------------------- #
 # type helpers
@@ -71,10 +68,20 @@ def _color(code: int, text: str) -> str:
     return f"\x1b[{code}m{text}\x1b[0m"
 
 
-_red = lambda t: _color(31, t)
-_green = lambda t: _color(32, t)
-_blue = lambda t: _color(34, t)
-_yellow = lambda t: _color(33, t)
+def _red(t):
+    return _color(31, t)
+
+
+def _green(t):
+    return _color(32, t)
+
+
+def _blue(t):
+    return _color(34, t)
+
+
+def _yellow(t):
+    return _color(33, t)
 
 
 class AsyncLM:
@@ -420,14 +427,14 @@ class AsyncLM:
 
         if think:
             post_fix += "\n\n/think"
-        elif think == False:
+        elif not think:
             post_fix += "\n\n/no_think"
 
         assert isinstance(messages, list), "Messages must be a list."
         assert len(messages) > 0, "Messages cannot be empty."
-        assert (
-            messages[0]["role"] == "system"
-        ), "First message must be a system message with instruction."
+        assert messages[0]["role"] == "system", (
+            "First message must be a system message with instruction."
+        )
         messages[0]["content"] += post_fix  # type: ignore
 
         model_kwargs = {}
@@ -524,11 +531,13 @@ class AsyncLM:
             print(ret[-1])
         return ret
 
-    async def last_messages(self, add_think: bool = True) -> Optional[List[Dict[str, str]]]:
+    async def last_messages(
+        self, add_think: bool = True
+    ) -> Optional[List[Dict[str, str]]]:
         """Get the last conversation messages including assistant response."""
         if not hasattr(self, "last_log"):
             return None
-            
+
         last_conv = self.last_log
         messages = last_conv[1] if len(last_conv) > 1 else None
         last_msg = last_conv[2]
@@ -647,8 +656,6 @@ class AsyncLM:
 # Module-level utility functions (async versions)
 # --------------------------------------------------------------------------- #
 
-from functools import lru_cache
-
 
 @lru_cache(maxsize=10)
 def get_tokenizer(model_name: str) -> Any:
@@ -661,8 +668,7 @@ def get_tokenizer(model_name: str) -> Any:
 
 async def inspect_word_probs_async(lm, tokenizer, messages):
     """Async version of inspect_word_probs."""
-    import re
-    from typing import Any, Dict, List
+
     import numpy as np
 
     async def compute_word_log_probs(
@@ -773,8 +779,6 @@ async def inspect_word_probs_async(lm, tokenizer, messages):
 # Async LLMTask class
 # --------------------------------------------------------------------------- #
 
-from abc import ABC
-
 
 class AsyncLLMTask(ABC):
     """
@@ -807,7 +811,7 @@ class AsyncLLMTask(ABC):
 
             temperature = 0.6
             think=False
-            
+
         demo_task = DemoTask()
         result = await demo_task({'text_to_translate': 'Translate from english to vietnamese: Hello how are you'})
     ```

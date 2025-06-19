@@ -4,11 +4,8 @@ Tests for the updated logger format in setup_logger function.
 
 import re
 import sys
-import time
 from io import StringIO
-from unittest.mock import Mock, patch
 
-import pytest
 from loguru import logger
 
 from speedy_utils.common.logger import setup_logger

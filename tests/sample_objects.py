@@ -4,7 +4,7 @@ These are used to test the different conversion methods that fprint supports.
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Any
 
 
 class DictConvertibleClass:

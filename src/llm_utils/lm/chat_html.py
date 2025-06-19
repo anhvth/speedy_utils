@@ -1,4 +1,5 @@
-from .lm import *
+from typing import Any, Optional, cast
+from .lm import LM, Messages, LegacyMsgs, RawMsgs
 import sys
 
 # Configuration
@@ -231,7 +232,8 @@ class LMChatHtml(LM):
                         padding=display_padding,
                         inner_padding=display_inner_padding,
                     )
-                    display_handle.update(HTML(html_content))
+                    if display_handle is not None:
+                        display_handle.update(HTML(html_content))
         else:
             # Console streaming mode (original behavior)
             for chunk in stream:

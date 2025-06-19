@@ -5,7 +5,8 @@ import os
 import os.path as osp
 import pickle
 import uuid
-from typing import Any, List, Literal
+from threading import Lock
+from typing import Any, Literal
 
 import cachetools
 import pandas as pd
@@ -13,12 +14,11 @@ import xxhash
 from loguru import logger
 from pydantic import BaseModel
 
-from .utils_io import dump_json_or_pickle, load_json_or_pickle
-from .utils_misc import mkdir_or_exist
+from src.speedy_utils.common.utils_io import dump_json_or_pickle, load_json_or_pickle
+from src.speedy_utils.common.utils_misc import mkdir_or_exist
 
 SPEED_CACHE_DIR = osp.join(osp.expanduser("~"), ".cache/speedy_cache")
 LRU_MEM_CACHE = cachetools.LRUCache(maxsize=128_000)
-from threading import Lock
 
 thread_locker = Lock()
 

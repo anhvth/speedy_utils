@@ -1,4 +1,3 @@
-import re
 import time
 from unittest.mock import MagicMock, patch
 
@@ -177,7 +176,6 @@ class TestLogFunction:
     @patch("speedy_utils.common.logger.logger.opt")
     def test_different_log_levels(self, mock_opt, reset_log_state):
         """Test that the log function respects the level parameter."""
-        from typing import Literal
 
         for level in ["info", "warning", "error", "critical", "success"]:
             mock_level_fn = MagicMock()

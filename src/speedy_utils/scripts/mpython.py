@@ -5,7 +5,6 @@ import multiprocessing  # Import multiprocessing module
 import os
 import shlex  # To properly escape command line arguments
 import shutil
-import subprocess
 
 taskset_path = shutil.which("taskset")
 
@@ -80,7 +79,7 @@ def main():
         cmd_str = shlex.join(args.cmd)
 
     gpus = args.gpus.split(",")
-    gpus = [gpu for gpu in gpus if not gpu in args.ignore_gpus.split(",")]
+    gpus = [gpu for gpu in gpus if gpu not in args.ignore_gpus.split(",")]
     num_gpus = len(gpus)
 
     cpu_per_process = max(args.total_cpu // args.total_fold, 1)
