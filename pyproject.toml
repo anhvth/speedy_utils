@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "speedy-utils"
-version = "1.0.18"
+version = "1.0.19"
 description = "Fast and easy-to-use package for data science"
 authors = ["AnhVTH <anhvth.226@gmail.com>"]
 readme = "README.md"
@@ -11,7 +11,7 @@ packages = [
 ]
 
 [build-system]
-requires = ["poetry-core>=1.0.18"]
+requires = ["poetry-core>=1.0.15"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.black]
@@ -36,7 +36,7 @@ no_implicit_optional = true
 strict_optional = true
 
 [tool.poetry.dependencies]
-python = ">=3.9"
+python = ">=3.8"
 numpy = "*"
 requests = "*"
 xxhash = "*"
@@ -54,7 +54,7 @@ pydantic = "*"
 tqdm = "*"
 cachetools = "*"
 bump2version = "*"
-json-repair = ">=0.40.0,<0.41.0"
+json-repair = ">=0.25.0,<0.31.0"
 fastprogress = "*"
 freezegun = "^1.5.1"
 packaging = ">=23.2,<25"
@@ -64,3 +64,18 @@ mpython = "speedy_utils.scripts.mpython:main"
 svllm = "llm_utils.scripts.vllm_serve:main"
 svllm-lb = "llm_utils.scripts.vllm_load_balancer:run_load_balancer"
 openapi_client_codegen = "speedy_utils.scripts.openapi_client_codegen:main"
+
+
+[tool.ruff.format]
+quote-style = "double"
+line-ending = "lf"
+docstring-code-format = true
+[tool.ruff]
+exclude = ["**/*.ipynb", "poly_frontend_controler/*", "poly_client/", "legacy"]
+ignore = [
+    "E501", # Line too long
+    "F401", # Unused import
+    "F403", # Wildcard import
+    "F841", # Local variable is assigned to but never used
+    "T201", # Use of `print` statement
+]
