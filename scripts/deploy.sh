@@ -5,6 +5,15 @@
 
 set -e  # Exit on any error
 
+
+if ! bump2version --allow-dirty patch; then
+    echo "Error: bump2version failed"
+    exit 1
+fi
+
+
+
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
