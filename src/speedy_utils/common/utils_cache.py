@@ -14,8 +14,8 @@ import xxhash
 from loguru import logger
 from pydantic import BaseModel
 
-from src.speedy_utils.common.utils_io import dump_json_or_pickle, load_json_or_pickle
-from src.speedy_utils.common.utils_misc import mkdir_or_exist
+from speedy_utils.common.utils_io import dump_json_or_pickle, load_json_or_pickle
+from speedy_utils.common.utils_misc import mkdir_or_exist
 
 SPEED_CACHE_DIR = osp.join(osp.expanduser("~"), ".cache/speedy_cache")
 LRU_MEM_CACHE = cachetools.LRUCache(maxsize=128_000)
