@@ -9,8 +9,8 @@ from .chat_format import (
     transform_messages,
     transform_messages_to_chatml,
 )
-from .lm.lm import LM, LLMTask
-from .lm.async_lm import AsyncLM
+from .lm.async_lm import AsyncLLMTask, AsyncLM
+from .lm.sync_lm import LM, LLMTask
 
 __all__ = [
     "transform_messages",
@@ -26,4 +26,5 @@ __all__ = [
     "AsyncLM",
     "display_chat_messages_as_html",
     "LLMTask",
+    "AsyncLLMTask",
 ]

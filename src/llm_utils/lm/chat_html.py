@@ -1,5 +1,5 @@
 from typing import Any, Optional, cast
-from .lm import LM, Messages, LegacyMsgs, RawMsgs
+from .sync_lm import LM, Messages, LegacyMsgs, RawMsgs
 import sys
 
 # Configuration
