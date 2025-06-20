@@ -1,3 +1,79 @@
+"""
+# ============================================================================= #
+# SYNCHRONOUS LANGUAGE MODEL WRAPPER WITH OPENAI COMPATIBILITY
+# ============================================================================= #
+#
+# Title & Intent:
+# Unified synchronous language model interface with caching, type safety, and OpenAI API compatibility
+#
+# High-level Summary:
+# This module provides a comprehensive synchronous wrapper for language models that supports both
+# string prompts and structured Pydantic model responses. It includes intelligent caching with
+# content-based hashing, automatic retry logic for rate limits, and seamless integration with
+# OpenAI-compatible APIs. The LM class handles message formatting, response parsing, token counting,
+# and provides detailed logging and debugging capabilities for production use.
+#
+# Public API / Data Contracts:
+# • LM(model, temperature=0.0, max_tokens=2000, host="localhost", port=None, **kwargs) - Main wrapper class
+# • LM.__call__(prompt=None, messages=None, response_format=str, cache=None, **kwargs) -> str | BaseModel
+# • LM.list_models(port=None) -> List[str] - Enumerate available models
+# • LM.count_tokens(messages, model=None) -> int - Token counting utility
+# • LM.price(messages, model=None, response_tokens=0) -> float - Cost estimation
+# • LM.set_model(model_name) -> None - Runtime model switching
+# • TModel = TypeVar("TModel", bound=BaseModel) - Generic type for structured responses
+# • Messages = List[ChatCompletionMessageParam] - Typed message format
+# • RawMsgs = Union[Messages, LegacyMsgs] - Flexible input format
+#
+# Invariants / Constraints:
+# • MUST provide either 'prompt' or 'messages' parameter, but not both
+# • MUST set model name before making API calls (auto-detection available)
+# • response_format=str MUST return string; response_format=PydanticModel MUST return model instance
+# • Caching MUST use content-based hashing for reproducible results
+# • MUST handle OpenAI rate limits with exponential backoff (up to 3 retries)
+# • MUST preserve message order and format during transformations
+# • Token counting SHOULD use tiktoken when available, fall back to character estimation
+# • MUST validate Pydantic responses and retry on parsing failures
+#
+# Usage Example:
+# ```python
+# from llm_utils.lm.sync_lm import LM
+# from pydantic import BaseModel
+#
+# class CodeResponse(BaseModel):
+#     language: str
+#     code: str
+#     explanation: str
+#
+# # String response
+# lm = LM(model="gpt-4o-mini", temperature=0.1)
+# response = lm(prompt="Write a Python hello world")
+# print(response)  # Returns string
+#
+# # Structured response
+# code_response = lm(
+#     prompt="Write a Python function to calculate fibonacci",
+#     response_format=CodeResponse
+# )
+# print(f"Language: {code_response.language}")  # Returns CodeResponse instance
+#
+# # Message-based conversation
+# messages = [
+#     {"role": "system", "content": "You are a helpful coding assistant"},
+#     {"role": "user", "content": "Explain async/await in Python"}
+# ]
+# response = lm(messages=messages, max_tokens=1000)
+# ```
+#
+# TODO & Future Work:
+# • Add streaming response support for long-form generation
+# • Implement fine-grained token usage tracking per conversation
+# • Add support for function calling and tool use
+# • Optimize caching strategy for conversation contexts
+# • Add async context manager support for resource cleanup
+#
+# ============================================================================= #
+"""
+
 from __future__ import annotations
 
 import base64
@@ -551,9 +627,9 @@ class LM:
 
         assert isinstance(messages, list), "Messages must be a list."
         assert len(messages) > 0, "Messages cannot be empty."
-        assert (
-            messages[0]["role"] == "system"
-        ), "First message must be a system message with instruction."
+        assert messages[0]["role"] == "system", (
+            "First message must be a system message with instruction."
+        )
         messages[0]["content"] += post_fix  # type: ignore
 
         model_kwargs = {}
@@ -674,14 +750,13 @@ class LM:
 
 @lru_cache(maxsize=10)
 def get_tokenizer(model_name: str) -> Any:
-    from transformers import AutoTokenizer # type: ignore
+    from transformers import AutoTokenizer  # type: ignore
 
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
     return tokenizer
 
 
 def inspect_word_probs(lm, tokenizer, messages):
-
     import numpy as np
 
     def compute_word_log_probs(
@@ -819,7 +894,7 @@ class LLMTask(ABC):
 
             temperature = 0.6
             think=False
-            
+
         demo_task = DemoTask()
         demo_task({'text_to_translate': 'Translate from english to vietnamese: Hello how are you'})
     ```

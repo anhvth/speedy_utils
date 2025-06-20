@@ -1,11 +1,85 @@
+"""
+# ============================================================================= #
+# VLLM LOAD BALANCER WITH HEALTH MONITORING AND DYNAMIC ROUTING
+# ============================================================================= #
+#
+# Title & Intent:
+# Production-ready TCP load balancer for vLLM model servers with health checks and connection management
+#
+# High-level Summary:
+# This module implements a high-performance load balancer specifically designed for vLLM model
+# serving infrastructure. It provides intelligent routing across multiple vLLM server instances,
+# continuous health monitoring, automatic failover, and connection pooling. The load balancer
+# uses async TCP proxying to handle concurrent requests efficiently while maintaining session
+# affinity and providing detailed metrics for monitoring and debugging.
+#
+# Public API / Data Contracts:
+# • LOAD_BALANCER_HOST = "0.0.0.0" - Load balancer bind address
+# • LOAD_BALANCER_PORT = 8008 - Load balancer listening port
+# • SCAN_TARGET_HOST = "localhost" - Target server host for health checks
+# • SCAN_PORT_START = 8140, SCAN_PORT_END = 8170 - Port range for server discovery
+# • start_load_balancer() -> None - Main entry point to start the service
+# • scan_for_healthy_servers() -> None - Background health monitoring task
+# • handle_client(reader, writer) -> None - Client connection handler
+# • relay_data(reader, writer, direction) -> None - Bidirectional data relay
+# • get_next_server() -> Optional[Tuple[str, int]] - Round-robin server selection
+#
+# Invariants / Constraints:
+# • MUST continuously monitor server health every SCAN_INTERVAL seconds
+# • MUST handle connection failures gracefully with automatic failover
+# • Health checks MUST complete within HEALTH_CHECK_TIMEOUT seconds
+# • MUST maintain connection counts for load balancing decisions
+# • Server availability MUST be updated atomically using async locks
+# • TCP connections MUST be properly closed on errors or completion
+# • MUST log all connection events and health status changes
+# • Round-robin selection MUST distribute load evenly across healthy servers
+#
+# Usage Example:
+# ```python
+# # Start the load balancer (blocking operation)
+# import asyncio
+# from llm_utils.scripts.vllm_load_balancer import start_load_balancer
+#
+# # Configure environment or modify constants as needed
+# LOAD_BALANCER_HOST = "0.0.0.0"
+# LOAD_BALANCER_PORT = 8008
+# SCAN_TARGET_HOST = "localhost"
+# SCAN_PORT_START = 8140
+# SCAN_PORT_END = 8150
+#
+# # Start the load balancer service
+# asyncio.run(start_load_balancer())
+#
+# # The service will:
+# # 1. Scan for healthy vLLM servers on ports 8140-8150
+# # 2. Accept client connections on port 8008
+# # 3. Route requests to healthy backend servers
+# # 4. Monitor server health continuously
+# # 5. Provide connection statistics
+# ```
+#
+# TODO & Future Work:
+# • Add weighted round-robin based on server capacity metrics
+# • Implement session affinity for stateful model interactions
+# • Add HTTP health check endpoints for better monitoring integration
+# • Support dynamic server registration and deregistration
+# • Add metrics export for Prometheus/Grafana monitoring
+# • Implement graceful shutdown with connection draining
+#
+# ============================================================================= #
+"""
+
 import asyncio
+import contextlib
 import random
 from collections import defaultdict
-from tabulate import tabulate
-import contextlib
+
 import aiohttp  # <-- Import aiohttp
-from speedy_utils import setup_logger
 from loguru import logger
+from tabulate import tabulate
+
+from speedy_utils import setup_logger
+
 setup_logger(min_interval=5)
 # --- Configuration ---
 LOAD_BALANCER_HOST = "0.0.0.0"
@@ -180,7 +254,9 @@ async def scan_and_update_servers():
                     if server not in connection_counts:
                         connection_counts[server] = 0
 
-            logger.debug(f"[{LOAD_BALANCER_PORT=}]Scan complete. Active servers: {available_servers}")
+            logger.debug(
+                f"[{LOAD_BALANCER_PORT=}]Scan complete. Active servers: {available_servers}"
+            )
 
         except asyncio.CancelledError:
             logger.info("Server scan task cancelled.")
@@ -219,9 +295,7 @@ async def handle_client(client_reader, client_writer):
 
             min_connections = float("inf")
             least_used_available_servers = []
-            for (
-                server
-            ) in (
+            for server in (
                 available_servers
             ):  # Iterate only over servers that passed health check
                 count = connection_counts.get(server, 0)

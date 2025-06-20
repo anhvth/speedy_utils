@@ -1,3 +1,46 @@
+# ----------------------------------------------------------------------------
+# speedy_utils/all.py
+#
+# Consolidated import collection for comprehensive library access
+#
+# This module provides a unified collection of standard library, third-party,
+# and internal imports commonly used across data science and development
+# workflows. It serves as a convenience module for interactive environments
+# and rapid prototyping by reducing boilerplate import statements.
+#
+# Public API / Data Contracts:
+# • All standard library modules: collections, concurrent.futures, pathlib, etc.
+# • Third-party dependencies: loguru.logger, pydantic.BaseModel, tqdm, tabulate
+# • Core utilities: Counter, defaultdict, ThreadPoolExecutor, as_completed
+# • Development tools: IPython.display.HTML, get_ipython for notebook detection
+# • Type system: Any, Dict, List, Optional, Union, TypeVar, Generic, Literal
+#
+# Invariants / Constraints:
+# • MUST only import stable, widely-used packages
+# • SHOULD handle import failures gracefully for optional dependencies
+# • MUST maintain consistent import aliases across the library
+# • SHOULD group imports by category (stdlib, third-party, internal)
+#
+# Usage Example:
+# ```python
+# from speedy_utils.all import *
+#
+# # Now have access to common utilities without individual imports
+# data = defaultdict(list)
+# results = []
+# for item in tqdm(items):
+#     results.append(process(item))
+#
+# df = tabulate(results, headers=['Item', 'Result'])
+# display(HTML(df))
+# ```
+#
+# TODO & Future Work:
+# • Add conditional imports for ML libraries (torch, numpy, pandas)
+# • Implement import health checking
+# • Add version compatibility warnings
+# ----------------------------------------------------------------------------
+
 # speedy_utils/all.py
 
 # Provide a consolidated set of imports for convenience

@@ -1,4 +1,81 @@
-"""Provides thread-based parallel execution utilities."""
+"""
+# ============================================================================= #
+# THREAD-BASED PARALLEL EXECUTION WITH PROGRESS TRACKING AND ERROR HANDLING
+# ============================================================================= #
+#
+# Title & Intent:
+# High-performance thread pool utilities for parallel processing with comprehensive error handling
+#
+# High-level Summary:
+# This module provides robust thread-based parallel execution utilities designed for CPU-bound
+# and I/O-bound tasks requiring concurrent processing. It features intelligent worker management,
+# comprehensive error handling with detailed tracebacks, progress tracking with tqdm integration,
+# and flexible batching strategies. The module optimizes for both throughput and reliability,
+# making it suitable for data processing pipelines, batch operations, and concurrent API calls.
+#
+# Public API / Data Contracts:
+# • multi_thread(func, inputs, num_workers=None, progress=True, **kwargs) -> List[Any] - Main parallel execution
+# • multi_thread_batch(func, inputs, batch_size=10, num_workers=None, **kwargs) -> List[Any] - Batched processing
+# • DEFAULT_WORKERS = (cpu_count * 2) - Default worker thread count
+# • T = TypeVar("T"), R = TypeVar("R") - Generic type variables for input/output typing
+# • _group_iter(src, size) -> Iterable[List[T]] - Utility for chunking iterables
+# • _worker(item, func, fixed_kwargs) -> R - Individual worker function wrapper
+# • _short_tb() -> str - Shortened traceback formatter for cleaner error logs
+#
+# Invariants / Constraints:
+# • Worker count MUST be positive integer, defaults to (CPU cores * 2)
+# • Input iterables MUST be finite and non-empty for meaningful processing
+# • Functions MUST be thread-safe when used with multiple workers
+# • Error handling MUST capture and log detailed tracebacks for debugging
+# • Progress tracking MUST be optional and gracefully handle tqdm unavailability
+# • Batch processing MUST maintain input order in results
+# • MUST handle keyboard interruption gracefully with resource cleanup
+# • Thread pool MUST be properly closed and joined after completion
+#
+# Usage Example:
+# ```python
+# from speedy_utils.multi_worker.thread import multi_thread, multi_thread_batch
+# import requests
+#
+# # Simple parallel processing
+# def square(x):
+#     return x ** 2
+#
+# numbers = list(range(100))
+# results = multi_thread(square, numbers, num_workers=8)
+# print(f"Processed {len(results)} items")
+#
+# # Parallel API calls with error handling
+# def fetch_url(url):
+#     response = requests.get(url, timeout=10)
+#     return response.status_code, len(response.content)
+#
+# urls = ["http://example.com", "http://google.com", "http://github.com"]
+# results = multi_thread(fetch_url, urls, num_workers=3, progress=True)
+#
+# # Batched processing for memory efficiency
+# def process_batch(items):
+#     return [item.upper() for item in items]
+#
+# large_dataset = ["item" + str(i) for i in range(10000)]
+# batched_results = multi_thread_batch(
+#     process_batch,
+#     large_dataset,
+#     batch_size=100,
+#     num_workers=4
+# )
+# ```
+#
+# TODO & Future Work:
+# • Add adaptive worker count based on task characteristics
+# • Implement priority queuing for time-sensitive tasks
+# • Add memory usage monitoring and automatic batch size adjustment
+# • Support for async function execution within thread pool
+# • Add detailed performance metrics and timing analysis
+# • Implement graceful degradation for resource-constrained environments
+#
+# ============================================================================= #
+"""
 
 import os
 import time

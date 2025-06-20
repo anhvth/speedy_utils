@@ -6,3 +6,4 @@ version=$(bump2version --allow-dirty --dry-run --list patch | grep new_version |
 message="Bumped version to $version"
 git add -A && git commit -m "$message"
 # git push
+ 

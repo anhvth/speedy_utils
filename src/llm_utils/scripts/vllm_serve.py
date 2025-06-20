@@ -1,28 +1,78 @@
-""" "
-USAGE:
-Serve models and LoRAs with vLLM:
-
-Serve a LoRA model:
-svllm serve --lora LORA_NAME LORA_PATH --gpus GPU_GROUPS
-
-Serve a base model:
-svllm serve --model MODEL_NAME --gpus GPU_GROUPS
-
-Add a LoRA to a served model:
-svllm add-lora --lora LORA_NAME LORA_PATH --host_port host:port
-(if add then the port must be specify)
+"""
+# ============================================================================= #
+# VLLM MODEL SERVING AND LORA MANAGEMENT UTILITIES
+# ============================================================================= #
+#
+# Title & Intent:
+# Command-line interface for serving language models and managing LoRA adapters with vLLM
+#
+# High-level Summary:
+# This module provides a comprehensive CLI tool for deploying and managing vLLM model servers
+# with support for base models, LoRA adapters, and dynamic adapter loading. It handles GPU
+# allocation, process management, model discovery, and provides utilities for adding/removing
+# LoRA adapters to running servers. The tool simplifies the deployment of production-ready
+# language model serving infrastructure with fine-tuned model support.
+#
+# Public API / Data Contracts:
+# • serve_model(model_name, gpus, **kwargs) -> subprocess.Popen - Start vLLM server for base model
+# • serve_lora(lora_name_or_path, gpus, **kwargs) -> subprocess.Popen - Start vLLM server with LoRA
+# • add_lora(lora_name_or_path, host_port, **kwargs) -> dict - Add LoRA to running server
+# • list_loras(host_port, api_key="abc") -> None - List available LoRA adapters
+# • model_list(host_port, api_key="abc") -> None - List available models
+# • remove_lora(lora_name, host_port, api_key="abc") -> dict - Remove LoRA adapter
+# • get_lora_path(lora_name_or_path) -> str - Resolve LoRA adapter path
+# • LORA_DIR: str - Environment-configurable LoRA storage directory
+# • HF_HOME: str - Hugging Face cache directory
+#
+# Invariants / Constraints:
+# • GPU groups MUST be specified as comma-separated integers (e.g., "0,1,2,3")
+# • LoRA paths MUST exist and contain valid adapter files
+# • Server endpoints MUST be reachable for dynamic LoRA operations
+# • MUST validate model and LoRA compatibility before serving
+# • Process management MUST handle graceful shutdown on interruption
+# • MUST respect CUDA device visibility and memory constraints
+# • LoRA operations MUST verify server API compatibility
+# • MUST log all serving operations and adapter changes
+#
+# Usage Example:
+# ```bash
+# # Serve a base model on GPUs 0,1
+# svllm serve --model meta-llama/Llama-2-7b-hf --gpus 0,1
+#
+# # Serve a model with LoRA adapter
+# svllm serve --lora my-adapter /path/to/adapter --gpus 0,1,2,3
+#
+# # Add LoRA to running server
+# svllm add-lora --lora new-adapter /path/to/new-adapter --host_port localhost:8000
+#
+# # List available models
+# svllm list-models --host_port localhost:8000
+#
+# # Remove LoRA adapter
+# svllm remove-lora --lora adapter-name --host_port localhost:8000
+# ```
+#
+# TODO & Future Work:
+# • Add support for multi-node distributed serving
+# • Implement automatic model quantization options
+# • Add configuration validation before server startup
+# • Support for custom tokenizer and chat templates
+# • Add health check endpoints for load balancer integration
+# • Implement rolling updates for zero-downtime deployments
+#
+# ============================================================================= #
 """
 
+import argparse
 import os
 import subprocess
 from typing import List, Optional
-import argparse
-import requests
+
 import openai
+import requests
 from loguru import logger
 
 from speedy_utils.common.utils_io import load_by_ext
-
 
 LORA_DIR: str = os.environ.get("LORA_DIR", "/loras")
 LORA_DIR = os.path.abspath(LORA_DIR)
@@ -181,9 +231,9 @@ def get_vllm() -> str:
     vllm_binary = subprocess.check_output("which vllm", shell=True, text=True).strip()
     vllm_binary = os.getenv("VLLM_BINARY", vllm_binary)
     logger.info(f"vLLM binary: {vllm_binary}")
-    assert os.path.exists(
-        vllm_binary
-    ), f"vLLM binary not found at {vllm_binary}, please set VLLM_BINARY env variable"
+    assert os.path.exists(vllm_binary), (
+        f"vLLM binary not found at {vllm_binary}, please set VLLM_BINARY env variable"
+    )
     return vllm_binary
 
 

@@ -1,16 +1,76 @@
-"""An **asynchronous** drop‑in replacement for the original `LM` class.
-
-Usage example (Python ≥3.8):
-
-    from async_lm import AsyncLM
-    import asyncio
-
-    async def main():
-        lm = AsyncLM(model="gpt-4o-mini")
-        reply: str = await lm(prompt="Hello, world!")
-        print(reply)
-
-    asyncio.run(main())
+"""
+# ============================================================================= #
+# ASYNCHRONOUS LANGUAGE MODEL WRAPPER WITH CONCURRENT EXECUTION SUPPORT
+# ============================================================================= #
+#
+# Title & Intent:
+# High-performance asynchronous language model interface for concurrent LLM operations
+#
+# High-level Summary:
+# This module provides an async drop-in replacement for the synchronous LM class, designed
+# for high-throughput applications requiring concurrent language model operations. It maintains
+# full API compatibility while adding async/await semantics, connection pooling, and efficient
+# resource management. The AsyncLM class supports batch processing, concurrent request handling,
+# and maintains the same caching and type safety guarantees as the synchronous version.
+#
+# Public API / Data Contracts:
+# • AsyncLM(model, temperature=0.0, max_tokens=2000, host="localhost", port=None, **kwargs) - Async wrapper class
+# • async AsyncLM.__call__(prompt=None, messages=None, response_format=str, cache=None, **kwargs) -> str | BaseModel
+# • async AsyncLM.list_models(port=None) -> List[str] - Enumerate available models
+# • async AsyncLM.count_tokens(messages, model=None) -> int - Token counting utility
+# • async AsyncLM.price(messages, model=None, response_tokens=0) -> float - Cost estimation
+# • AsyncLM.set_model(model_name) -> None - Runtime model switching (sync method)
+# • async AsyncLM.batch_call(requests) -> List[Union[str, BaseModel]] - Concurrent batch processing
+# • TModel = TypeVar("TModel", bound=BaseModel) - Generic type for structured responses
+# • Messages = List[ChatCompletionMessageParam] - Typed message format
+#
+# Invariants / Constraints:
+# • MUST be used within async context (asyncio event loop required)
+# • MUST provide either 'prompt' or 'messages' parameter, but not both
+# • MUST properly await all async method calls
+# • Connection pooling MUST handle concurrent requests efficiently
+# • MUST maintain thread safety across concurrent operations
+# • Rate limit handling MUST use async backoff without blocking event loop
+# • MUST preserve all synchronous LM class behaviors and constraints
+# • Resource cleanup MUST occur on context manager exit or explicit close
+#
+# Usage Example:
+# ```python
+# import asyncio
+# from llm_utils.lm.async_lm import AsyncLM
+# from pydantic import BaseModel
+#
+# class SummaryResponse(BaseModel):
+#     summary: str
+#     key_points: List[str]
+#     confidence: float
+#
+# async def main():
+#     # Single async call
+#     lm = AsyncLM(model="gpt-4o-mini", temperature=0.1)
+#     response = await lm(prompt="Summarize quantum computing")
+#     print(response)
+#
+#     # Concurrent batch processing
+#     texts = ["Text 1 to summarize", "Text 2 to summarize", "Text 3 to summarize"]
+#     tasks = [lm(prompt=f"Summarize: {text}", response_format=SummaryResponse) for text in texts]
+#     summaries = await asyncio.gather(*tasks)
+#
+#     for summary in summaries:
+#         print(f"Summary: {summary.summary}")
+#         print(f"Key points: {summary.key_points}")
+#
+# asyncio.run(main())
+# ```
+#
+# TODO & Future Work:
+# • Add async context manager support for automatic resource cleanup
+# • Implement connection pool size optimization based on usage patterns
+# • Add async streaming response support with async generators
+# • Optimize memory usage for large-scale concurrent operations
+# • Add async rate limiting with priority queuing
+#
+# ============================================================================= #
 """
 
 import base64
