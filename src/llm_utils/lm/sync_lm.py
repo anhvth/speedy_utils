@@ -939,3 +939,5 @@ class LLMTask(ABC):
         return get_conversation_one_turn(
             system_msg=system_prompt, user_msg=user_msg, assistant_msg=assistant_msg
         )
+
+    run = __call__  # alias for compatibility with other LLMTask implementations

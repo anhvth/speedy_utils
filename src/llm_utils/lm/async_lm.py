@@ -917,3 +917,4 @@ class AsyncLLMTask(ABC):
             system_msg=system_prompt, user_msg=user_msg, assistant_msg=assistant_msg
         )
         return {"messages": messages}
+    arun = __call__  # alias for compatibility with other LLMTask implementations
