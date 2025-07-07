@@ -894,8 +894,8 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
     """
 
     lm: "AsyncLM"
-    InputModel: Type[BaseModel]
-    OutputModel: Type[BaseModel]
+    InputModel: InputModelType
+    OutputModel: OutputModelType
 
     temperature: float = 0.6
     think: bool = False
@@ -906,8 +906,7 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
         data: BaseModel | dict,
         temperature: float = 0.1,
         cache: bool = False,
-        collect_messages: bool = False,
-    ) -> OutputModelType | tuple[OutputModelType, List[Dict[str, Any]]]:
+    ) -> tuple[OutputModelType, List[Dict[str, Any]]]:
         # Get the input and output model types from the generic parameters
         type_args = getattr(self.__class__, "__orig_bases__", None)
         if (
@@ -943,12 +942,10 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
             return_messages=True,
         )
 
-        if collect_messages:
-            return (
-                cast(OutputModelType, result),
-                result["messages"],
-            )
-        return cast(OutputModelType, result)
+        return (
+            cast(OutputModelType, result),# pared
+            cast(List[dict], result["messages"]) # type: ignore
+        )
 
     def generate_training_data(
         self, input_dict: Dict[str, Any], output: Dict[str, Any]
@@ -962,4 +959,4 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
         )
         return {"messages": messages}
 
-    # arun = __call__  # alias for compatibility with other LLMTask implementations
+    arun = __call__  # alias for compatibility with other LLMTask implementations
