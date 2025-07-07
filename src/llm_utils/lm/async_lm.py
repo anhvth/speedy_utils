@@ -547,7 +547,7 @@ class AsyncLM:
                 "completion": completion,
                 "parsed": output,
             }
-        return output
+        return {"parsed": output} 
 
     def _parse_complete_output(
         self, completion: Any, response_model: Type[BaseModel]
@@ -943,8 +943,8 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
         )
 
         return (
-            cast(OutputModelType, result),# pared
-            cast(List[dict], result["messages"]) # type: ignore
+            cast(OutputModelType, result["parsed"]),  # type: ignore
+            cast(List[dict], result["messages"])  # type: ignore
         )
 
     def generate_training_data(
