@@ -82,6 +82,7 @@ from functools import lru_cache
 from typing import (
     Any,
     Dict,
+    Generic,
     List,
     Literal,
     Optional,
@@ -95,6 +96,7 @@ from typing import (
 
 from httpx import URL
 from loguru import logger
+from numpy import isin
 from openai import AsyncOpenAI, AuthenticationError, BadRequestError, RateLimitError
 from openai.pagination import AsyncPage as AsyncSyncPage
 
@@ -462,6 +464,7 @@ class AsyncLM:
         max_tokens: Optional[int] = None,
         return_openai_response: bool = False,
         cache: Optional[bool] = True,
+        return_messages: bool = False,
         **kwargs,
     ):
         """Parse response using guided JSON generation."""
@@ -532,9 +535,19 @@ class AsyncLM:
             self._dump_cache(cache_key, completion)
 
         self.last_log = [prompt, messages, completion]
+
+        output = self._parse_complete_output(completion, response_model)
         if return_openai_response:
-            return completion
-        return self._parse_complete_output(completion, response_model)
+            return {"completion": completion, "parsed": output}
+        if return_messages:
+            # content = completion.model_dump()
+            full_messages = messages + [completion.model_dump()]
+            return {
+                "messages": full_messages,
+                "completion": completion,
+                "parsed": output,
+            }
+        return output
 
     def _parse_complete_output(
         self, completion: Any, response_model: Type[BaseModel]
@@ -839,8 +852,11 @@ async def inspect_word_probs_async(lm, tokenizer, messages):
 # Async LLMTask class
 # --------------------------------------------------------------------------- #
 
+InputModelType = TypeVar("InputModelType", bound=BaseModel)
+OutputModelType = TypeVar("OutputModelType", bound=BaseModel)
 
-class AsyncLLMTask(ABC):
+
+class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
     """
     Async callable wrapper around an AsyncLM endpoint.
 
@@ -885,30 +901,58 @@ class AsyncLLMTask(ABC):
     think: bool = False
     add_json_schema: bool = False
 
-    async def __call__(self, data: BaseModel | dict) -> BaseModel:
+    async def __call__(
+        self,
+        data: BaseModel | dict,
+        temperature: float = 0.1,
+        cache: bool = False,
+        collect_messages: bool = False,
+    ) -> OutputModelType | tuple[OutputModelType, List[Dict[str, Any]]]:
+        # Get the input and output model types from the generic parameters
+        type_args = getattr(self.__class__, "__orig_bases__", None)
         if (
-            not hasattr(self, "InputModel")
-            or not hasattr(self, "OutputModel")
-            or not hasattr(self, "lm")
+            type_args
+            and hasattr(type_args[0], "__args__")
+            and len(type_args[0].__args__) >= 2
         ):
-            raise NotImplementedError(
-                f"{self.__class__.__name__} must define lm, InputModel, and OutputModel as class attributes."
-            )
+            input_model = type_args[0].__args__[0]
+            output_model = type_args[0].__args__[1]
+        else:
+            # Fallback to the old way if type introspection fails
+            if (
+                not hasattr(self, "InputModel")
+                or not hasattr(self, "OutputModel")
+                or not hasattr(self, "lm")
+            ):
+                raise NotImplementedError(
+                    f"{self.__class__.__name__} must define lm, InputModel, and OutputModel as class attributes or use proper generic typing."
+                )
+            input_model = self.InputModel
+            output_model = self.OutputModel
 
-        item = data if isinstance(data, BaseModel) else self.InputModel(**data)
+        item = data if isinstance(data, BaseModel) else input_model(**data)
 
-        return await self.lm.parse(
+        result = await self.lm.parse(
             prompt=item.model_dump_json(),
             instruction=self.__doc__ or "",
-            response_model=self.OutputModel,
-            temperature=self.temperature,
+            response_model=output_model,
+            temperature=temperature or self.temperature,
             think=self.think,
             add_json_schema_to_instruction=self.add_json_schema,
+            cache=cache,
+            return_messages=True,
         )
+
+        if collect_messages:
+            return (
+                cast(OutputModelType, result),
+                result["messages"],
+            )
+        return cast(OutputModelType, result)
 
     def generate_training_data(
         self, input_dict: Dict[str, Any], output: Dict[str, Any]
-    ):
+    ) -> Dict[str, Any]:
         """Return share gpt like format"""
         system_prompt = self.__doc__ or ""
         user_msg = self.InputModel(**input_dict).model_dump_json()  # type: ignore[attr-defined]
@@ -917,4 +961,5 @@ class AsyncLLMTask(ABC):
             system_msg=system_prompt, user_msg=user_msg, assistant_msg=assistant_msg
         )
         return {"messages": messages}
-    arun = __call__  # alias for compatibility with other LLMTask implementations
+
+    # arun = __call__  # alias for compatibility with other LLMTask implementations

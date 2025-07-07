@@ -7,11 +7,6 @@ import numpy as np
 from loguru import logger
 
 
-def _clear_port_use(ports):
-    for port in ports:
-        file_counter: str = f"/tmp/port_use_counter_{port}.npy"
-        if os.path.exists(file_counter):
-            os.remove(file_counter)
 
 
 def _atomic_save(array: np.ndarray, filename: str):
