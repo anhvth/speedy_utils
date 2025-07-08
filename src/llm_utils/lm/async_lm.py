@@ -93,7 +93,7 @@ from typing import (
     cast,
     overload,
 )
-
+from typing_extensions import TypedDict
 from httpx import URL
 from loguru import logger
 from numpy import isin
@@ -144,6 +144,12 @@ def _blue(t):
 
 def _yellow(t):
     return _color(33, t)
+
+
+class ParsedOutput(TypedDict):
+    messages: List
+    completion: Any
+    parsed: BaseModel
 
 
 class AsyncLM:
@@ -462,11 +468,9 @@ class AsyncLM:
         add_json_schema_to_instruction: bool = False,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
-        return_openai_response: bool = False,
         cache: Optional[bool] = True,
-        return_messages: bool = False,
         **kwargs,
-    ):
+    ) -> ParsedOutput:  # -> dict[str, Any]:
         """Parse response using guided JSON generation."""
         if messages is None:
             assert instruction is not None, "Instruction must be provided."
@@ -517,37 +521,27 @@ class AsyncLM:
                 "response_format": response_model.__name__,
             }
             cache_key = self._cache_key(cache_data, {}, response_model)
-            cached_response = self._load_cache(cache_key)
-            self.last_log = [prompt, messages, cached_response]
-            if cached_response is not None:
-                if return_openai_response:
-                    return cached_response
-                return self._parse_complete_output(cached_response, response_model)
-
-        completion = await self.client.chat.completions.create(
-            model=self.model,  # type: ignore
-            messages=messages,  # type: ignore
-            extra_body={"guided_json": json_schema},
-            **model_kwargs,
-        )
-
-        if cache_key:
-            self._dump_cache(cache_key, completion)
+            completion = self._load_cache(cache_key)  # dict
+        else:
+            completion = await self.client.chat.completions.create(
+                model=self.model,  # type: ignore
+                messages=messages,  # type: ignore
+                extra_body={"guided_json": json_schema},
+                **model_kwargs,
+            )
+            completion = completion.model_dump()
+            if cache_key:
+                self._dump_cache(cache_key, completion)
 
         self.last_log = [prompt, messages, completion]
 
         output = self._parse_complete_output(completion, response_model)
-        if return_openai_response:
-            return {"completion": completion, "parsed": output}
-        if return_messages:
-            # content = completion.model_dump()
-            full_messages = messages + [completion.model_dump()]
-            return {
-                "messages": full_messages,
-                "completion": completion,
-                "parsed": output,
-            }
-        return {"parsed": output} 
+        full_messages = messages + [completion]
+        return ParsedOutput(
+            messages=full_messages,
+            completion=completion,
+            parsed=output,
+        )
 
     def _parse_complete_output(
         self, completion: Any, response_model: Type[BaseModel]
@@ -929,7 +923,17 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
             input_model = self.InputModel
             output_model = self.OutputModel
 
-        item = data if isinstance(data, BaseModel) else input_model(**data)
+        # Ensure input_model is a class before calling
+        if isinstance(data, BaseModel):
+            item = data
+        elif isinstance(input_model, type) and issubclass(input_model, BaseModel):
+            item = input_model(**data)
+        else:
+            raise TypeError("InputModel must be a subclass of BaseModel")
+
+        assert isinstance(output_model, type) and issubclass(output_model, BaseModel), (
+            "OutputModel must be a subclass of BaseModel"
+        )
 
         result = await self.lm.parse(
             prompt=item.model_dump_json(),
@@ -939,12 +943,11 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
             think=self.think,
             add_json_schema_to_instruction=self.add_json_schema,
             cache=cache,
-            return_messages=True,
         )
 
         return (
             cast(OutputModelType, result["parsed"]),  # type: ignore
-            cast(List[dict], result["messages"])  # type: ignore
+            cast(List[dict], result["messages"]),  # type: ignore
         )
 
     def generate_training_data(
