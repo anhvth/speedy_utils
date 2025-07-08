@@ -78,7 +78,7 @@ import hashlib
 import json
 import os
 from abc import ABC
-from functools import lru_cache
+from functools import cache, lru_cache
 from typing import (
     Any,
     Dict,
@@ -513,6 +513,7 @@ class AsyncLM:
 
         use_cache = self.do_cache if cache is None else cache
         cache_key = None
+        completion = None
         if use_cache:
             cache_data = {
                 "messages": messages,
@@ -522,7 +523,7 @@ class AsyncLM:
             }
             cache_key = self._cache_key(cache_data, {}, response_model)
             completion = self._load_cache(cache_key)  # dict
-        else:
+        if not completion:
             completion = await self.client.chat.completions.create(
                 model=self.model,  # type: ignore
                 messages=messages,  # type: ignore
@@ -532,7 +533,9 @@ class AsyncLM:
             completion = completion.model_dump()
             if cache_key:
                 self._dump_cache(cache_key, completion)
-
+        assert isinstance(completion, dict), (
+            "Completion must be a dictionary with OpenAI response format."
+        )
         self.last_log = [prompt, messages, completion]
 
         output = self._parse_complete_output(completion, response_model)
@@ -894,6 +897,7 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
     temperature: float = 0.6
     think: bool = False
     add_json_schema: bool = False
+    cache: bool = False
 
     async def __call__(
         self,
@@ -942,7 +946,7 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
             temperature=temperature or self.temperature,
             think=self.think,
             add_json_schema_to_instruction=self.add_json_schema,
-            cache=cache,
+            cache=self.cache or cache,
         )
 
         return (
