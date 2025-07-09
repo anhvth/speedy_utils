@@ -146,10 +146,13 @@ def _yellow(t):
     return _color(33, t)
 
 
-class ParsedOutput(TypedDict):
+
+TParsed = TypeVar('TParsed', bound=BaseModel)
+
+class ParsedOutput(TypedDict, Generic[TParsed]):
     messages: List
     completion: Any
-    parsed: BaseModel
+    parsed: TParsed
 
 
 class AsyncLM:
@@ -460,7 +463,7 @@ class AsyncLM:
     # ------------------------------------------------------------------ #
     async def parse(
         self,
-        response_model: Type[BaseModel],
+        response_model: Type[TParsed],
         instruction: Optional[str] = None,
         prompt: Optional[str] = None,
         messages: Optional[RawMsgs] = None,
@@ -470,7 +473,7 @@ class AsyncLM:
         max_tokens: Optional[int] = None,
         cache: Optional[bool] = True,
         **kwargs,
-    ) -> ParsedOutput:  # -> dict[str, Any]:
+    ) -> ParsedOutput[TParsed]:
         """Parse response using guided JSON generation."""
         if messages is None:
             assert instruction is not None, "Instruction must be provided."
@@ -538,7 +541,7 @@ class AsyncLM:
         )
         self.last_log = [prompt, messages, completion]
 
-        output = self._parse_complete_output(completion, response_model)
+        output = cast(TParsed, self._parse_complete_output(completion, response_model))
         full_messages = messages + [completion]
         return ParsedOutput(
             messages=full_messages,
