@@ -17,6 +17,7 @@ from speedy_utils import setup_logger
 
 setup_logger(min_interval=5)
 
+
 # --- CLI Argument Parsing ---
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -34,7 +35,7 @@ Features:
   • Least-connections load balancing
   • Professional terminal interface
   • Connection statistics and monitoring
-        """
+        """,
     )
     parser.add_argument(
         "port",
@@ -73,6 +74,7 @@ Features:
     )
     return parser.parse_args()
 
+
 # --- Configuration (populated from CLI) ---
 LOAD_BALANCER_HOST = "0.0.0.0"
 LOAD_BALANCER_PORT = 8008  # Will be overwritten by CLI
@@ -95,10 +97,10 @@ current_active_connections = 0
 # --- Terminal Utilities ---
 def clear_terminal():
     """Clear terminal screen with cross-platform support."""
-    if os.name == 'nt':  # Windows
-        os.system('cls')
+    if os.name == "nt":  # Windows
+        os.system("cls")
     else:  # Unix/Linux/MacOS
-        os.system('clear')
+        os.system("clear")
 
 
 def get_terminal_size():
@@ -114,12 +116,12 @@ def format_uptime(start_time):
     """Format uptime in a human-readable way."""
     if not start_time:
         return "Unknown"
-    
+
     uptime_seconds = time.time() - start_time
     hours = int(uptime_seconds // 3600)
     minutes = int((uptime_seconds % 3600) // 60)
     seconds = int(uptime_seconds % 60)
-    
+
     if hours > 0:
         return f"{hours}h {minutes}m {seconds}s"
     elif minutes > 0:
@@ -132,7 +134,7 @@ def print_banner():
     """Print a professional startup banner."""
     columns, _ = get_terminal_size()
     banner_width = min(columns - 4, 80)
-    
+
     print("=" * banner_width)
     print(f"{'🚀 vLLM Load Balancer':^{banner_width}}")
     print(f"{'High-Performance Async TCP/HTTP Load Balancer':^{banner_width}}")
@@ -149,35 +151,35 @@ def print_banner():
 
 # --- ANSI Color Codes ---
 class Colors:
-    RESET = '\033[0m'
-    BOLD = '\033[1m'
-    DIM = '\033[2m'
-    
+    RESET = "\033[0m"
+    BOLD = "\033[1m"
+    DIM = "\033[2m"
+
     # Foreground colors
-    BLACK = '\033[30m'
-    RED = '\033[31m'
-    GREEN = '\033[32m'
-    YELLOW = '\033[33m'
-    BLUE = '\033[34m'
-    MAGENTA = '\033[35m'
-    CYAN = '\033[36m'
-    WHITE = '\033[37m'
-    
+    BLACK = "\033[30m"
+    RED = "\033[31m"
+    GREEN = "\033[32m"
+    YELLOW = "\033[33m"
+    BLUE = "\033[34m"
+    MAGENTA = "\033[35m"
+    CYAN = "\033[36m"
+    WHITE = "\033[37m"
+
     # Bright colors
-    BRIGHT_BLACK = '\033[90m'
-    BRIGHT_RED = '\033[91m'
-    BRIGHT_GREEN = '\033[92m'
-    BRIGHT_YELLOW = '\033[93m'
-    BRIGHT_BLUE = '\033[94m'
-    BRIGHT_MAGENTA = '\033[95m'
-    BRIGHT_CYAN = '\033[96m'
-    BRIGHT_WHITE = '\033[97m'
-    
+    BRIGHT_BLACK = "\033[90m"
+    BRIGHT_RED = "\033[91m"
+    BRIGHT_GREEN = "\033[92m"
+    BRIGHT_YELLOW = "\033[93m"
+    BRIGHT_BLUE = "\033[94m"
+    BRIGHT_MAGENTA = "\033[95m"
+    BRIGHT_CYAN = "\033[96m"
+    BRIGHT_WHITE = "\033[97m"
+
     # Background colors
-    BG_RED = '\033[41m'
-    BG_GREEN = '\033[42m'
-    BG_YELLOW = '\033[43m'
-    BG_BLUE = '\033[44m'
+    BG_RED = "\033[41m"
+    BG_GREEN = "\033[42m"
+    BG_YELLOW = "\033[43m"
+    BG_BLUE = "\033[44m"
 
 
 # --- Helper Functions --- (relay_data and safe_close_writer remain the same)
@@ -222,7 +224,6 @@ async def safe_close_writer(writer):
                 await writer.wait_closed()
             except Exception as e:
                 logger.debug(f"Error closing writer in context manager: {e}")
-
 
 
 # --- Health Check for Provided Ports ---
@@ -337,7 +338,6 @@ async def scan_and_update_servers():
 async def handle_client(client_reader, client_writer):
     """Handles a single client connection."""
     client_addr = client_writer.get_extra_info("peername")
-    logger.info(f"Accepted connection from {client_addr}")
 
     backend_server = None
     backend_reader = None
@@ -376,15 +376,11 @@ async def handle_client(client_reader, client_writer):
                 connection_counts[selected_server] += 1
                 backend_server = selected_server
                 server_selected = True
-                
+
                 # Update global statistics
                 global total_connections_served, current_active_connections
                 total_connections_served += 1
                 current_active_connections += 1
-                
-                logger.info(
-                    f"Routing {client_addr} to {backend_server} (Current connections: {connection_counts[backend_server]})"
-                )
             else:
                 logger.error(
                     f"Logic error: No server chosen despite available servers list not being empty for {client_addr}."
@@ -473,23 +469,20 @@ async def handle_client(client_reader, client_writer):
     except Exception as e:
         logger.error(f"Error handling client {client_addr}: {e}")
     finally:
-        logger.info(f"Closing connection for {client_addr}")
         # Decrement connection count only if we successfully selected/incremented
         if backend_server and server_selected:
             async with state_lock:
                 if backend_server in connection_counts:
                     if connection_counts[backend_server] > 0:
                         connection_counts[backend_server] -= 1
-                        current_active_connections = max(0, current_active_connections - 1)
-                        logger.info(
-                            f"Connection closed for {client_addr}. Backend {backend_server} connections: {connection_counts[backend_server]}"
+                        current_active_connections = max(
+                            0, current_active_connections - 1
                         )
                     else:
                         logger.warning(
                             f"Attempted to decrement count below zero for {backend_server} on close"
                         )
                         connection_counts[backend_server] = 0
-
 
 
 # --- Status Reporting Task ---
@@ -514,35 +507,51 @@ async def display_status_dashboard():
     # Get terminal dimensions for responsive layout
     columns, rows = get_terminal_size()
     dash_width = min(columns - 4, 100)
-    
+
     # Header with title and timestamp
     current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"{Colors.BOLD}{Colors.BRIGHT_CYAN}{'=' * dash_width}{Colors.RESET}")
-    print(f"{Colors.BOLD}{Colors.BRIGHT_CYAN}{'🚀 vLLM Load Balancer Dashboard':^{dash_width}}{Colors.RESET}")
-    print(f"{Colors.BRIGHT_CYAN}{'Real-time Status & Monitoring':^{dash_width}}{Colors.RESET}")
+    print(
+        f"{Colors.BOLD}{Colors.BRIGHT_CYAN}{'🚀 vLLM Load Balancer Dashboard':^{dash_width}}{Colors.RESET}"
+    )
+    print(
+        f"{Colors.BRIGHT_CYAN}{'Real-time Status & Monitoring':^{dash_width}}{Colors.RESET}"
+    )
     print(f"{Colors.BOLD}{Colors.BRIGHT_CYAN}{'=' * dash_width}{Colors.RESET}")
     print()
-    
+
     # System Information Section
     uptime = format_uptime(start_time)
     print(f"{Colors.BOLD}{Colors.BRIGHT_WHITE}📊 System Information{Colors.RESET}")
     print(f"{Colors.BRIGHT_BLACK}{'─' * (dash_width // 2)}{Colors.RESET}")
     print(f"{Colors.YELLOW}🕐 Current Time:{Colors.RESET} {current_time}")
     print(f"{Colors.YELLOW}⏱️  Uptime:{Colors.RESET} {uptime}")
-    print(f"{Colors.YELLOW}🌐 Load Balancer:{Colors.RESET} {LOAD_BALANCER_HOST}:{LOAD_BALANCER_PORT}")
+    print(
+        f"{Colors.YELLOW}🌐 Load Balancer:{Colors.RESET} {LOAD_BALANCER_HOST}:{LOAD_BALANCER_PORT}"
+    )
     print(f"{Colors.YELLOW}🎯 Backend Host:{Colors.RESET} {BACKEND_HOST}")
-    print(f"{Colors.YELLOW}🔧 Configured Ports:{Colors.RESET} {', '.join(map(str, BACKEND_PORTS))}")
+    print(
+        f"{Colors.YELLOW}🔧 Configured Ports:{Colors.RESET} {', '.join(map(str, BACKEND_PORTS))}"
+    )
     print()
-    
+
     # Connection Statistics Section
     print(f"{Colors.BOLD}{Colors.BRIGHT_WHITE}📈 Connection Statistics{Colors.RESET}")
     print(f"{Colors.BRIGHT_BLACK}{'─' * (dash_width // 2)}{Colors.RESET}")
-    print(f"{Colors.GREEN}📊 Total Connections Served:{Colors.RESET} {total_connections_served:,}")
-    print(f"{Colors.GREEN}🔗 Currently Active:{Colors.RESET} {current_active_connections}")
-    print(f"{Colors.GREEN}⚡ Health Check Timeout:{Colors.RESET} {HEALTH_CHECK_TIMEOUT}s")
-    print(f"{Colors.GREEN}🔄 Status Update Interval:{Colors.RESET} {STATUS_PRINT_INTERVAL}s")
+    print(
+        f"{Colors.GREEN}📊 Total Connections Served:{Colors.RESET} {total_connections_served:,}"
+    )
+    print(
+        f"{Colors.GREEN}🔗 Currently Active:{Colors.RESET} {current_active_connections}"
+    )
+    print(
+        f"{Colors.GREEN}⚡ Health Check Timeout:{Colors.RESET} {HEALTH_CHECK_TIMEOUT}s"
+    )
+    print(
+        f"{Colors.GREEN}🔄 Status Update Interval:{Colors.RESET} {STATUS_PRINT_INTERVAL}s"
+    )
     print()
-    
+
     # Backend Servers Status
     print(f"{Colors.BOLD}{Colors.BRIGHT_WHITE}Backend Servers Status{Colors.RESET}")
     print(f"{Colors.BRIGHT_BLACK}{'─' * (dash_width // 2)}{Colors.RESET}")
@@ -552,7 +561,7 @@ async def display_status_dashboard():
         f"{Colors.BOLD}Host{Colors.RESET}",
         f"{Colors.BOLD}Port{Colors.RESET}",
         f"{Colors.BOLD}Active Conn.{Colors.RESET}",
-        f"{Colors.BOLD}Status{Colors.RESET}"
+        f"{Colors.BOLD}Status{Colors.RESET}",
     ]
 
     table_data = []
@@ -580,13 +589,15 @@ async def display_status_dashboard():
             else f"{Colors.BG_RED}{Colors.WHITE} OFFLINE {Colors.RESET}"
         )
 
-        table_data.append([
-            f"{Colors.CYAN}{BACKEND_HOST}:{port}{Colors.RESET}",
-            BACKEND_HOST,
-            str(port),
-            conn_display,
-            status_display
-        ])
+        table_data.append(
+            [
+                f"{Colors.CYAN}{BACKEND_HOST}:{port}{Colors.RESET}",
+                BACKEND_HOST,
+                str(port),
+                conn_display,
+                status_display,
+            ]
+        )
 
     try:
         table = tabulate(table_data, headers=headers, tablefmt="fancy_grid")
@@ -594,13 +605,23 @@ async def display_status_dashboard():
         print()
 
         # Summary metrics
-        online_count = sum(1 for port in BACKEND_PORTS if (BACKEND_HOST, port) in current_available)
-        avg_connections = total_backend_connections / online_count if online_count else 0
+        online_count = sum(
+            1 for port in BACKEND_PORTS if (BACKEND_HOST, port) in current_available
+        )
+        avg_connections = (
+            total_backend_connections / online_count if online_count else 0
+        )
         print(f"{Colors.BOLD}{Colors.BRIGHT_WHITE}📋 Summary{Colors.RESET}")
         print(f"{Colors.BRIGHT_BLACK}{'─' * (dash_width // 4)}{Colors.RESET}")
-        print(f"{Colors.MAGENTA}🟢 Available Servers:{Colors.RESET} {online_count} / {len(BACKEND_PORTS)}")
-        print(f"{Colors.MAGENTA}📊 Total Backend Connections:{Colors.RESET} {total_backend_connections}")
-        print(f"{Colors.MAGENTA}📈 Average Load per Online Server:{Colors.RESET} {avg_connections:.1f}")
+        print(
+            f"{Colors.MAGENTA}🟢 Available Servers:{Colors.RESET} {online_count} / {len(BACKEND_PORTS)}"
+        )
+        print(
+            f"{Colors.MAGENTA}📊 Total Backend Connections:{Colors.RESET} {total_backend_connections}"
+        )
+        print(
+            f"{Colors.MAGENTA}📈 Average Load per Online Server:{Colors.RESET} {avg_connections:.1f}"
+        )
 
     except Exception as e:
         logger.error(f"Error displaying status table: {e}")
@@ -609,14 +630,16 @@ async def display_status_dashboard():
     # Footer with refresh info
     print()
     print(f"{Colors.BRIGHT_BLACK}{'─' * dash_width}{Colors.RESET}")
-    print(f"{Colors.DIM}🔄 Auto-refresh every {STATUS_PRINT_INTERVAL}s | Press Ctrl+C to stop{Colors.RESET}")
+    print(
+        f"{Colors.DIM}🔄 Auto-refresh every {STATUS_PRINT_INTERVAL}s | Press Ctrl+C to stop{Colors.RESET}"
+    )
     print(f"{Colors.BRIGHT_BLACK}{'─' * dash_width}{Colors.RESET}")
     print()
 
 
-
 # --- HTTP Stats Server ---
 from aiohttp import web
+
 
 async def stats_json(request):
     async with state_lock:
@@ -626,12 +649,16 @@ async def stats_json(request):
         for port in BACKEND_PORTS:
             server = (BACKEND_HOST, port)
             is_online = server in available_set
-            all_servers.append({
-                "host": BACKEND_HOST,
-                "port": port,
-                "active_connections": connection_counts.get(server, 0) if is_online else 0,
-                "status": "ONLINE" if is_online else "OFFLINE",
-            })
+            all_servers.append(
+                {
+                    "host": BACKEND_HOST,
+                    "port": port,
+                    "active_connections": connection_counts.get(server, 0)
+                    if is_online
+                    else 0,
+                    "status": "ONLINE" if is_online else "OFFLINE",
+                }
+            )
         stats = {
             "time": datetime.now().isoformat(),
             "uptime": format_uptime(start_time),
@@ -646,6 +673,7 @@ async def stats_json(request):
             "servers": all_servers,
         }
     return web.json_response(stats)
+
 
 async def stats_page(request):
     # High-quality HTML dashboard with auto-refresh and charts
@@ -786,73 +814,84 @@ async def stats_page(request):
     </script>
 </body>
 </html>
-            """
+            """,
     )
 
+
 async def start_stats_server(loop):
-        app = web.Application()
-        app.router.add_get('/stats', stats_page)
-        app.router.add_get('/stats.json', stats_json)
-        runner = web.AppRunner(app)
-        await runner.setup()
-        site = web.TCPSite(runner, LOAD_BALANCER_HOST, STATS_PORT)
-        await site.start()
-        logger.info(f"Stats HTTP server running at http://{LOAD_BALANCER_HOST}:{STATS_PORT}/stats")
+    app = web.Application()
+    app.router.add_get("/stats", stats_page)
+    app.router.add_get("/stats.json", stats_json)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, LOAD_BALANCER_HOST, STATS_PORT)
+    await site.start()
+    logger.info(
+        f"Stats HTTP server running at http://{LOAD_BALANCER_HOST}:{STATS_PORT}/stats"
+    )
+
 
 async def main():
-        global start_time
-        start_time = time.time()
-        clear_terminal()
-        print_banner()
+    global start_time
+    start_time = time.time()
+    clear_terminal()
+    print_banner()
 
-        # Start background tasks
-        scan_task = asyncio.create_task(scan_and_update_servers())
-        status_task = asyncio.create_task(print_status_periodically())
+    # Start background tasks
+    scan_task = asyncio.create_task(scan_and_update_servers())
+    status_task = asyncio.create_task(print_status_periodically())
 
-        # Start HTTP stats server (on STATS_PORT)
-        loop = asyncio.get_running_loop()
-        await start_stats_server(loop)
+    # Start HTTP stats server (on STATS_PORT)
+    loop = asyncio.get_running_loop()
+    await start_stats_server(loop)
 
-        # Start TCP server (on LOAD_BALANCER_PORT)
-        server = await asyncio.start_server(
-            handle_client, LOAD_BALANCER_HOST, LOAD_BALANCER_PORT
-        )
+    # Start TCP server (on LOAD_BALANCER_PORT)
+    server = await asyncio.start_server(
+        handle_client, LOAD_BALANCER_HOST, LOAD_BALANCER_PORT
+    )
 
-        addrs = ", ".join(str(sock.getsockname()) for sock in server.sockets)
-        logger.info(f"Load balancer serving on {addrs}")
-        logger.info(
-            f"Configured backend ports: {BACKEND_PORTS} on host {BACKEND_HOST}"
-        )
-        print(f"{Colors.BRIGHT_GREEN}✅ Load balancer started successfully!{Colors.RESET}")
-        print(f"{Colors.BRIGHT_GREEN}🌐 Proxy listening on: {addrs}{Colors.RESET}")
-        print(f"{Colors.BRIGHT_GREEN}📊 Stats dashboard: http://localhost:{STATS_PORT}/stats{Colors.RESET}")
-        print(f"{Colors.YELLOW}🔍 Scanning backend servers...{Colors.RESET}")
-        print()
-        await asyncio.sleep(2)
+    addrs = ", ".join(str(sock.getsockname()) for sock in server.sockets)
+    logger.info(f"Load balancer serving on {addrs}")
+    logger.info(f"Configured backend ports: {BACKEND_PORTS} on host {BACKEND_HOST}")
+    print(f"{Colors.BRIGHT_GREEN}✅ Load balancer started successfully!{Colors.RESET}")
+    print(f"{Colors.BRIGHT_GREEN}🌐 Proxy listening on: {addrs}{Colors.RESET}")
+    print(
+        f"{Colors.BRIGHT_GREEN}📊 Stats dashboard: http://localhost:{STATS_PORT}/stats{Colors.RESET}"
+    )
+    print(f"{Colors.YELLOW}🔍 Scanning backend servers...{Colors.RESET}")
+    print()
+    await asyncio.sleep(2)
 
-        async with server:
+    async with server:
+        try:
+            await server.serve_forever()
+        except asyncio.CancelledError:
+            print(f"\n{Colors.YELLOW}🛑 Shutdown signal received...{Colors.RESET}")
+            logger.info("Load balancer server shutting down.")
+        except KeyboardInterrupt:
+            print(f"\n{Colors.YELLOW}🛑 Shutdown requested by user...{Colors.RESET}")
+            logger.info("Shutdown requested by user.")
+        finally:
+            print(f"{Colors.CYAN}🔄 Cleaning up background tasks...{Colors.RESET}")
+            logger.info("Cancelling background tasks...")
+            scan_task.cancel()
+            status_task.cancel()
             try:
-                await server.serve_forever()
+                await asyncio.gather(scan_task, status_task, return_exceptions=True)
             except asyncio.CancelledError:
-                print(f"\n{Colors.YELLOW}🛑 Shutdown signal received...{Colors.RESET}")
-                logger.info("Load balancer server shutting down.")
-            except KeyboardInterrupt:
-                print(f"\n{Colors.YELLOW}🛑 Shutdown requested by user...{Colors.RESET}")
-                logger.info("Shutdown requested by user.")
-            finally:
-                print(f"{Colors.CYAN}🔄 Cleaning up background tasks...{Colors.RESET}")
-                logger.info("Cancelling background tasks...")
-                scan_task.cancel()
-                status_task.cancel()
-                try:
-                    await asyncio.gather(scan_task, status_task, return_exceptions=True)
-                except asyncio.CancelledError:
-                    pass
-                print(f"{Colors.BRIGHT_GREEN}✅ Shutdown complete. Goodbye!{Colors.RESET}")
-                logger.info("Background tasks finished.")
+                pass
+            print(f"{Colors.BRIGHT_GREEN}✅ Shutdown complete. Goodbye!{Colors.RESET}")
+            logger.info("Background tasks finished.")
+
 
 def run_load_balancer():
-    global LOAD_BALANCER_PORT, BACKEND_PORTS, BACKEND_HOST, STATUS_PRINT_INTERVAL, HEALTH_CHECK_TIMEOUT, STATS_PORT
+    global \
+        LOAD_BALANCER_PORT, \
+        BACKEND_PORTS, \
+        BACKEND_HOST, \
+        STATUS_PRINT_INTERVAL, \
+        HEALTH_CHECK_TIMEOUT, \
+        STATS_PORT
     args = parse_args()
     LOAD_BALANCER_PORT = args.port
     BACKEND_HOST = args.host
@@ -865,7 +904,9 @@ def run_load_balancer():
         STATS_PORT = LOAD_BALANCER_PORT + 1
     if not BACKEND_PORTS:
         print(f"{Colors.BG_RED}{Colors.WHITE} ❌ ERROR {Colors.RESET}")
-        print(f"{Colors.RED}No backend ports specified. Use --ports 8140,8150 ...{Colors.RESET}")
+        print(
+            f"{Colors.RED}No backend ports specified. Use --ports 8140,8150 ...{Colors.RESET}"
+        )
         logger.critical("No backend ports specified. Use --ports 8140,8150 ...")
         sys.exit(1)
     try:
@@ -877,6 +918,7 @@ def run_load_balancer():
         print(f"\n{Colors.BG_RED}{Colors.WHITE} ❌ CRITICAL ERROR {Colors.RESET}")
         print(f"{Colors.RED}Critical error in main execution: {e}{Colors.RESET}")
         logger.critical(f"Critical error in main execution: {e}")
+
 
 if __name__ == "__main__":
     run_load_balancer()
