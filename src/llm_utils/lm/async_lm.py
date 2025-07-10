@@ -1,77 +1,3 @@
-"""
-# ============================================================================= #
-# ASYNCHRONOUS LANGUAGE MODEL WRAPPER WITH CONCURRENT EXECUTION SUPPORT
-# ============================================================================= #
-#
-# Title & Intent:
-# High-performance asynchronous language model interface for concurrent LLM operations
-#
-# High-level Summary:
-# This module provides an async drop-in replacement for the synchronous LM class, designed
-# for high-throughput applications requiring concurrent language model operations. It maintains
-# full API compatibility while adding async/await semantics, connection pooling, and efficient
-# resource management. The AsyncLM class supports batch processing, concurrent request handling,
-# and maintains the same caching and type safety guarantees as the synchronous version.
-#
-# Public API / Data Contracts:
-# • AsyncLM(model, temperature=0.0, max_tokens=2000, host="localhost", port=None, **kwargs) - Async wrapper class
-# • async AsyncLM.__call__(prompt=None, messages=None, response_format=str, cache=None, **kwargs) -> str | BaseModel
-# • async AsyncLM.list_models(port=None) -> List[str] - Enumerate available models
-# • async AsyncLM.count_tokens(messages, model=None) -> int - Token counting utility
-# • async AsyncLM.price(messages, model=None, response_tokens=0) -> float - Cost estimation
-# • AsyncLM.set_model(model_name) -> None - Runtime model switching (sync method)
-# • async AsyncLM.batch_call(requests) -> List[Union[str, BaseModel]] - Concurrent batch processing
-# • TModel = TypeVar("TModel", bound=BaseModel) - Generic type for structured responses
-# • Messages = List[ChatCompletionMessageParam] - Typed message format
-#
-# Invariants / Constraints:
-# • MUST be used within async context (asyncio event loop required)
-# • MUST provide either 'prompt' or 'messages' parameter, but not both
-# • MUST properly await all async method calls
-# • Connection pooling MUST handle concurrent requests efficiently
-# • MUST maintain thread safety across concurrent operations
-# • Rate limit handling MUST use async backoff without blocking event loop
-# • MUST preserve all synchronous LM class behaviors and constraints
-# • Resource cleanup MUST occur on context manager exit or explicit close
-#
-# Usage Example:
-# ```python
-# import asyncio
-# from llm_utils.lm.async_lm import AsyncLM
-# from pydantic import BaseModel
-#
-# class SummaryResponse(BaseModel):
-#     summary: str
-#     key_points: List[str]
-#     confidence: float
-#
-# async def main():
-#     # Single async call
-#     lm = AsyncLM(model="gpt-4o-mini", temperature=0.1)
-#     response = await lm(prompt="Summarize quantum computing")
-#     print(response)
-#
-#     # Concurrent batch processing
-#     texts = ["Text 1 to summarize", "Text 2 to summarize", "Text 3 to summarize"]
-#     tasks = [lm(prompt=f"Summarize: {text}", response_format=SummaryResponse) for text in texts]
-#     summaries = await asyncio.gather(*tasks)
-#
-#     for summary in summaries:
-#         print(f"Summary: {summary.summary}")
-#         print(f"Key points: {summary.key_points}")
-#
-# asyncio.run(main())
-# ```
-#
-# TODO & Future Work:
-# • Add async context manager support for automatic resource cleanup
-# • Implement connection pool size optimization based on usage patterns
-# • Add async streaming response support with async generators
-# • Optimize memory usage for large-scale concurrent operations
-# • Add async rate limiting with priority queuing
-#
-# ============================================================================= #
-"""
 
 import base64
 import hashlib
@@ -110,7 +36,7 @@ from openai.types.chat import (
 )
 from openai.types.model import Model
 from pydantic import BaseModel
-
+from pydantic import ValidationError
 from llm_utils.chat_format.display import get_conversation_one_turn
 
 # --------------------------------------------------------------------------- #
@@ -146,8 +72,8 @@ def _yellow(t):
     return _color(33, t)
 
 
+TParsed = TypeVar("TParsed", bound=BaseModel)
 
-TParsed = TypeVar('TParsed', bound=BaseModel)
 
 class ParsedOutput(TypedDict, Generic[TParsed]):
     messages: List
@@ -561,7 +487,49 @@ class AsyncLM:
 
         content = completion["choices"][0]["message"]["content"]
         if not content:
-            raise ValueError("Empty content in response")
+            # Enhanced error for debugging: show input tokens and their count
+
+            # Try to extract tokens from the completion for debugging
+            input_tokens = None
+            try:
+                input_tokens = completion.get('usage', {}).get('prompt_tokens')
+            except Exception:
+                input_tokens = None
+
+            # Try to get the prompt/messages for tokenization
+            prompt = None
+            try:
+                prompt = completion.get('messages') or completion.get('prompt')
+            except Exception:
+                prompt = None
+
+            tokens_preview = ''
+            if prompt is not None:
+                try:
+                    tokenizer = get_tokenizer(self.model)
+                    if isinstance(prompt, list):
+                        prompt_text = '\n'.join(
+                            m.get('content', '') for m in prompt if isinstance(m, dict)
+                        )
+                    else:
+                        prompt_text = str(prompt)
+                    tokens = tokenizer.encode(prompt_text)
+                    n_tokens = len(tokens)
+                    first_100 = tokens[:100]
+                    last_100 = tokens[-100:] if n_tokens > 100 else []
+                    tokens_preview = (
+                        f'\nInput tokens: {n_tokens}'
+                        f'\nFirst 100 tokens: {first_100}'
+                        f'\nLast 100 tokens: {last_100}'
+                    )
+                except Exception as exc:
+                    tokens_preview = f'\n[Tokenization failed: {exc}]'
+
+            raise ValueError(
+                f'Empty content in response.'
+                f'\nInput tokens (if available): {input_tokens}'
+                f'{tokens_preview}'
+            )
 
         try:
             data = json.loads(content)
@@ -743,6 +711,7 @@ async def inspect_word_probs_async(lm, tokenizer, messages):
     """Async version of inspect_word_probs."""
 
     import numpy as np
+    
 
     async def compute_word_log_probs(
         tokenizer: Any,
@@ -907,6 +876,7 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
         data: BaseModel | dict,
         temperature: float = 0.1,
         cache: bool = False,
+        think: Optional[bool] = None,  # if not None, overrides self.think
     ) -> tuple[OutputModelType, List[Dict[str, Any]]]:
         # Get the input and output model types from the generic parameters
         type_args = getattr(self.__class__, "__orig_bases__", None)
@@ -947,7 +917,7 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
             instruction=self.__doc__ or "",
             response_model=output_model,
             temperature=temperature or self.temperature,
-            think=self.think,
+            think=think if think is not None else self.think,
             add_json_schema_to_instruction=self.add_json_schema,
             cache=self.cache or cache,
         )
