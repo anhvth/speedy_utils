@@ -1,10 +1,9 @@
-
 import base64
 import hashlib
 import json
 import os
 from abc import ABC
-from functools import cache, lru_cache
+from functools import lru_cache
 from typing import (
     Any,
     Dict,
@@ -492,24 +491,24 @@ class AsyncLM:
             # Try to extract tokens from the completion for debugging
             input_tokens = None
             try:
-                input_tokens = completion.get('usage', {}).get('prompt_tokens')
+                input_tokens = completion.get("usage", {}).get("prompt_tokens")
             except Exception:
                 input_tokens = None
 
             # Try to get the prompt/messages for tokenization
             prompt = None
             try:
-                prompt = completion.get('messages') or completion.get('prompt')
+                prompt = completion.get("messages") or completion.get("prompt")
             except Exception:
                 prompt = None
 
-            tokens_preview = ''
+            tokens_preview = ""
             if prompt is not None:
                 try:
                     tokenizer = get_tokenizer(self.model)
                     if isinstance(prompt, list):
-                        prompt_text = '\n'.join(
-                            m.get('content', '') for m in prompt if isinstance(m, dict)
+                        prompt_text = "\n".join(
+                            m.get("content", "") for m in prompt if isinstance(m, dict)
                         )
                     else:
                         prompt_text = str(prompt)
@@ -518,17 +517,17 @@ class AsyncLM:
                     first_100 = tokens[:100]
                     last_100 = tokens[-100:] if n_tokens > 100 else []
                     tokens_preview = (
-                        f'\nInput tokens: {n_tokens}'
-                        f'\nFirst 100 tokens: {first_100}'
-                        f'\nLast 100 tokens: {last_100}'
+                        f"\nInput tokens: {n_tokens}"
+                        f"\nFirst 100 tokens: {first_100}"
+                        f"\nLast 100 tokens: {last_100}"
                     )
                 except Exception as exc:
-                    tokens_preview = f'\n[Tokenization failed: {exc}]'
+                    tokens_preview = f"\n[Tokenization failed: {exc}]"
 
             raise ValueError(
-                f'Empty content in response.'
-                f'\nInput tokens (if available): {input_tokens}'
-                f'{tokens_preview}'
+                f"Empty content in response."
+                f"\nInput tokens (if available): {input_tokens}"
+                f"{tokens_preview}"
             )
 
         try:
@@ -711,7 +710,6 @@ async def inspect_word_probs_async(lm, tokenizer, messages):
     """Async version of inspect_word_probs."""
 
     import numpy as np
-    
 
     async def compute_word_log_probs(
         tokenizer: Any,

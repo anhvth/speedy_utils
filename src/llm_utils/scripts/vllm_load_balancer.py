@@ -28,11 +28,13 @@ Examples:
   python vllm_load_balancer.py 8001 --ports 8140,8150,8160
   python vllm_load_balancer.py 8080 --ports 8140,8150 --host 192.168.1.100
   python vllm_load_balancer.py 8001 --ports 8140,8150 --status-interval 3
+  python vllm_load_balancer.py 8001 --ports 8140,8150 --throttle-ms 10
 
 Features:
   • Real-time dashboard with color-coded status
   • Automatic health checks and failover
   • Least-connections load balancing
+  • Request throttling to prevent server overload
   • Professional terminal interface
   • Connection statistics and monitoring
         """,
@@ -72,6 +74,12 @@ Features:
         default=None,
         help="Port for the HTTP stats dashboard (default: proxy port + 1)",
     )
+    parser.add_argument(
+        "--throttle-ms",
+        type=float,
+        default=30.0,
+        help="Minimum milliseconds between requests to same server (default: 5ms)",
+    )
     return parser.parse_args()
 
 
@@ -83,11 +91,13 @@ BACKEND_HOST = "localhost"  # Will be overwritten by CLI
 BACKEND_PORTS = []  # Will be overwritten by CLI
 STATUS_PRINT_INTERVAL = 5
 HEALTH_CHECK_TIMEOUT = 2
+THROTTLE_MS = 5.0  # Will be overwritten by CLI
 BUFFER_SIZE = 4096
 
 # --- Global Shared State ---
 available_servers = []
 connection_counts = defaultdict(int)
+last_send_times = defaultdict(float)  # Track last send time per server
 state_lock = asyncio.Lock()
 start_time = None
 total_connections_served = 0
@@ -145,6 +155,7 @@ def print_banner():
     print(f"Backend Ports: {', '.join(map(str, BACKEND_PORTS))}")
     print(f"Health Check Interval: 10s (Timeout: {HEALTH_CHECK_TIMEOUT}s)")
     print(f"Status Update Interval: {STATUS_PRINT_INTERVAL}s")
+    print(f"Request Throttling: {THROTTLE_MS}ms minimum between requests")
     print("=" * banner_width)
     print()
 
@@ -314,6 +325,11 @@ async def scan_and_update_servers():
                             logger.debug(
                                 f"Removed connection count entry for unavailable server {server}"
                             )
+                        if server in last_send_times:
+                            del last_send_times[server]
+                            logger.debug(
+                                f"Removed throttling timestamp for unavailable server {server}"
+                            )
 
                 available_servers = sorted(list(current_set))
                 for server in available_servers:
@@ -398,6 +414,29 @@ async def handle_client(client_reader, client_writer):
                 pass
             server_selected = False
             return
+        
+        # --- Throttling Logic ---
+        # Check if we need to throttle requests to avoid overwhelming the backend
+        current_time = time.time() * 1000  # Convert to milliseconds
+        sleep_time = 0
+        async with state_lock:
+            last_send_time = last_send_times.get(backend_server, 0)
+            time_since_last_send = current_time - last_send_time
+            
+            if time_since_last_send < THROTTLE_MS:
+                sleep_time = (THROTTLE_MS - time_since_last_send) / 1000  # Convert to seconds
+                logger.debug(
+                    f"Throttling request to {backend_server} for {sleep_time:.3f}s (last send: {time_since_last_send:.1f}ms ago)"
+                )
+        
+        # Sleep outside the lock to avoid blocking other clients
+        if sleep_time > 0:
+            await asyncio.sleep(sleep_time)
+        
+        # Update last send time after throttling
+        async with state_lock:
+            last_send_times[backend_server] = time.time() * 1000
+        
         try:
             logger.debug(
                 f"Attempting connection to backend {backend_server} for {client_addr}"
@@ -533,6 +572,7 @@ async def display_status_dashboard():
     print(
         f"{Colors.YELLOW}🔧 Configured Ports:{Colors.RESET} {', '.join(map(str, BACKEND_PORTS))}"
     )
+    print(f"{Colors.YELLOW}⚡ Request Throttling:{Colors.RESET} {THROTTLE_MS}ms minimum")
     print()
 
     # Connection Statistics Section
@@ -670,6 +710,7 @@ async def stats_json(request):
             "current_active_connections": current_active_connections,
             "health_check_timeout": HEALTH_CHECK_TIMEOUT,
             "status_update_interval": STATUS_PRINT_INTERVAL,
+            "throttle_ms": THROTTLE_MS,
             "servers": all_servers,
         }
     return web.json_response(stats)
@@ -891,6 +932,7 @@ def run_load_balancer():
         BACKEND_HOST, \
         STATUS_PRINT_INTERVAL, \
         HEALTH_CHECK_TIMEOUT, \
+        THROTTLE_MS, \
         STATS_PORT
     args = parse_args()
     LOAD_BALANCER_PORT = args.port
@@ -898,6 +940,7 @@ def run_load_balancer():
     BACKEND_PORTS = [int(p.strip()) for p in args.ports.split(",") if p.strip()]
     STATUS_PRINT_INTERVAL = args.status_interval
     HEALTH_CHECK_TIMEOUT = args.health_timeout
+    THROTTLE_MS = args.throttle_ms
     if args.stats_port is not None:
         STATS_PORT = args.stats_port
     else:
