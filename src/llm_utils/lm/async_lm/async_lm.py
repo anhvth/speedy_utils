@@ -3,18 +3,14 @@ import base64
 import hashlib
 import json
 import os
-from abc import ABC
-from functools import lru_cache
 from typing import (
     Any,
     Dict,
-    Generic,
     List,
     Literal,
     Optional,
     Sequence,
     Type,
-    TypeVar,
     Union,
     cast,
     overload,
@@ -35,9 +31,6 @@ from openai.types.chat import (
 )
 from openai.types.model import Model
 from pydantic import BaseModel
-from typing_extensions import TypedDict
-
-from llm_utils.chat_format.display import get_conversation_one_turn
 from speedy_utils import jloads
 
 from ._utils import (
@@ -178,7 +171,7 @@ class AsyncLM:
         else:
             response = self._parse_output(raw_response, response_format)
 
-        self.last_log = [prompt, messages, raw_response]
+        self._last_log = [prompt, messages, raw_response]
         return response
 
     # ------------------------------------------------------------------ #
@@ -365,9 +358,8 @@ class AsyncLM:
     async def parse(
         self,
         response_model: Type[TParsed],
-        instruction: Optional[str] = None,
-        prompt: Optional[str] = None,
-        messages: Optional[RawMsgs] = None,
+        instruction,
+        prompt,
         think: Literal[True, False, None] = None,
         add_json_schema_to_instruction: bool = False,
         temperature: Optional[float] = None,
@@ -377,62 +369,33 @@ class AsyncLM:
         **kwargs,
     ) -> ParsedOutput[TParsed]:
         """Parse response using guided JSON generation."""
-        if messages is None:
-            assert instruction is not None, "Instruction must be provided."
-            assert prompt is not None, "Prompt must be provided."
-            messages = [
-                {
-                    "role": "system",
-                    "content": instruction,
-                },
-                {
-                    "role": "user",
-                    "content": prompt,
-                },
-            ]  # type: ignore
 
-        post_fix = ""
+        if not use_beta:
+            assert add_json_schema_to_instruction, (
+                "add_json_schema_to_instruction must be True when use_beta is False. otherwise model will not be able to parse the response."
+            )
+
         json_schema = response_model.model_json_schema()
-        if add_json_schema_to_instruction and response_model:
-            _schema = f"\n\n<output_json_schema>\n{json.dumps(json_schema, indent=2)}\n</output_json_schema>"
-            post_fix += _schema
 
-        assert isinstance(messages, list), "Messages must be a list."
-        assert len(messages) > 0, "Messages cannot be empty."
-        assert messages[0]["role"] == "system", (
-            "First message must be a system message with instruction."
+        # Build system message content in a single, clear block
+        assert instruction is not None, "Instruction must be provided."
+        assert prompt is not None, "Prompt must be provided."
+        system_content = instruction
+
+        # Add schema if needed
+        system_content = self._build_system_prompt(
+            response_model,
+            add_json_schema_to_instruction,
+            json_schema,
+            system_content,
+            think=think,
         )
 
-        # Handle /think and /no_think modes
-        first_message_content = messages[0]["content"]
-
-        if think is True:
-            # Mode is /think
-            if "/think" in first_message_content:
-                # Already contains /think, do nothing
-                pass
-            elif "/no_think" in first_message_content:
-                # Replace /no_think with /think
-                messages[0]["content"] = first_message_content.replace(
-                    "/no_think", "/think"
-                )
-            else:
-                # Add /think
-                post_fix += "\n\n/think"
-        elif think is False:
-            # Mode is /no_think
-            if "/no_think" in first_message_content:
-                # Already contains /no_think, do nothing
-                pass
-            elif "/think" in first_message_content:
-                # Replace /think with /no_think
-                messages[0]["content"] = first_message_content.replace(
-                    "/think", "/no_think"
-                )
-            else:
-                messages[0]["content"] += "\n\n/no_think"  # Append to content
-
-        # Add post_fix if it contains content
+        # Rebuild messages with updated system message if needed
+        messages = [
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": prompt},
+        ]  # type: ignore
 
         model_kwargs = {}
         if temperature is not None:
@@ -453,6 +416,7 @@ class AsyncLM:
                 "model_kwargs": model_kwargs,
                 "guided_json": json_schema,
                 "response_format": response_model.__name__,
+                "use_beta": use_beta,
             }
             cache_key = self._cache_key(cache_data, {}, response_model)
             completion = self._load_cache(cache_key)  # dict
@@ -481,7 +445,7 @@ class AsyncLM:
         assert isinstance(completion, dict), (
             "Completion must be a dictionary with OpenAI response format."
         )
-        self.last_log = [prompt, messages, completion]
+        self._last_log = [prompt, messages, completion]
 
         reasoning_content = choice.get("reasoning_content", "").strip()
         _content = choice.get("content", "").lstrip("\n")
@@ -494,6 +458,35 @@ class AsyncLM:
             completion=completion,
             parsed=parsed,
         )
+
+    def _build_system_prompt(
+        self,
+        response_model,
+        add_json_schema_to_instruction,
+        json_schema,
+        system_content,
+        think,
+    ):
+        if add_json_schema_to_instruction and response_model:
+            schema_block = f"\n\n<output_json_schema>\n{json.dumps(json_schema, indent=2)}\n</output_json_schema>"
+            if schema_block not in system_content:
+                system_content += schema_block
+
+        if think is True:
+            if "/think" in system_content:
+                pass
+            elif "/no_think" in system_content:
+                system_content = system_content.replace("/no_think", "/think")
+            else:
+                system_content += "\n\n/think"
+        elif think is False:
+            if "/no_think" in system_content:
+                pass
+            elif "/think" in system_content:
+                system_content = system_content.replace("/think", "/no_think")
+            else:
+                system_content += "\n\n/no_think"
+        return system_content
 
     def _parse_complete_output(
         self, completion: Any, response_model: Type[BaseModel]
@@ -599,7 +592,7 @@ class AsyncLM:
         if not hasattr(self, "last_log"):
             return None
 
-        last_conv = self.last_log
+        last_conv = self._last_log
         messages = last_conv[1] if len(last_conv) > 1 else None
         last_msg = last_conv[2]
         if not isinstance(last_msg, dict):
@@ -627,7 +620,7 @@ class AsyncLM:
         if not hasattr(self, "last_log"):
             raise ValueError("No history available. Please call the model first.")
 
-        prompt, messages, response = self.last_log
+        prompt, messages, response = self._last_log
         if hasattr(response, "model_dump"):
             response = response.model_dump()
         if not messages:
@@ -724,11 +717,11 @@ class AsyncLM:
         if use_beta:
             # Use guided JSON for structure enforcement
             completion = await self.client.chat.completions.create(
-                model=self.model,
+                model=self.model,  # pyright: ignore[reportArgumentType]
                 messages=messages,
                 extra_body={"guided_json": json_schema},
                 **model_kwargs,
-            )
+            )  # pyright: ignore[reportCallIssue, reportCallIssue]
         else:
             # Use OpenAI-style structured output
             completion = await self.client.chat.completions.create(
