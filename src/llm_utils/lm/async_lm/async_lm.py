@@ -31,6 +31,7 @@ from openai.types.chat import (
 )
 from openai.types.model import Model
 from pydantic import BaseModel
+
 from speedy_utils import jloads
 
 from ._utils import (
@@ -121,6 +122,14 @@ class AsyncLM:
         **kwargs: Any,
     ) -> TModel: ...
 
+    async def _set_model(self) -> None:
+        if not self.model:
+            models = await self.list_models(port=self.port, host=self.host)
+            self.model = models[0] if models else None
+            logger.info(
+                f"No model specified. Using the first available model. {self.model}"
+            )
+
     async def __call__(
         self,
         prompt: Optional[str] = None,
@@ -139,12 +148,8 @@ class AsyncLM:
 
         assert messages is not None
         # assert self.model is not None, "Model must be set before calling."
-        if not self.model:
-            models = await self.list_models(port=self.port, host=self.host)
-            self.model = models[0] if models else None
-            logger.info(
-                f"No model specified. Using the first available model. {self.model}"
-            )
+        await self._set_model()
+
         openai_msgs: Messages = (
             self._convert_messages(cast(LegacyMsgs, messages))
             if isinstance(messages[0], dict)
@@ -456,7 +461,7 @@ class AsyncLM:
         return ParsedOutput(
             messages=full_messages,
             completion=completion,
-            parsed=parsed,
+            parsed=parsed,  # type: ignore
         )
 
     def _build_system_prompt(
@@ -469,8 +474,19 @@ class AsyncLM:
     ):
         if add_json_schema_to_instruction and response_model:
             schema_block = f"\n\n<output_json_schema>\n{json.dumps(json_schema, indent=2)}\n</output_json_schema>"
-            if schema_block not in system_content:
-                system_content += schema_block
+            # if schema_block not in system_content:
+            if "<output_json_schema>" in system_content:
+                # remove exsting schema block
+                import re  # replace
+
+                system_content = re.sub(
+                    r"<output_json_schema>.*?</output_json_schema>",
+                    "",
+                    system_content,
+                    flags=re.DOTALL,
+                )
+                system_content = system_content.strip()
+            system_content += schema_block
 
         if think is True:
             if "/think" in system_content:
@@ -714,19 +730,32 @@ class AsyncLM:
         model_kwargs: dict,
     ) -> tuple[dict, dict, TParsed]:
         """Call vLLM or OpenAI-compatible endpoint and parse JSON response consistently."""
+        await self._set_model()  # Ensure model is set before making the call
+        # Convert messages to proper type
+        converted_messages = self._convert_messages(messages)  # type: ignore
+
         if use_beta:
             # Use guided JSON for structure enforcement
-            completion = await self.client.chat.completions.create(
-                model=self.model,  # pyright: ignore[reportArgumentType]
-                messages=messages,
-                extra_body={"guided_json": json_schema},
-                **model_kwargs,
-            )  # pyright: ignore[reportCallIssue, reportCallIssue]
+            try:
+                completion = await self.client.chat.completions.create(
+                    model=str(self.model),  # type: ignore
+                    messages=converted_messages,
+                    extra_body={"guided_json": json_schema},  # type: ignore
+                    **model_kwargs,
+                )  # type: ignore
+            except Exception:
+                # Fallback if extra_body is not supported
+                completion = await self.client.chat.completions.create(
+                    model=str(self.model),  # type: ignore
+                    messages=converted_messages,
+                    response_format={"type": "json_object"},
+                    **model_kwargs,
+                )
         else:
             # Use OpenAI-style structured output
             completion = await self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
+                model=str(self.model),  # type: ignore
+                messages=converted_messages,
                 response_format={"type": "json_object"},
                 **model_kwargs,
             )
@@ -747,4 +776,4 @@ class AsyncLM:
                 f"Failed to parse model response: {e}\nRaw: {choice.get('content')}"
             ) from e
 
-        return completion, choice, parsed
+        return completion, choice, parsed  # type: ignore

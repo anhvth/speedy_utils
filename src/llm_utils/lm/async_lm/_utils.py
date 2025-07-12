@@ -8,14 +8,12 @@ from typing import (
     Union,
 )
 
-
 # from openai.pagination import AsyncSyncPage
 from openai.types.chat import (
     ChatCompletionMessageParam,
 )
 from pydantic import BaseModel
 from typing_extensions import TypedDict
-
 
 # --------------------------------------------------------------------------- #
 # type helpers
@@ -180,3 +178,21 @@ async def inspect_word_probs_async(lm, tokenizer, messages):
 
     word_probs, token_logprob_dicts = await compute_word_log_probs(tokenizer, lm)
     return word_probs, token_logprob_dicts, render_by_logprob(word_probs)
+
+
+__all__ = [
+    "TModel",
+    "Messages",
+    "LegacyMsgs",
+    "RawMsgs",
+    "TParsed",
+    "ParsedOutput",
+    "get_tokenizer",
+    "inspect_word_probs_async",
+    "_color",
+    "_red",
+    "_green",
+    "_blue",
+    "_yellow",
+]
+# --------------------------------------------------------------------------- #]
