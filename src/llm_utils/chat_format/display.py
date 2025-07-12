@@ -1,7 +1,9 @@
 from __future__ import annotations
-from typing import Any, Optional
-from IPython.display import HTML, display
+
 from difflib import SequenceMatcher
+from typing import Any, Optional
+
+from IPython.display import HTML, display
 
 
 def show_chat(
@@ -18,6 +20,17 @@ def show_chat(
     assert isinstance(msgs, list) and all(
         isinstance(msg, dict) and "role" in msg and "content" in msg for msg in msgs
     ), "The input format is not recognized. Please specify the input format."
+
+    if isinstance(msgs[-1], dict) and "choices" in msgs[-1]:
+        message = msgs[-1]["choices"][0]["message"]
+        reasoning_content = message.get("reasoning_content")
+        content = message.get("content", "")
+        if reasoning_content:
+            content = reasoning_content + "\n" + content
+        msgs[-1] = {
+            "role": message["role"],
+            "content": content,
+        }
 
     themes: dict[str, dict[str, dict[str, str]]] = {
         "default": {
@@ -156,9 +169,9 @@ def get_conversation_one_turn(
     if assistant_msg is not None:
         messages.append({"role": "assistant", "content": assistant_msg})
     if assistant_prefix is not None:
-        assert (
-            return_format != "chatml"
-        ), 'Change return_format to "text" if you want to use assistant_prefix'
+        assert return_format != "chatml", (
+            'Change return_format to "text" if you want to use assistant_prefix'
+        )
         assert messages[-1]["role"] == "user"
         from .transform import transform_messages
 

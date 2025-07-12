@@ -1,3 +1,4 @@
+# from ._utils import *
 import base64
 import hashlib
 import json
@@ -18,10 +19,9 @@ from typing import (
     cast,
     overload,
 )
-from typing_extensions import TypedDict
+
 from httpx import URL
 from loguru import logger
-from numpy import isin
 from openai import AsyncOpenAI, AuthenticationError, BadRequestError, RateLimitError
 from openai.pagination import AsyncPage as AsyncSyncPage
 
@@ -35,49 +35,25 @@ from openai.types.chat import (
 )
 from openai.types.model import Model
 from pydantic import BaseModel
-from pydantic import ValidationError
+from typing_extensions import TypedDict
+
 from llm_utils.chat_format.display import get_conversation_one_turn
+from speedy_utils import jloads
 
-# --------------------------------------------------------------------------- #
-# type helpers
-# --------------------------------------------------------------------------- #
-TModel = TypeVar("TModel", bound=BaseModel)
-Messages = List[ChatCompletionMessageParam]
-LegacyMsgs = List[Dict[str, str]]
-RawMsgs = Union[Messages, LegacyMsgs]
-
-# --------------------------------------------------------------------------- #
-# color helpers (unchanged)
-# --------------------------------------------------------------------------- #
-
-
-def _color(code: int, text: str) -> str:
-    return f"\x1b[{code}m{text}\x1b[0m"
-
-
-def _red(t):
-    return _color(31, t)
-
-
-def _green(t):
-    return _color(32, t)
-
-
-def _blue(t):
-    return _color(34, t)
-
-
-def _yellow(t):
-    return _color(33, t)
-
-
-TParsed = TypeVar("TParsed", bound=BaseModel)
-
-
-class ParsedOutput(TypedDict, Generic[TParsed]):
-    messages: List
-    completion: Any
-    parsed: TParsed
+from ._utils import (
+    LegacyMsgs,
+    Messages,
+    ParsedOutput,
+    RawMsgs,
+    TModel,
+    TParsed,
+    _blue,
+    _green,
+    _red,
+    _yellow,
+    get_tokenizer,
+    inspect_word_probs_async,
+)
 
 
 class AsyncLM:
@@ -396,7 +372,8 @@ class AsyncLM:
         add_json_schema_to_instruction: bool = False,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
-        cache: Optional[bool] = True,
+        cache: Optional[bool] = None,
+        use_beta: bool = False,
         **kwargs,
     ) -> ParsedOutput[TParsed]:
         """Parse response using guided JSON generation."""
@@ -420,17 +397,42 @@ class AsyncLM:
             _schema = f"\n\n<output_json_schema>\n{json.dumps(json_schema, indent=2)}\n</output_json_schema>"
             post_fix += _schema
 
-        if think:
-            post_fix += "\n\n/think"
-        elif not think:
-            post_fix += "\n\n/no_think"
-
         assert isinstance(messages, list), "Messages must be a list."
         assert len(messages) > 0, "Messages cannot be empty."
         assert messages[0]["role"] == "system", (
             "First message must be a system message with instruction."
         )
-        messages[0]["content"] += post_fix  # type: ignore
+
+        # Handle /think and /no_think modes
+        first_message_content = messages[0]["content"]
+
+        if think is True:
+            # Mode is /think
+            if "/think" in first_message_content:
+                # Already contains /think, do nothing
+                pass
+            elif "/no_think" in first_message_content:
+                # Replace /no_think with /think
+                messages[0]["content"] = first_message_content.replace(
+                    "/no_think", "/think"
+                )
+            else:
+                # Add /think
+                post_fix += "\n\n/think"
+        elif think is False:
+            # Mode is /no_think
+            if "/no_think" in first_message_content:
+                # Already contains /no_think, do nothing
+                pass
+            elif "/think" in first_message_content:
+                # Replace /think with /no_think
+                messages[0]["content"] = first_message_content.replace(
+                    "/think", "/no_think"
+                )
+            else:
+                messages[0]["content"] += "\n\n/no_think"  # Append to content
+
+        # Add post_fix if it contains content
 
         model_kwargs = {}
         if temperature is not None:
@@ -442,6 +444,9 @@ class AsyncLM:
         use_cache = self.do_cache if cache is None else cache
         cache_key = None
         completion = None
+        choice = None
+        parsed = None
+
         if use_cache:
             cache_data = {
                 "messages": messages,
@@ -451,27 +456,43 @@ class AsyncLM:
             }
             cache_key = self._cache_key(cache_data, {}, response_model)
             completion = self._load_cache(cache_key)  # dict
+
         if not completion:
-            completion = await self.client.chat.completions.create(
-                model=self.model,  # type: ignore
-                messages=messages,  # type: ignore
-                extra_body={"guided_json": json_schema},
-                **model_kwargs,
+            completion, choice, parsed = await self._call_and_parse_completion(
+                messages,
+                response_model,
+                json_schema,
+                use_beta=use_beta,
+                model_kwargs=model_kwargs,
             )
-            completion = completion.model_dump()
+
             if cache_key:
                 self._dump_cache(cache_key, completion)
+        else:
+            # Extract choice and parsed from cached completion
+            choice = completion["choices"][0]["message"]
+            try:
+                parsed = self._parse_complete_output(completion, response_model)
+            except Exception as e:
+                raise ValueError(
+                    f"Failed to parse cached completion: {e}\nRaw: {choice.get('content')}"
+                ) from e
+
         assert isinstance(completion, dict), (
             "Completion must be a dictionary with OpenAI response format."
         )
         self.last_log = [prompt, messages, completion]
 
-        output = cast(TParsed, self._parse_complete_output(completion, response_model))
-        full_messages = messages + [completion]
+        reasoning_content = choice.get("reasoning_content", "").strip()
+        _content = choice.get("content", "").lstrip("\n")
+        content = f"<think>\n{reasoning_content}\n</think>\n\n{_content}"
+
+        full_messages = messages + [{"role": "assistant", "content": content}]
+
         return ParsedOutput(
             messages=full_messages,
             completion=completion,
-            parsed=output,
+            parsed=parsed,
         )
 
     def _parse_complete_output(
@@ -691,250 +712,46 @@ class AsyncLM:
             logger.error(f"Failed to list models: {exc}")
             return []
 
-
-# --------------------------------------------------------------------------- #
-# Module-level utility functions (async versions)
-# --------------------------------------------------------------------------- #
-
-
-@lru_cache(maxsize=10)
-def get_tokenizer(model_name: str) -> Any:
-    """Get tokenizer for the given model."""
-    from transformers import AutoTokenizer  # type: ignore
-
-    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-    return tokenizer
-
-
-async def inspect_word_probs_async(lm, tokenizer, messages):
-    """Async version of inspect_word_probs."""
-
-    import numpy as np
-
-    async def compute_word_log_probs(
-        tokenizer: Any,
-        lm_client: Any,
-    ) -> tuple[List[Dict[str, Any]], Any]:
-        # Build a prompt that preserves literal newlines
-        prompt = tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,  # Don't tokenize yet, we need raw text
-            add_generation_prompt=False,  # No generation prompt needed
-        )
-
-        # Request token logprobs
-        response = await lm_client.client.completions.create(
-            model=lm_client.model,  # type: ignore
-            prompt=prompt,
-            max_tokens=1,
-            logprobs=1,
-            extra_body={"prompt_logprobs": 0},
-        )
-        token_logprob_dicts = response.choices[0].prompt_logprobs  # type: ignore
-
-        # Override first token to known start marker
-        start_id = tokenizer.encode("<|im_start|>")[0]
-        token_logprob_dicts[0] = {
-            str(start_id): {
-                "logprob": -1,
-                "rank": 1,
-                "decoded_token": "<|im_start|>",
-            }
-        }
-
-        # Flatten tokens
-        tokens: List[Dict[str, Any]] = [
-            {"id": int(tid), **tdata}
-            for td in token_logprob_dicts
-            for tid, tdata in td.items()
-        ]
-
-        # Validate tokenization
-        tokenized = tokenizer.tokenize(prompt)
-        if len(tokenized) != len(tokens):
-            raise ValueError(f"Token count mismatch: {len(tokenized)} vs {len(tokens)}")
-        for idx, tok in enumerate(tokens):
-            if tokenized[idx] != tok["decoded_token"]:
-                raise AssertionError(
-                    f"Token mismatch at {idx}: "
-                    f"{tokenized[idx]} != {tok['decoded_token']}"
-                )
-
-        # Split on newline sentinel
-        split_prompt = prompt.replace("\n", " <NL> ")
-        words = split_prompt.split()
-
-        word_log_probs: List[Dict[str, Any]] = []
-        token_idx = 0
-
-        for word in words:
-            # Map sentinel back to actual newline for encoding
-            target = "\n" if word == "<NL>" else word
-            sub_ids = tokenizer.encode(target, add_special_tokens=False)
-            count = len(sub_ids)
-            if count == 0:
-                continue
-
-            subs = tokens[token_idx : token_idx + count]
-            avg_logprob = sum(s["logprob"] for s in subs) / count
-            prob = float(np.exp(avg_logprob))
-            word_log_probs.append({"word": target, "probability": prob})
-            token_idx += count
-
-        return word_log_probs, token_logprob_dicts  # type: ignore
-
-    def render_by_logprob(word_log_probs: List[Dict[str, Any]]) -> str:
-        """
-        Return an ANSI-colored string for word probabilities (red → green).
-        """
-        if not word_log_probs:
-            return ""
-
-        probs = [entry["probability"] for entry in word_log_probs]
-        min_p, max_p = min(probs), max(probs)
-        parts: List[str] = []
-
-        for entry in word_log_probs:
-            word = entry["word"]
-            # Preserve actual line breaks
-            if word == "\n":
-                parts.append("\n")
-                continue
-
-            p = entry["probability"]
-            norm = (p - min_p) / (max_p - min_p or 1.0)
-            r = int(255 * (1 - norm))  # red component (high when prob is low)
-            g = int(255 * norm)  # green component (high when prob is high)
-            b = 0  # no blue for red-green gradient
-            colored = f"\x1b[38;2;{r};{g};{b}m{word}\x1b[0m"
-            parts.append(colored + " ")
-
-        return "".join(parts).rstrip()
-
-    word_probs, token_logprob_dicts = await compute_word_log_probs(tokenizer, lm)
-    return word_probs, token_logprob_dicts, render_by_logprob(word_probs)
-
-
-# --------------------------------------------------------------------------- #
-# Async LLMTask class
-# --------------------------------------------------------------------------- #
-
-InputModelType = TypeVar("InputModelType", bound=BaseModel)
-OutputModelType = TypeVar("OutputModelType", bound=BaseModel)
-
-
-class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
-    """
-    Async callable wrapper around an AsyncLM endpoint.
-
-    Sub-classes must set:
-      • lm              – the async language-model instance
-      • InputModel      – a Pydantic input class
-      • OutputModel     – a Pydantic output class
-
-    Optional flags:
-      • temperature     – float (default 0.6)
-      • think           – bool  (if the backend supports "chain-of-thought")
-      • add_json_schema – bool  (include schema in the instruction)
-
-    The **docstring** of each sub-class is sent as the LM instruction.
-    Example
-    ```python
-        class DemoTask(AsyncLLMTask):
-            "TODO: SYSTEM_PROMPT_INSTURCTION HERE"
-
-            lm = AsyncLM(port=8130, cache=False, model="gpt-3.5-turbo")
-
-            class InputModel(BaseModel):
-                text_to_translate:str
-
-            class OutputModel(BaseModel):
-                translation:str
-                glossary_use:str
-
-            temperature = 0.6
-            think=False
-
-        demo_task = DemoTask()
-        result = await demo_task({'text_to_translate': 'Translate from english to vietnamese: Hello how are you'})
-    ```
-    """
-
-    lm: "AsyncLM"
-    InputModel: InputModelType
-    OutputModel: OutputModelType
-
-    temperature: float = 0.6
-    think: bool = False
-    add_json_schema: bool = False
-    cache: bool = False
-
-    async def __call__(
+    async def _call_and_parse_completion(
         self,
-        data: BaseModel | dict,
-        temperature: float = 0.1,
-        cache: bool = False,
-        think: Optional[bool] = None,  # if not None, overrides self.think
-    ) -> tuple[OutputModelType, List[Dict[str, Any]]]:
-        # Get the input and output model types from the generic parameters
-        type_args = getattr(self.__class__, "__orig_bases__", None)
-        if (
-            type_args
-            and hasattr(type_args[0], "__args__")
-            and len(type_args[0].__args__) >= 2
-        ):
-            input_model = type_args[0].__args__[0]
-            output_model = type_args[0].__args__[1]
+        messages: list[dict],
+        response_model: Type[TParsed],
+        json_schema: dict,
+        use_beta: bool,
+        model_kwargs: dict,
+    ) -> tuple[dict, dict, TParsed]:
+        """Call vLLM or OpenAI-compatible endpoint and parse JSON response consistently."""
+        if use_beta:
+            # Use guided JSON for structure enforcement
+            completion = await self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                extra_body={"guided_json": json_schema},
+                **model_kwargs,
+            )
         else:
-            # Fallback to the old way if type introspection fails
-            if (
-                not hasattr(self, "InputModel")
-                or not hasattr(self, "OutputModel")
-                or not hasattr(self, "lm")
-            ):
-                raise NotImplementedError(
-                    f"{self.__class__.__name__} must define lm, InputModel, and OutputModel as class attributes or use proper generic typing."
-                )
-            input_model = self.InputModel
-            output_model = self.OutputModel
+            # Use OpenAI-style structured output
+            completion = await self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                response_format={"type": "json_object"},
+                **model_kwargs,
+            )
 
-        # Ensure input_model is a class before calling
-        if isinstance(data, BaseModel):
-            item = data
-        elif isinstance(input_model, type) and issubclass(input_model, BaseModel):
-            item = input_model(**data)
-        else:
-            raise TypeError("InputModel must be a subclass of BaseModel")
+        if hasattr(completion, "model_dump"):
+            completion = completion.model_dump()
 
-        assert isinstance(output_model, type) and issubclass(output_model, BaseModel), (
-            "OutputModel must be a subclass of BaseModel"
-        )
+        choice = completion["choices"][0]["message"]
 
-        result = await self.lm.parse(
-            prompt=item.model_dump_json(),
-            instruction=self.__doc__ or "",
-            response_model=output_model,
-            temperature=temperature or self.temperature,
-            think=think if think is not None else self.think,
-            add_json_schema_to_instruction=self.add_json_schema,
-            cache=self.cache or cache,
-        )
+        try:
+            parsed = (
+                self._parse_complete_output(completion, response_model)
+                if use_beta
+                else response_model.model_validate(jloads(choice.get("content")))
+            )
+        except Exception as e:
+            raise ValueError(
+                f"Failed to parse model response: {e}\nRaw: {choice.get('content')}"
+            ) from e
 
-        return (
-            cast(OutputModelType, result["parsed"]),  # type: ignore
-            cast(List[dict], result["messages"]),  # type: ignore
-        )
-
-    def generate_training_data(
-        self, input_dict: Dict[str, Any], output: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Return share gpt like format"""
-        system_prompt = self.__doc__ or ""
-        user_msg = self.InputModel(**input_dict).model_dump_json()  # type: ignore[attr-defined]
-        assistant_msg = self.OutputModel(**output).model_dump_json()  # type: ignore[attr-defined]
-        messages = get_conversation_one_turn(
-            system_msg=system_prompt, user_msg=user_msg, assistant_msg=assistant_msg
-        )
-        return {"messages": messages}
-
-    arun = __call__  # alias for compatibility with other LLMTask implementations
+        return completion, choice, parsed
