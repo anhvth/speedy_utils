@@ -32,6 +32,7 @@ from openai.types.chat import (
 from openai.types.model import Model
 from pydantic import BaseModel
 
+from llm_utils.chat_format.display import show_chat
 from speedy_utils import jloads
 
 from ._utils import (
@@ -368,6 +369,7 @@ class AsyncLM:
         think: Literal[True, False, None] = None,
         add_json_schema_to_instruction: bool = False,
         temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
         max_tokens: Optional[int] = None,
         cache: Optional[bool] = None,
         use_beta: bool = False,
@@ -396,6 +398,13 @@ class AsyncLM:
             think=think,
         )
 
+        if "/think" in system_content:
+            top_p = 0.95
+            temperature = 0.6
+        elif "/no_think" in system_content:
+            top_p = 0.8
+            temperature = 0.7
+
         # Rebuild messages with updated system message if needed
         messages = [
             {"role": "system", "content": system_content},
@@ -407,6 +416,10 @@ class AsyncLM:
             model_kwargs["temperature"] = temperature
         if max_tokens is not None:
             model_kwargs["max_tokens"] = max_tokens
+        if top_p is not None:
+            model_kwargs["top_p"] = top_p
+        # if top_k is not None:
+        # model_kwargs["top_k"] = top_k
         model_kwargs.update(kwargs)
 
         use_cache = self.do_cache if cache is None else cache
@@ -457,11 +470,13 @@ class AsyncLM:
         content = f"<think>\n{reasoning_content}\n</think>\n\n{_content}"
 
         full_messages = messages + [{"role": "assistant", "content": content}]
+        show_chat(full_messages[-2:])
 
         return ParsedOutput(
             messages=full_messages,
             completion=completion,
             parsed=parsed,  # type: ignore
+            model_kwargs=model_kwargs,
         )
 
     def _build_system_prompt(
@@ -628,9 +643,6 @@ class AsyncLM:
         messages = messages + [assistant]  # type: ignore
         return messages if messages else None
 
-    # ------------------------------------------------------------------ #
-    # Utility helpers
-    # ------------------------------------------------------------------ #
     async def inspect_history(self) -> None:
         """Inspect the conversation history with proper formatting."""
         if not hasattr(self, "last_log"):
@@ -735,28 +747,19 @@ class AsyncLM:
         converted_messages = self._convert_messages(messages)  # type: ignore
 
         if use_beta:
-            # Use guided JSON for structure enforcement
-            try:
-                completion = await self.client.chat.completions.create(
-                    model=str(self.model),  # type: ignore
-                    messages=converted_messages,
-                    extra_body={"guided_json": json_schema},  # type: ignore
-                    **model_kwargs,
-                )  # type: ignore
-            except Exception:
-                # Fallback if extra_body is not supported
-                completion = await self.client.chat.completions.create(
-                    model=str(self.model),  # type: ignore
-                    messages=converted_messages,
-                    response_format={"type": "json_object"},
-                    **model_kwargs,
-                )
+            completion = await self.client.chat.completions.create(
+                model=str(self.model),  # type: ignore
+                messages=converted_messages,
+                extra_body={"guided_json": json_schema},  # type: ignore
+                **model_kwargs,
+            ) 
+
         else:
             # Use OpenAI-style structured output
             completion = await self.client.chat.completions.create(
                 model=str(self.model),  # type: ignore
                 messages=converted_messages,
-                response_format={"type": "json_object"},
+                # response_format={"type": "json_object"},
                 **model_kwargs,
             )
 
@@ -776,4 +779,4 @@ class AsyncLM:
                 f"Failed to parse model response: {e}\nRaw: {choice.get('content')}"
             ) from e
 
-        return completion, choice, parsed  # type: ignore
+        return completion, choice, cast(TParsed, parsed)

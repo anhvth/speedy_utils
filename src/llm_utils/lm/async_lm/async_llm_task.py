@@ -7,7 +7,6 @@ from typing import (
     Optional,
     TypeVar,
     Union,
-    cast,
 )
 
 # from openai.pagination import AsyncSyncPage
@@ -18,7 +17,7 @@ from pydantic import BaseModel
 
 from llm_utils.chat_format.display import get_conversation_one_turn
 
-from .async_lm import AsyncLM
+from .async_lm import AsyncLM, ParsedOutput,TParsed
 
 # --------------------------------------------------------------------------- #
 # type helpers
@@ -89,8 +88,7 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
         temperature: float = 0.1,
         cache: bool = False,
         think: Optional[bool] = None,  # if not None, overrides self.think
-    ) -> tuple[OutputModelType, List[Dict[str, Any]]]:
-        # Get the input and output model types from the generic parameters
+    ) -> ParsedOutput[TParsed]:
         type_args = getattr(self.__class__, "__orig_bases__", None)
         if (
             type_args
@@ -134,10 +132,7 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
             cache=self.cache or cache,
         )
 
-        return (
-            cast(OutputModelType, result["parsed"]),  # type: ignore
-            cast(List[dict], result["messages"]),  # type: ignore
-        )
+        return result
 
     def generate_training_data(
         self, input_dict: Dict[str, Any], output: Dict[str, Any]
