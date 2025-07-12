@@ -31,8 +31,6 @@ from openai.types.chat import (
 )
 from openai.types.model import Model
 from pydantic import BaseModel
-
-from llm_utils.chat_format.display import show_chat
 from speedy_utils import jloads
 
 from ._utils import (
@@ -376,7 +374,7 @@ class AsyncLM:
         **kwargs,
     ) -> ParsedOutput[TParsed]:
         """Parse response using guided JSON generation."""
-
+        await self._set_model()  # Ensure model is set before making the call
         if not use_beta:
             assert add_json_schema_to_instruction, (
                 "add_json_schema_to_instruction must be True when use_beta is False. otherwise model will not be able to parse the response."
@@ -411,7 +409,7 @@ class AsyncLM:
             {"role": "user", "content": prompt},
         ]  # type: ignore
 
-        model_kwargs = {}
+        model_kwargs = {"model": self.model}
         if temperature is not None:
             model_kwargs["temperature"] = temperature
         if max_tokens is not None:
@@ -470,7 +468,6 @@ class AsyncLM:
         content = f"<think>\n{reasoning_content}\n</think>\n\n{_content}"
 
         full_messages = messages + [{"role": "assistant", "content": content}]
-        show_chat(full_messages[-2:])
 
         return ParsedOutput(
             messages=full_messages,
@@ -742,22 +739,22 @@ class AsyncLM:
         model_kwargs: dict,
     ) -> tuple[dict, dict, TParsed]:
         """Call vLLM or OpenAI-compatible endpoint and parse JSON response consistently."""
-        await self._set_model()  # Ensure model is set before making the call
+
         # Convert messages to proper type
         converted_messages = self._convert_messages(messages)  # type: ignore
 
         if use_beta:
             completion = await self.client.chat.completions.create(
-                model=str(self.model),  # type: ignore
+                # model=str(self.model),  # type: ignore
                 messages=converted_messages,
                 extra_body={"guided_json": json_schema},  # type: ignore
                 **model_kwargs,
-            ) 
+            )
 
         else:
             # Use OpenAI-style structured output
             completion = await self.client.chat.completions.create(
-                model=str(self.model),  # type: ignore
+                # model=str(self.model),  # type: ignore
                 messages=converted_messages,
                 # response_format={"type": "json_object"},
                 **model_kwargs,

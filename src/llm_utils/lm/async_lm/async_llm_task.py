@@ -122,7 +122,8 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
             "OutputModel must be a subclass of BaseModel"
         )
 
-        result = await self.lm.parse(
+
+        return await self.lm.parse(
             prompt=item.model_dump_json(),
             instruction=self.__doc__ or "",
             response_model=output_model,
@@ -131,8 +132,6 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
             add_json_schema_to_instruction=self.add_json_schema,
             cache=self.cache or cache,
         )
-
-        return result
 
     def generate_training_data(
         self, input_dict: Dict[str, Any], output: Dict[str, Any]

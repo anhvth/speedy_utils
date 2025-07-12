@@ -55,6 +55,7 @@ class ParsedOutput(TypedDict, Generic[TParsed]):
     messages: List
     completion: Any
     parsed: TParsed
+    model_kwargs: Dict[str, Any]
 
 
 # --------------------------------------------------------------------------- #
