@@ -573,7 +573,7 @@ class AsyncLM:
             )
 
         try:
-            data = json.loads(content)
+            data = jloads(content)
             return response_model.model_validate(data)
         except Exception as exc:
             raise ValueError(
