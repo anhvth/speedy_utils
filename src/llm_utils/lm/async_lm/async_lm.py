@@ -411,11 +411,11 @@ class AsyncLM:
 
         model_kwargs = {"model": self.model}
         if temperature is not None:
-            model_kwargs["temperature"] = temperature
+            model_kwargs["temperature"] = str(temperature)
         if max_tokens is not None:
-            model_kwargs["max_tokens"] = max_tokens
+            model_kwargs["max_tokens"] = str(max_tokens)
         if top_p is not None:
-            model_kwargs["top_p"] = top_p
+            model_kwargs["top_p"] = str(top_p)
         # if top_k is not None:
         # model_kwargs["top_k"] = top_k
         model_kwargs.update(kwargs)

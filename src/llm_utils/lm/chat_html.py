@@ -10,8 +10,9 @@ DEFAULT_INNER_PADDING = [1] * 4  # Inner padding [top, right, bottom, left]
 thinking_tag = "think"
 # Jupyter notebook detection and imports
 try:
+
     from IPython.display import display, HTML
-    from IPython import get_ipython
+    from IPython.core.getipython import get_ipython
 
     JUPYTER_AVAILABLE = True
 except ImportError:

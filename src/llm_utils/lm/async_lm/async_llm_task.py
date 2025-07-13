@@ -7,6 +7,7 @@ from typing import (
     Optional,
     TypeVar,
     Union,
+    cast,
 )
 
 # from openai.pagination import AsyncSyncPage
@@ -88,7 +89,7 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
         temperature: float = 0.1,
         cache: bool = False,
         think: Optional[bool] = None,  # if not None, overrides self.think
-    ) -> ParsedOutput[TParsed]:
+    ) -> ParsedOutput[OutputModelType]:
         type_args = getattr(self.__class__, "__orig_bases__", None)
         if (
             type_args
@@ -123,14 +124,17 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
         )
 
 
-        return await self.lm.parse(
-            prompt=item.model_dump_json(),
-            instruction=self.__doc__ or "",
-            response_model=output_model,
-            temperature=temperature or self.temperature,
-            think=think if think is not None else self.think,
-            add_json_schema_to_instruction=self.add_json_schema,
-            cache=self.cache or cache,
+        return cast(
+            ParsedOutput[OutputModelType],
+            await self.lm.parse(
+                prompt=item.model_dump_json(),
+                instruction=self.__doc__ or "",
+                response_model=output_model,
+                temperature=temperature or self.temperature,
+                think=think if think is not None else self.think,
+                add_json_schema_to_instruction=self.add_json_schema,
+                cache=self.cache or cache,
+            ),
         )
 
     def generate_training_data(
