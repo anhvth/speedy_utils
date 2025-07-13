@@ -103,13 +103,14 @@ class LM:
         Examples
         --------
         >>> lm = LM("gpt-4o-mini")
-        >>> text: str = lm(prompt="Hello")              # plain text
+        >>> text: str = lm(prompt="Hello")  # plain text
 
-        >>> class Person(BaseModel): name: str; age: int
+        >>> class Person(BaseModel):
+        ...     name: str
+        ...     age: int
         >>> p: Person = lm(
-        ...     prompt="Give me a JSON person.",
-        ...     response_format=Person
-        ... )                                           # Pydantic
+        ...     prompt="Give me a JSON person.", response_format=Person
+        ... )  # Pydantic
         """
         # ---------- argument validation ---------------------------------- #
         if (prompt is None) == (messages is None):

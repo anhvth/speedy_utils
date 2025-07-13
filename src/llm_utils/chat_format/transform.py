@@ -16,9 +16,9 @@ def identify_format(item):
 def _transform_sharegpt_to_chatml(
     item, default_system_message="You are a helpful assistant.", print_msg=False
 ):
-    assert isinstance(
-        item, dict
-    ), "The item is not in the correct format. Please check the format of the item."
+    assert isinstance(item, dict), (
+        "The item is not in the correct format. Please check the format of the item."
+    )
 
     messages = []
     system_msg = item.get("system", "")
@@ -116,16 +116,16 @@ def transform_messages_to_chatml(input_data, input_format="auto"):
         input_data = deepcopy(input_data)
         if isinstance(input_data, list):
             input_format = "chatlm"
-            assert (
-                input_data[0].get("role") is not None
-            ), "The input format is not recognized. Please specify the input format."
+            assert input_data[0].get("role") is not None, (
+                "The input format is not recognized. Please specify the input format."
+            )
         elif isinstance(input_data, dict):
             input_data = _transform_sharegpt_to_chatml(input_data)
             input_format = "sharegpt"
         elif isinstance(input_data, str):
-            assert (
-                "<|im_end|>" in input_data
-            ), "The input format is not recognized. Please specify the input format."
+            assert "<|im_end|>" in input_data, (
+                "The input format is not recognized. Please specify the input format."
+            )
             input_format = "chatlm"
             parts = input_data.split("<|im_end|>")
             input_data = []

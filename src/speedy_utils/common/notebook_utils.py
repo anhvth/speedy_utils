@@ -8,12 +8,12 @@ from IPython.display import HTML, display
 from tabulate import tabulate
 
 
-def change_dir(target_directory: str = 'POLY') -> None:
+def change_dir(target_directory: str = "POLY") -> None:
     """Change directory to the first occurrence of x in the current path."""
-    cur_dir = pathlib.Path('./')
+    cur_dir = pathlib.Path("./")
     target_dir = str(cur_dir.absolute()).split(target_directory)[0] + target_directory
     os.chdir(target_dir)
-    print(f'Current dir: {target_dir}')
+    print(f"Current dir: {target_dir}")
 
 
 def display_pretty_table_html(data: dict) -> None:

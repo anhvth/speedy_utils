@@ -414,7 +414,7 @@ async def handle_client(client_reader, client_writer):
                 pass
             server_selected = False
             return
-        
+
         # --- Throttling Logic ---
         # Check if we need to throttle requests to avoid overwhelming the backend
         current_time = time.time() * 1000  # Convert to milliseconds
@@ -422,21 +422,23 @@ async def handle_client(client_reader, client_writer):
         async with state_lock:
             last_send_time = last_send_times.get(backend_server, 0)
             time_since_last_send = current_time - last_send_time
-            
+
             if time_since_last_send < THROTTLE_MS:
-                sleep_time = (THROTTLE_MS - time_since_last_send) / 1000  # Convert to seconds
+                sleep_time = (
+                    THROTTLE_MS - time_since_last_send
+                ) / 1000  # Convert to seconds
                 logger.debug(
                     f"Throttling request to {backend_server} for {sleep_time:.3f}s (last send: {time_since_last_send:.1f}ms ago)"
                 )
-        
+
         # Sleep outside the lock to avoid blocking other clients
         if sleep_time > 0:
             await asyncio.sleep(sleep_time)
-        
+
         # Update last send time after throttling
         async with state_lock:
             last_send_times[backend_server] = time.time() * 1000
-        
+
         try:
             logger.debug(
                 f"Attempting connection to backend {backend_server} for {client_addr}"
@@ -572,7 +574,9 @@ async def display_status_dashboard():
     print(
         f"{Colors.YELLOW}🔧 Configured Ports:{Colors.RESET} {', '.join(map(str, BACKEND_PORTS))}"
     )
-    print(f"{Colors.YELLOW}⚡ Request Throttling:{Colors.RESET} {THROTTLE_MS}ms minimum")
+    print(
+        f"{Colors.YELLOW}⚡ Request Throttling:{Colors.RESET} {THROTTLE_MS}ms minimum"
+    )
     print()
 
     # Connection Statistics Section

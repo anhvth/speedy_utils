@@ -32,9 +32,9 @@ def test_logger_timestamp_format():
         # Check that the output contains a timestamp in the expected format
         # Format should include: HH:mm:ss
         timestamp_pattern = r"\d{2}:\d{2}:\d{2}"
-        assert re.search(
-            timestamp_pattern, output
-        ), f"Timestamp not found in log output: {output}"
+        assert re.search(timestamp_pattern, output), (
+            f"Timestamp not found in log output: {output}"
+        )
 
     finally:
         # Restore stdout
@@ -61,9 +61,9 @@ def test_logger_format_elements():
 
         # Check format elements
         assert "INFO" in output, f"Log level not found in output: {output}"
-        assert (
-            "test_logger_format.py" in output
-        ), f"File name not found in output: {output}"
+        assert "test_logger_format.py" in output, (
+            f"File name not found in output: {output}"
+        )
         assert "Test message" in output, f"Message not found in output: {output}"
 
         # Timestamp is already checked in the previous test

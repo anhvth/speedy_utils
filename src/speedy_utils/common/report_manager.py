@@ -3,7 +3,6 @@ from collections import defaultdict
 from datetime import datetime
 
 
-
 class ReportManager:
     def __init__(self):
         self.cache_dir = os.path.expanduser("~/.cache/speedy_utils")
@@ -41,7 +40,7 @@ class ReportManager:
             [
                 "\n### Results Overview",
                 f"- Total items processed: {len(results)}",
-                f"- Success rate: {(len(results) - len(errors))/len(results)*100:.1f}%",
+                f"- Success rate: {(len(results) - len(errors)) / len(results) * 100:.1f}%",
                 f"- Total errors: {len(errors)}",
             ]
         )
@@ -49,7 +48,7 @@ class ReportManager:
         if execution_time:
             md_content.append(f"- Execution time: {execution_time:.2f}s")
             md_content.append(
-                f"- Average speed: {len(results)/execution_time:.1f} items/second"
+                f"- Average speed: {len(results) / execution_time:.1f} items/second"
             )
 
         if error_groups:

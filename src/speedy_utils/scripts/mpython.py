@@ -91,9 +91,7 @@ def main():
         cpu_end = ((i + 1) * cpu_per_process - 1) % args.total_cpu
         ENV = f"CUDA_VISIBLE_DEVICES={gpu} MP_ID={i} MP_TOTAL={args.total_fold}"
         if taskset_path:
-            fold_cmd = (
-                f"{ENV} {taskset_path} -c {cpu_start}-{cpu_end}  {path_python} {cmd_str}"
-            )
+            fold_cmd = f"{ENV} {taskset_path} -c {cpu_start}-{cpu_end}  {path_python} {cmd_str}"
         else:
             fold_cmd = f"{ENV} {path_python} {cmd_str}"
 

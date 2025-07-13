@@ -71,7 +71,6 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
         result = await demo_task({'text_to_translate': 'Translate from english to vietnamese: Hello how are you'})
     ```
     """
-    
 
     lm: "AsyncLM"
     InputModel: InputModelType

@@ -166,7 +166,9 @@ class AsyncLM(AsyncLMBase):
                     raise ValueError("Response has no content field")
                 parsed = response_model.model_validate(jloads(content))
         except Exception as e:
-            content = choice.get("content", "")  # Keep .get() here for error message only
+            content = choice.get(
+                "content", ""
+            )  # Keep .get() here for error message only
             raise ValueError(
                 f"Failed to parse model response: {e}\nRaw: {content}"
             ) from e
@@ -206,12 +208,12 @@ class AsyncLM(AsyncLMBase):
                 # Handle error response with explicit key checking
                 error_type = "Unknown"
                 error_message = "Cached error"
-                
+
                 if "error_type" in hit:
                     error_type = hit["error_type"]
                 if "error_message" in hit:
                     error_message = hit["error_message"]
-                    
+
                 logger.warning(f"Found cached error ({error_type}): {error_message}")
                 raise ValueError(f"Cached {error_type}: {error_message}")
             raw_response = hit
@@ -297,7 +299,7 @@ class AsyncLM(AsyncLMBase):
             reasoning_content = choice["reasoning_content"].strip()
         else:
             reasoning_content = ""
-            
+
         # Handle content with explicit checking
         if "content" in choice:
             content = choice["content"]
@@ -307,7 +309,7 @@ class AsyncLM(AsyncLMBase):
         else:
             logger.warning("Assistant response has no content field")
             content = ""
-        
+
         _content = content.lstrip("\n")
         assistant_msg = {
             "role": "assistant",

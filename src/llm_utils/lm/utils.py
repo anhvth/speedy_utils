@@ -7,8 +7,6 @@ import numpy as np
 from loguru import logger
 
 
-
-
 def _atomic_save(array: np.ndarray, filename: str):
     tmp_dir = os.path.dirname(filename) or "."
     with tempfile.NamedTemporaryFile(dir=tmp_dir, delete=False) as tmp:
@@ -77,7 +75,7 @@ def retry_on_exception(max_retries=10, exceptions=(Exception,), sleep_time=3):
                 try:
                     return func(self, *args, **kwargs)
                 except exceptions as e:
-                    import litellm # type: ignore
+                    import litellm  # type: ignore
 
                     if isinstance(
                         e, (litellm.exceptions.APIError, litellm.exceptions.Timeout)

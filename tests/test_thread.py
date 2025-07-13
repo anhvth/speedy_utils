@@ -168,7 +168,7 @@ def test_speedy_vs_normal():
     st_time = time.time() - start_time
     print(f"Normal for loop took: {st_time:.4f} seconds")
 
-    print(f"Speed improvement: {st_time/mt_time:.2f}x faster")
+    print(f"Speed improvement: {st_time / mt_time:.2f}x faster")
 
     # Print details about the outputs for debugging
     print(f"\nSpeedy output (length={len(out1)}): {out1}")
