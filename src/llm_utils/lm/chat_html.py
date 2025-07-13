@@ -1,6 +1,7 @@
-from typing import Any, Optional, cast
-from .sync_lm import LM, Messages, LegacyMsgs, RawMsgs
 import sys
+from typing import Any, Optional, cast
+
+from .sync_lm import LM, LegacyMsgs, Messages, RawMsgs
 
 # Configuration
 DEFAULT_FONT_SIZE = 1  # Base font size in pixels
@@ -11,8 +12,8 @@ thinking_tag = "think"
 # Jupyter notebook detection and imports
 try:
 
-    from IPython.display import display, HTML
     from IPython.core.getipython import get_ipython
+    from IPython.display import HTML, display
 
     JUPYTER_AVAILABLE = True
 except ImportError:
