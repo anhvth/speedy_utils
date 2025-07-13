@@ -3,14 +3,10 @@ import base64
 import hashlib
 import json
 import os
-from random import sample
 from typing import (
     Any,
-    Dict,
     List,
-    Literal,
     Optional,
-    Sequence,
     Type,
     Union,
     cast,
@@ -19,13 +15,10 @@ from typing import (
 
 from httpx import URL
 from loguru import logger
-from openai import AsyncOpenAI, AuthenticationError, BadRequestError, RateLimitError
+from openai import AsyncOpenAI
 from openai.pagination import AsyncPage as AsyncSyncPage
-
-# from openai.pagination import AsyncSyncPage
 from openai.types.chat import (
     ChatCompletionAssistantMessageParam,
-    ChatCompletionMessageParam,
     ChatCompletionSystemMessageParam,
     ChatCompletionToolMessageParam,
     ChatCompletionUserMessageParam,
@@ -38,102 +31,10 @@ from speedy_utils import jloads
 from ._utils import (
     LegacyMsgs,
     Messages,
-    ParsedOutput,
     RawMsgs,
     TModel,
-    _blue,
-    _green,
-    _red,
-    _yellow,
     get_tokenizer,
-    inspect_word_probs_async,
 )
-
-# Vendor-recommended LLM parameter quick reference (2025Q2, Muxup)
-# See: https://muxup.com/blog/llm-parameter-reference-2025q2
-
-KNOWN_CONFIG = {
-    # Qwen3 family (see model card "Best Practices" section)
-    "qwen3-think": {
-        "sampling_params": {
-            "temperature": 0.6,
-            "top_p": 0.95,
-            "top_k": 20,
-            "min_p": 0.0,
-            "presence_penalty": 1.5,
-        },
-    },
-    "qwen3-no-think": {
-        "sampling_params": {
-            "temperature": 0.7,
-            "top_p": 0.8,
-            "top_k": 20,
-            "min_p": 0.0,
-            "presence_penalty": 1.5,
-        },
-    },
-    # DeepSeek V3 (model card: temperature=0.3)
-    "deepseek-v3": {
-        "sampling_params": {
-            "temperature": 0.3,
-        },
-    },
-    # DeepSeek R1 (model card: temperature=0.6, top_p=0.95)
-    "deepseek-r1": {
-        "sampling_params": {
-            "temperature": 0.6,
-            "top_p": 0.95,
-        },
-    },
-    # Mistral Small 3.2-24B Instruct (model card: temperature=0.15)
-    "mistral-small-3.2-24b-instruct-2506": {
-        "sampling_params": {
-            "temperature": 0.15,
-        },
-    },
-    # Magistral Small 2506 (model card: temperature=0.7, top_p=0.95)
-    "magistral-small-2506": {
-        "sampling_params": {
-            "temperature": 0.7,
-            "top_p": 0.95,
-        },
-    },
-    # Phi-4 Reasoning (model card: temperature=0.8, top_k=50, top_p=0.95)
-    "phi-4-reasoning": {
-        "sampling_params": {
-            "temperature": 0.8,
-            "top_k": 50,
-            "top_p": 0.95,
-        },
-    },
-    # GLM-Z1-32B-0414 (model card: temperature=0.6, top_p=0.95, top_k=40, max_new_tokens=30000)
-    "glm-z1-32b-0414": {
-        "sampling_params": {
-            "temperature": 0.6,
-            "top_p": 0.95,
-            "top_k": 40,
-            "max_new_tokens": 30000,
-        },
-    },
-    # Llama-4-Scout-17B-16E-Instruct (generation_config.json: temperature=0.6, top_p=0.9)
-    "llama-4-scout-17b-16e-instruct": {
-        "sampling_params": {
-            "temperature": 0.6,
-            "top_p": 0.9,
-        },
-    },
-    # Gemma-3-27b-it (alleged: temperature=1.0, top_k=64, top_p=0.96)
-    "gemma-3-27b-it": {
-        "sampling_params": {
-            "temperature": 1.0,
-            "top_k": 64,
-            "top_p": 0.96,
-        },
-    },
-    # Add more as needed...
-}
-
-KNOWN_KEYS: List[str] = list(KNOWN_CONFIG.keys())
 
 
 class AsyncLMBase:
@@ -141,14 +42,7 @@ class AsyncLMBase:
 
     def __init__(
         self,
-        model: str | None = None,
         *,
-        temperature: float = 0.0,
-        max_tokens: int = 2_000,
-        top_p: float = 1.0,
-        top_k: int = 0,
-        presence_penalty: float = 0.0,
-        repetition_penalty: float = 1.0,
         host: str = "localhost",
         port: Optional[int | str] = None,
         base_url: Optional[str] = None,
@@ -156,18 +50,11 @@ class AsyncLMBase:
         cache: bool = True,
         ports: Optional[List[int]] = None,
     ) -> None:
-        self.model = model
-        self.temperature = temperature
-        self.max_tokens = max_tokens
-        self.top_p = top_p
-        self.top_k = top_k
-        self.presence_penalty = presence_penalty
-        self.repetition_penalty = repetition_penalty
-        self.port = port
-        self.host = host
+        self._port = port
+        self._host = host
         self.base_url = base_url or (f"http://{host}:{port}/v1" if port else None)
         self.api_key = api_key or os.getenv("OPENAI_API_KEY", "abc")
-        self.do_cache = cache
+        self._cache = cache
         self.ports = ports
         self._init_port = port  # <-- store the port provided at init
 
@@ -178,10 +65,10 @@ class AsyncLMBase:
             import random
 
             port = random.choice(self.ports)
-            api_base = f"http://{self.host}:{port}/v1"
+            api_base = f"http://{self._host}:{port}/v1"
             logger.debug(f"Using port: {port}")
         else:
-            api_base = self.base_url or f"http://{self.host}:{self.port}/v1"
+            api_base = self.base_url or f"http://{self._host}:{self._port}/v1"
         client = AsyncOpenAI(
             api_key=self.api_key,
             base_url=api_base,
@@ -516,66 +403,6 @@ class AsyncLMBase:
                 system_content += "\n\n/no_think"
         return system_content
 
-    def _parse_complete_output(
-        self, completion: Any, response_model: Type[BaseModel]
-    ) -> BaseModel:
-        """Parse completion output to response model."""
-        if hasattr(completion, "model_dump"):
-            completion = completion.model_dump()
-
-        if "choices" not in completion or not completion["choices"]:
-            raise ValueError("No choices in OpenAI response")
-
-        content = completion["choices"][0]["message"]["content"]
-        if not content:
-            # Enhanced error for debugging: show input tokens and their count
-
-            # Try to extract tokens from the completion for debugging
-            input_tokens = None
-            try:
-                input_tokens = completion.get("usage", {}).get("prompt_tokens")
-            except Exception:
-                input_tokens = None
-
-            # Try to get the prompt/messages for tokenization
-            prompt = None
-            try:
-                prompt = completion.get("messages") or completion.get("prompt")
-            except Exception:
-                prompt = None
-
-            tokens_preview = ""
-            if prompt is not None:
-                try:
-                    tokenizer = get_tokenizer(self.model)
-                    if isinstance(prompt, list):
-                        prompt_text = "\n".join(
-                            m.get("content", "") for m in prompt if isinstance(m, dict)
-                        )
-                    else:
-                        prompt_text = str(prompt)
-                    tokens = tokenizer.encode(prompt_text)
-                    n_tokens = len(tokens)
-                    first_100 = tokens[:100]
-                    last_100 = tokens[-100:] if n_tokens > 100 else []
-                    tokens_preview = (
-                        f"\nInput tokens: {n_tokens}"
-                        f"\nFirst 100 tokens: {first_100}"
-                        f"\nLast 100 tokens: {last_100}"
-                    )
-                except Exception as exc:
-                    tokens_preview = f"\n[Tokenization failed: {exc}]"
-
-            raise ValueError(
-                f"Empty content in response."
-                f"\nInput tokens (if available): {input_tokens}"
-                f"{tokens_preview}"
-            )
-
-        try:
-            data = jloads(content)
-            return response_model.model_validate(data)
-        except Exception as exc:
-            raise ValueError(
-                f"Failed to parse response as {response_model.__name__}: {content}"
-            ) from exc
+    async def inspect_history(self):
+        """Inspect the history of the LLM calls."""
+        pass

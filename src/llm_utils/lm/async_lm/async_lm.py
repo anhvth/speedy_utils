@@ -53,42 +53,39 @@ class AsyncLM(AsyncLMBase):
         add_json_schema_to_instruction: Optional[bool] = None,
         use_beta: bool = False,
         ports: Optional[List[int]] = None,
+        top_p: float = 1.0,
+        presence_penalty: float = 0.0,
+        top_k: int = 1,
+        repetition_penalty: float = 1.0,
     ) -> None:
-        self.temperature = temperature
-        self.max_tokens = max_tokens
-        self.port = port
-        self.host = host
-        self.base_url = base_url or (f"http://{host}:{port}/v1" if port else None)
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY", "abc")
-        # self.openai_kwargs = openai_kwargs
-        self.do_cache = cache
-        self.ports = ports
-        self._init_port = port  # <-- store the port provided at init
+        super().__init__(
+            host=host,
+            port=port,
+            ports=ports,
+            base_url=base_url,
+            cache=cache,
+            api_key=api_key,
+        )
 
         # Model behavior options
         self.response_model = response_model
         self.think = think
-        self.use_beta = use_beta
+        self._use_beta = use_beta
         self.add_json_schema_to_instruction = add_json_schema_to_instruction
         if not use_beta:
             self.add_json_schema_to_instruction = True
 
-        # Set default parameter values explicitly
-        self.top_p = 1.0
-        self.presence_penalty = 0.0
-        self.top_k = 1
-        self.repetition_penalty = 1.0
-
+        # Store all model-related parameters in model_kwargs
         self.model_kwargs = dict(
             model=model,
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
-            top_p=self.top_p,
-            presence_penalty=self.presence_penalty,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            top_p=top_p,
+            presence_penalty=presence_penalty,
         )
         self.extra_body = dict(
-            top_k=self.top_k,
-            repetition_penalty=self.repetition_penalty,
+            top_k=top_k,
+            repetition_penalty=repetition_penalty,
         )
 
     async def _call_and_parse(
@@ -96,31 +93,28 @@ class AsyncLM(AsyncLMBase):
         messages: list[dict],
         response_model: Type[OutputModelType],
         json_schema: dict,
-        use_beta: bool,
-        cache: Optional[bool] = None,
     ) -> tuple[dict, dict, OutputModelType]:
         """Unified call and parse with cache and error handling."""
         converted_messages = self._convert_messages(messages)
-        use_cache = self.do_cache if cache is None else cache
         cache_key = None
         completion = None
         choice = None
         parsed = None
 
-        if use_cache:
+        if self._cache:
             cache_data = {
                 "messages": converted_messages,
                 "model_kwargs": self.model_kwargs,
                 "guided_json": json_schema,
                 "response_format": response_model.__name__,
-                "use_beta": use_beta,
+                "use_beta": self._use_beta,
             }
             cache_key = self._cache_key(cache_data, {}, response_model)
             completion = self._load_cache(cache_key)
 
         if not completion:
             try:
-                if use_beta:
+                if self._use_beta:
                     completion = await self.client.chat.completions.create(
                         messages=converted_messages,
                         extra_body={"guided_json": json_schema, **self.extra_body},
@@ -155,7 +149,7 @@ class AsyncLM(AsyncLMBase):
         # Extract choice and parse
         choice = completion["choices"][0]["message"]
         try:
-            if use_beta:
+            if self._use_beta:
                 parsed = self._parse_complete_output(completion, response_model)
             else:
                 if "content" in choice:
@@ -195,10 +189,12 @@ class AsyncLM(AsyncLMBase):
             else cast(Messages, messages)
         )
 
-        use_cache = self.do_cache
+        use_cache = self._cache
 
-        assert self.model is not None, "Model must be set before making a call."
-        model: str = self.model
+        assert self.model_kwargs["model"] is not None, (
+            "Model must be set before making a call."
+        )
+        model: str = str(self.model_kwargs["model"])
 
         cache_key = (
             self._cache_key(openai_msgs, self.model_kwargs, str) if use_cache else None
@@ -259,7 +255,7 @@ class AsyncLM(AsyncLMBase):
         prompt,
     ) -> ParsedOutput[BaseModel]:
         """Parse response using guided JSON generation. Returns (parsed.model_dump(), messages)."""
-        if not self.use_beta:
+        if not self._use_beta:
             assert self.add_json_schema_to_instruction, (
                 "add_json_schema_to_instruction must be True when use_beta is False. otherwise model will not be able to parse the response."
             )
@@ -290,7 +286,6 @@ class AsyncLM(AsyncLMBase):
             messages,
             self.response_model,
             json_schema,
-            use_beta=self.use_beta,
         )
 
         # Build the full messages list (input + assistant reply)
@@ -325,6 +320,24 @@ class AsyncLM(AsyncLMBase):
             model_kwargs=self.model_kwargs,
         )
 
-    async def inspect_history(self):
-        """Inspect the history of the LLM calls."""
-        pass
+    def _parse_complete_output(
+        self, completion: Any, response_model: Type[BaseModel]
+    ) -> BaseModel:
+        """Parse completion output to response model."""
+        if hasattr(completion, "model_dump"):
+            completion = completion.model_dump()
+
+        if "choices" not in completion or not completion["choices"]:
+            raise ValueError("No choices in OpenAI response")
+
+        content = completion["choices"][0]["message"]["content"]
+        if not content:
+            raise ValueError("Response content is empty")
+
+        try:
+            data = jloads(content)
+            return response_model.model_validate(data)
+        except Exception as exc:
+            raise ValueError(
+                f"Failed to validate against response model {response_model.__name__}: {exc}\nRaw content: {content}"
+            ) from exc
