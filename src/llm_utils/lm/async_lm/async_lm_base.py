@@ -26,14 +26,11 @@ from openai.types.chat import (
 from openai.types.model import Model
 from pydantic import BaseModel
 
-from speedy_utils import jloads
-
 from ._utils import (
     LegacyMsgs,
     Messages,
     RawMsgs,
     TModel,
-    get_tokenizer,
 )
 
 

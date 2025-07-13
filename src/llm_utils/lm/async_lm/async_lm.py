@@ -1,23 +1,16 @@
 # from ._utils import *
-import json
-import os
 from typing import (
     Any,
     List,
     Literal,
     Optional,
-    Sequence,
     Type,
-    Union,
     cast,
-    overload,
 )
 
-from click import Option
 from loguru import logger
-from openai import AsyncOpenAI, AuthenticationError, BadRequestError, RateLimitError
+from openai import AuthenticationError, BadRequestError, RateLimitError
 from pydantic import BaseModel
-from traitlets import Bool
 
 # from llm_utils.lm.async_lm.async_llm_task import OutputModelType
 from llm_utils.lm.async_lm.async_lm_base import AsyncLMBase
@@ -29,8 +22,6 @@ from ._utils import (
     OutputModelType,
     ParsedOutput,
     RawMsgs,
-    TModel,
-    get_tokenizer,
 )
 
 
@@ -40,7 +31,6 @@ class AsyncLM(AsyncLMBase):
     def __init__(
         self,
         model: str,
-        *,
         response_model: Optional[type[BaseModel]] = None,
         temperature: float = 0.0,
         max_tokens: int = 2_000,
@@ -93,7 +83,7 @@ class AsyncLM(AsyncLMBase):
         messages: list[dict],
         response_model: Type[OutputModelType],
         json_schema: dict,
-    ) -> tuple[dict, dict, OutputModelType]:
+    ) -> tuple[dict, list[dict], OutputModelType]:
         """Unified call and parse with cache and error handling."""
         converted_messages = self._convert_messages(messages)
         cache_key = None
@@ -152,22 +142,49 @@ class AsyncLM(AsyncLMBase):
             if self._use_beta:
                 parsed = self._parse_complete_output(completion, response_model)
             else:
-                if "content" in choice:
-                    content = choice["content"]
-                    if not content:
-                        raise ValueError("Response content is empty")
-                else:
-                    raise ValueError("Response has no content field")
+                # if "content" in choice:
+                assert "content" in choice, (
+                    "Response choice must contain 'content' field."
+                )
+                content = choice["content"]
+                if not content:
+                    raise ValueError("Response content is empty")
+                # else:
+                # raise ValueError("Response has no content field")
                 parsed = response_model.model_validate(jloads(content))
         except Exception as e:
             content = choice.get(
                 "content", ""
             )  # Keep .get() here for error message only
             raise ValueError(
-                f"Failed to parse model response: {e}\nRaw: {content}"
+                f"Failed to parse model response: {e}\nModel response message: {choice['message']}"
             ) from e
 
-        return completion, choice, cast(OutputModelType, parsed)
+        # Build the full messages list (input + assistant reply)
+        # Handle reasoning_content with explicit checking
+        assistant_msg = self._extract_assistant_message(choice)
+        full_messages = messages + [assistant_msg]
+
+        return completion, full_messages, cast(OutputModelType, parsed)
+
+    def _extract_assistant_message(self, choice):  # -> dict[str, str] | dict[str, Any]:
+        # TODO this current assume choice is a dict with "reasoning_content" and "content"
+        has_reasoning = False
+        if "reasoning_content" in choice:
+            reasoning_content = choice["reasoning_content"].strip()
+            has_reasoning = True
+
+        content = choice["content"]
+        _content = content.lstrip("\n")
+        if has_reasoning:
+            assistant_msg = {
+                "role": "assistant",
+                "content": f"<think>\n{reasoning_content}\n</think>\n\n{_content}",
+            }
+        else:
+            assistant_msg = {"role": "assistant", "content": _content}
+
+        return assistant_msg
 
     async def __call__(
         self,
@@ -282,37 +299,12 @@ class AsyncLM(AsyncLMBase):
             {"role": "user", "content": prompt},
         ]  # type: ignore
 
-        completion, choice, parsed = await self._call_and_parse(
+        completion, full_messages, parsed = await self._call_and_parse(
             messages,
             self.response_model,
             json_schema,
         )
 
-        # Build the full messages list (input + assistant reply)
-        # Handle reasoning_content with explicit checking
-        if "reasoning_content" in choice:
-            reasoning_content = choice["reasoning_content"].strip()
-        else:
-            reasoning_content = ""
-
-        # Handle content with explicit checking
-        if "content" in choice:
-            content = choice["content"]
-            if not content:
-                logger.warning("Assistant response content is empty")
-                content = ""
-        else:
-            logger.warning("Assistant response has no content field")
-            content = ""
-
-        _content = content.lstrip("\n")
-        assistant_msg = {
-            "role": "assistant",
-            "content": f"<think>\n{reasoning_content}\n</think>\n\n{_content}",
-        }
-        full_messages = messages + [assistant_msg]
-
-        # Return the parsed model's model_dump and the messages list
         return ParsedOutput(
             messages=full_messages,
             parsed=cast(BaseModel, parsed),
@@ -334,10 +326,5 @@ class AsyncLM(AsyncLMBase):
         if not content:
             raise ValueError("Response content is empty")
 
-        try:
-            data = jloads(content)
-            return response_model.model_validate(data)
-        except Exception as exc:
-            raise ValueError(
-                f"Failed to validate against response model {response_model.__name__}: {exc}\nRaw content: {content}"
-            ) from exc
+        data = jloads(content)
+        return response_model.model_validate(data)
