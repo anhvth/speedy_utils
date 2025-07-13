@@ -48,13 +48,16 @@ def _yellow(t):
     return _color(33, t)
 
 
-TParsed = TypeVar("TParsed", bound=BaseModel)
+# TParsed = TypeVar("TParsed", bound=BaseModel)
+
+InputModelType = TypeVar("InputModelType", bound=BaseModel)
+OutputModelType = TypeVar("OutputModelType", bound=BaseModel)
 
 
-class ParsedOutput(TypedDict, Generic[TParsed]):
+class ParsedOutput(TypedDict, Generic[OutputModelType]):
     messages: List
     completion: Any
-    parsed: TParsed
+    parsed: OutputModelType
     model_kwargs: Dict[str, Any]
 
 
@@ -186,7 +189,6 @@ __all__ = [
     "Messages",
     "LegacyMsgs",
     "RawMsgs",
-    "TParsed",
     "ParsedOutput",
     "get_tokenizer",
     "inspect_word_probs_async",

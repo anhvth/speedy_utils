@@ -66,16 +66,48 @@ svllm-lb = "llm_utils.scripts.vllm_load_balancer:run_load_balancer"
 openapi_client_codegen = "speedy_utils.scripts.openapi_client_codegen:main"
 
 
+[tool.ruff]
+exclude = [
+    "**/*.ipynb",
+    "notebooks/**/*.ipynb",
+    "legacy",
+    "**/__pycache__",
+    "**/.cache",
+    "**/.ruff_cache",
+    "**/.pytest_cache",
+    "**/.ipynb_checkpoints",
+    "**/.venv",
+    "**/.vscode",
+    "**/*.egg-info",
+    "**/*.lock",
+    "poetry.lock",
+    "Pipfile.lock",
+    "package-lock.json",
+    "yarn.lock",
+    "unsloth_compiled_cache",
+    "unsloth_training_checkpoints",
+]
+target-version = "py310"
+unsafe-fixes = true # allow deletions Ruff marks unsafe
+[tool.ruff.lint]
+ignore = [
+    "E401", # multiple imports on one line
+    "E402", # module level import not at top of file
+    "E501", # line too long
+    "F401", # unused import
+    "F403", # wildcard import
+    "F405", # name may be undefined, from wildcard import
+    "F841", # local variable assigned but never used
+    "E722", # do not use bare except
+    "E731", # do not assign a lambda expression, use a def
+    "E741", # ambiguous variable name
+    "E902", # io error
+]
+unfixable = ["E401", "E402", "E501", "F401", "F403"]
+extend-select = ["F"] # keep all pyflakes rules
+
+
 [tool.ruff.format]
 quote-style = "double"
 line-ending = "lf"
 docstring-code-format = true
-[tool.ruff]
-exclude = ["**/*.ipynb", "poly_frontend_controler/*", "poly_client/", "legacy"]
-ignore = [
-    "E501", # Line too long
-    "F401", # Unused import
-    "F403", # Wildcard import
-    "F841", # Local variable is assigned to but never used
-    "T201", # Use of `print` statement
-]

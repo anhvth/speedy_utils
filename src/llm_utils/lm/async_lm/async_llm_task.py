@@ -17,8 +17,9 @@ from openai.types.chat import (
 from pydantic import BaseModel
 
 from llm_utils.chat_format.display import get_conversation_one_turn
+from llm_utils.lm.async_lm._utils import InputModelType
 
-from .async_lm import AsyncLM, ParsedOutput, TParsed
+from .async_lm import AsyncLM, OutputModelType, ParsedOutput
 
 # --------------------------------------------------------------------------- #
 # type helpers
@@ -32,9 +33,6 @@ RawMsgs = Union[Messages, LegacyMsgs]
 # --------------------------------------------------------------------------- #
 # Async LLMTask class
 # --------------------------------------------------------------------------- #
-
-InputModelType = TypeVar("InputModelType", bound=BaseModel)
-OutputModelType = TypeVar("OutputModelType", bound=BaseModel)
 
 
 class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
@@ -73,6 +71,7 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
         result = await demo_task({'text_to_translate': 'Translate from english to vietnamese: Hello how are you'})
     ```
     """
+    
 
     lm: "AsyncLM"
     InputModel: InputModelType
@@ -86,10 +85,8 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
     async def __call__(
         self,
         data: BaseModel | dict,
-        temperature: float = 0.1,
-        cache: bool = False,
-        think: Optional[bool] = None,  # if not None, overrides self.think
     ) -> ParsedOutput[OutputModelType]:
+        self.response_model = self.OutputModel
         type_args = getattr(self.__class__, "__orig_bases__", None)
         if (
             type_args
@@ -123,17 +120,11 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
             "OutputModel must be a subclass of BaseModel"
         )
 
-
         return cast(
             ParsedOutput[OutputModelType],
             await self.lm.parse(
-                prompt=item.model_dump_json(),
                 instruction=self.__doc__ or "",
-                response_model=output_model,
-                temperature=temperature or self.temperature,
-                think=think if think is not None else self.think,
-                add_json_schema_to_instruction=self.add_json_schema,
-                cache=self.cache or cache,
+                prompt=item.model_dump_json(),
             ),
         )
 
