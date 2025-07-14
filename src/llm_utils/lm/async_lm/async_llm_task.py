@@ -11,6 +11,7 @@ from typing import Any, Dict, Generic, List, Literal, Optional, TypeVar, Union, 
 from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
 from pytest import Cache
+from speedy_utils import jdumps
 from speedy_utils.all import dump_json_or_pickle, identify
 
 from llm_utils.chat_format.display import get_conversation_one_turn
@@ -469,7 +470,7 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
             return output["parsed"]
 
     def generate_training_data(
-        self, input_dict: Dict[str, Any], output: Dict[str, Any]
+        self, input_json: str, output_json: str
     ) -> Dict[str, Any]:
         """
         Generate training data in ShareGPT format for the given input/output pair.
@@ -487,23 +488,19 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
         Raises:
             AttributeError: If InputModel or OutputModel are not properly defined
         """
-        if not hasattr(self, "InputModel") or not hasattr(self, "OutputModel"):
-            raise AttributeError(
-                f"{self.__class__.__name__} must define InputModel and OutputModel "
-                "as class attributes to use generate_training_data"
-            )
+        # if not hasattr(self, "InputModel") or not hasattr(self, "OutputModel"):
+        #     raise AttributeError(
+        #         f"{self.__class__.__name__} must define InputModel and OutputModel "
+        #         "as class attributes to use generate_training_data"
+        #     )
 
         system_prompt = self.__doc__ or ""
-
-        # Convert input/output to JSON format
-        user_message = self.InputModel(**input_dict).model_dump_json()  # type: ignore[attr-defined]
-        assistant_message = self.OutputModel(**output).model_dump_json()  # type: ignore[attr-defined]
-
-        # Generate conversation format
+        assert isinstance(input_json, str), "Input must be a JSON string"
+        assert isinstance(output_json, str), "Output must be a JSON string"
         messages = get_conversation_one_turn(
             system_msg=system_prompt,
-            user_msg=user_message,
-            assistant_msg=assistant_message,
+            user_msg=input_json,
+            assistant_msg=output_json,
         )
 
         return {"messages": messages}
