@@ -28,10 +28,6 @@ from ._utils import (
 def jloads_safe(content: str) -> Any:
     # if contain ```json, remove it
     if "```json" in content:
-        # content = content.split("```json")[1]
-        # start_idx = content.find("{")
-        # end_idx = content.rfind("}")
-        # content = content[start_idx : end_idx + 1].strip()
         content = content.split("```json")[1].strip().split("```")[0].strip()
     try:
         return jloads(content)
@@ -177,6 +173,7 @@ class AsyncLM(AsyncLMBase):
                 messages, response_model, json_schema
             )
 
+        choice = None
         try:
             # Use unified client call
             completion = await self._unified_client_call(
@@ -201,7 +198,7 @@ class AsyncLM(AsyncLMBase):
             if not isinstance(
                 e, (AuthenticationError, RateLimitError, BadRequestError)
             ):
-                content = choice.get("content", "N/A")
+                content = choice.get("content", "N/A") if choice else "N/A"
                 logger.info(
                     f"Regular parsing failed due to wrong format or content, now falling back to beta mode: {content=}, {e=}"
                 )
@@ -211,7 +208,7 @@ class AsyncLM(AsyncLMBase):
                     )
                 except Exception as beta_e:
                     logger.warning(f"Beta mode fallback also failed: {beta_e}")
-                    choice_info = choice if "choice" in locals() else "N/A"
+                    choice_info = choice if choice is not None else "N/A"
                     raise ValueError(
                         f"Failed to parse model response with both regular and beta modes. "
                         f"Regular error: {e}. Beta error: {beta_e}. "
@@ -231,6 +228,7 @@ class AsyncLM(AsyncLMBase):
         json_schema: dict,
     ) -> tuple[dict, list[dict], OutputModelType]:
         """Call and parse for beta mode with guided JSON."""
+        choice = None
         try:
             # Use unified client call with guided JSON
             completion = await self._unified_client_call(
@@ -244,7 +242,7 @@ class AsyncLM(AsyncLMBase):
             parsed = self._parse_complete_output(completion, response_model)
 
         except Exception as e:
-            choice_info = choice if "choice" in locals() else "N/A"
+            choice_info = choice if choice is not None else "N/A"
             raise ValueError(
                 f"Failed to parse model response: {e}\nModel response message: {choice_info}"
             ) from e

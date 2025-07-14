@@ -1,19 +1,17 @@
 import argparse
-import sys
-import os
-import time
-from datetime import datetime
-from collections import defaultdict
-
 import asyncio
 import contextlib
+import os
 import random
+import sys
+import time
+from collections import defaultdict
+from datetime import datetime
 
 import aiohttp
 from loguru import logger
-from tabulate import tabulate
-
 from speedy_utils import setup_logger
+from tabulate import tabulate
 
 setup_logger(min_interval=5)
 
@@ -28,7 +26,7 @@ Examples:
   python vllm_load_balancer.py 8001 --ports 8140,8150,8160
   python vllm_load_balancer.py 8080 --ports 8140,8150 --host 192.168.1.100
   python vllm_load_balancer.py 8001 --ports 8140,8150 --status-interval 3
-  python vllm_load_balancer.py 8001 --ports 8140,8150 --throttle-ms 10
+  python vllm_load_balancer.py 8001 --ports 8140,8150 --throttle-ms 100
 
 Features:
   • Real-time dashboard with color-coded status
@@ -78,7 +76,7 @@ Features:
         "--throttle-ms",
         type=float,
         default=30.0,
-        help="Minimum milliseconds between requests to same server (default: 5ms)",
+        help="Minimum milliseconds between requests to same server (default: 30ms)",
     )
     return parser.parse_args()
 
@@ -91,13 +89,13 @@ BACKEND_HOST = "localhost"  # Will be overwritten by CLI
 BACKEND_PORTS = []  # Will be overwritten by CLI
 STATUS_PRINT_INTERVAL = 5
 HEALTH_CHECK_TIMEOUT = 2
-THROTTLE_MS = 5.0  # Will be overwritten by CLI
+THROTTLE_MS = 30.0  # Will be overwritten by CLI
 BUFFER_SIZE = 4096
 
 # --- Global Shared State ---
 available_servers = []
 connection_counts = defaultdict(int)
-last_send_times = defaultdict(float)  # Track last send time per server
+last_send_times = defaultdict(float)  # Track last dispatch time per server
 state_lock = asyncio.Lock()
 start_time = None
 total_connections_served = 0
@@ -193,7 +191,7 @@ class Colors:
     BG_BLUE = "\033[44m"
 
 
-# --- Helper Functions --- (relay_data and safe_close_writer remain the same)
+# --- Helper Functions ---
 async def relay_data(reader, writer, direction):
     """Reads data from reader and writes to writer until EOF or error."""
     try:
@@ -350,7 +348,7 @@ async def scan_and_update_servers():
         await asyncio.sleep(10)
 
 
-# --- Core Load Balancer Logic (handle_client remains the same) ---
+# --- Core Load Balancer Logic ---
 async def handle_client(client_reader, client_writer):
     """Handles a single client connection."""
     client_addr = client_writer.get_extra_info("peername")
@@ -394,7 +392,6 @@ async def handle_client(client_reader, client_writer):
                 server_selected = True
 
                 # Update global statistics
-                global total_connections_served, current_active_connections
                 total_connections_served += 1
                 current_active_connections += 1
             else:
@@ -415,29 +412,40 @@ async def handle_client(client_reader, client_writer):
             server_selected = False
             return
 
-        # --- Throttling Logic ---
-        # Check if we need to throttle requests to avoid overwhelming the backend
-        current_time = time.time() * 1000  # Convert to milliseconds
-        sleep_time = 0
-        async with state_lock:
-            last_send_time = last_send_times.get(backend_server, 0)
-            time_since_last_send = current_time - last_send_time
+        # --- Throttling Logic (Concurrency Safe) ---
+        # Atomically schedule the next request to avoid thundering herd on a single server.
+        sleep_duration_s = 0
+        now_ms = time.time() * 1000
 
-            if time_since_last_send < THROTTLE_MS:
-                sleep_time = (
-                    THROTTLE_MS - time_since_last_send
-                ) / 1000  # Convert to seconds
+        async with state_lock:
+            # Get the time the last request was DISPATCHED to this server.
+            last_dispatch_ms = last_send_times.get(backend_server, 0)
+
+            # Calculate when the next request is allowed to be sent.
+            next_allowed_ms = last_dispatch_ms + THROTTLE_MS
+
+            # If the next allowed time is in the future, we must wait.
+            if next_allowed_ms > now_ms:
+                sleep_duration_s = (next_allowed_ms - now_ms) / 1000
+                # The next request after this one will be scheduled relative to when
+                # THIS request is actually sent (i.e., after its delay).
+                new_dispatch_time_ms = next_allowed_ms
+            else:
+                # We can send immediately.
+                sleep_duration_s = 0
+                new_dispatch_time_ms = now_ms
+
+            # CRITICAL: Update the dispatch time for the *next* caller immediately inside the lock.
+            last_send_times[backend_server] = new_dispatch_time_ms
+
+            if sleep_duration_s > 0:
                 logger.debug(
-                    f"Throttling request to {backend_server} for {sleep_time:.3f}s (last send: {time_since_last_send:.1f}ms ago)"
+                    f"Throttling request to {backend_server} for {sleep_duration_s:.3f}s to maintain >{THROTTLE_MS}ms interval."
                 )
 
-        # Sleep outside the lock to avoid blocking other clients
-        if sleep_time > 0:
-            await asyncio.sleep(sleep_time)
-
-        # Update last send time after throttling
-        async with state_lock:
-            last_send_times[backend_server] = time.time() * 1000
+        # Sleep outside the lock to avoid blocking other tasks.
+        if sleep_duration_s > 0:
+            await asyncio.sleep(sleep_duration_s)
 
         try:
             logger.debug(
