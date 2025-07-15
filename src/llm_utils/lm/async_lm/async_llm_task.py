@@ -97,11 +97,11 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
     DEFAULT_PRESENCE_PENALTY: Optional[float] = None
     DEFAULT_TOP_K: Optional[int] = None
     DEFAULT_REPETITION_PENALTY: Optional[float] = None
-    DEFAULT_CACHE: Optional[Cache] = None
+    DEFAULT_CACHE: Optional[bool] = True
     DEFAULT_THINK: Optional[Literal[True, False]] = None
     DEFAULT_PORTS: Optional[List[int]] = None
-    DEFAULT_USE_BETA: Optional[bool] = None
-    DEFAULT_ADD_JSON_SCHEMA_TO_INSTRUCTION: Optional[bool] = None
+    DEFAULT_USE_BETA: Optional[bool] = False
+    DEFAULT_ADD_JSON_SCHEMA_TO_INSTRUCTION: Optional[bool] = True
     DEFAULT_COLLECT_DATA: Optional[bool] = None
     DEFAULT_BASE_URL: Optional[str] = None
     DEFAULT_API_KEY: Optional[str] = None
@@ -144,7 +144,7 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
             port=port if port is not None else self.DEFAULT_PORT,
             base_url=base_url if base_url is not None else self.DEFAULT_BASE_URL,
             api_key=api_key if api_key is not None else self.DEFAULT_API_KEY,
-            cache=cache if cache is not None else True,
+            cache=cache if cache is not None else self.DEFAULT_CACHE,
             think=think if think is not None else self.DEFAULT_THINK,
             add_json_schema_to_instruction=add_json_schema_to_instruction
             if add_json_schema_to_instruction is not None
