@@ -54,7 +54,6 @@ class AsyncLMBase:
         self._cache = cache
         self.ports = ports
         self._init_port = port  # <-- store the port provided at init
-        self._last_client:AsyncOpenAI = None
 
     @property
     def client(self) -> AsyncOpenAI:
