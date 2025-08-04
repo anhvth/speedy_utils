@@ -507,3 +507,10 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
 
     # Compatibility alias for other LLMTask implementations
     arun = __call__
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if self._lm and hasattr(self._lm, "aclose"):  # Or self._lm.client
+            await self._lm._last_client._client.aclose()
