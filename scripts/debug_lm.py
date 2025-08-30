@@ -1,8 +1,6 @@
 # src/llm_utils/lm/base_lm.py
 from __future__ import annotations
 
-import base64
-import hashlib
 import json
 import os
 from typing import (
@@ -21,6 +19,8 @@ from loguru import logger
 from openai import OpenAI, AuthenticationError, RateLimitError
 from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
+
+from llm_utils.lm.openai_memoize import MOpenAI
 
 # --------------------------------------------------------------------------- #
 # Type helpers
@@ -62,7 +62,7 @@ class LM:
         self.openai_kwargs = openai_kwargs
         self.do_cache = cache
 
-        self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+        self.client = MOpenAI(api_key=self.api_key, base_url=self.base_url, cache=cache)
 
     # --------------------------------------------------------------------- #
     # public API – typed overloads for correct inference
@@ -131,23 +131,17 @@ class LM:
             **kwargs,
         )
 
-        raw_msg = self._call_raw(msgs, use_cache=use_cache, **kw)
+        raw_msg = self._call_raw(msgs, **kw)
         return self._parse_output(raw_msg, response_format)
 
     # --------------------------------------------------------------------- #
-    # internals – low-level OpenAI call with tiny on-disk cache
+    # internals – low-level OpenAI call (caching handled by MOpenAI)
     # --------------------------------------------------------------------- #
     def _call_raw(
         self,
         messages: Sequence[ChatCompletionMessageParam],
-        *,
-        use_cache: bool,
         **kw: Any,
     ):
-        cache_key = self._cache_key(messages, kw) if use_cache else None
-        if cache_key and (hit := self._load_cache(cache_key)) is not None:
-            return hit
-
         try:
             response = self.client.chat.completions.create(
                 model=self.model,
@@ -158,9 +152,6 @@ class LM:
         except (AuthenticationError, RateLimitError) as exc:  # pragma: no cover
             logger.error(exc)
             raise
-
-        if cache_key:
-            self._dump_cache(cache_key, result)
 
         return result
 
@@ -193,41 +184,3 @@ class LM:
         raise TypeError(
             "`response_format` must be `str` or a subclass of `pydantic.BaseModel`"
         )
-
-    # --------------------------------------------------------------------- #
-    # very small (~one-liner) on-disk cache
-    # --------------------------------------------------------------------- #
-    @staticmethod
-    def _cache_key(messages: Any, kw: Any) -> str:
-        blob = json.dumps([messages, kw], sort_keys=True).encode()
-        return base64.urlsafe_b64encode(hashlib.sha256(blob).digest()).decode()[:22]
-
-    @staticmethod
-    def _cache_path(key: str) -> str:
-        return os.path.expanduser(f"~/.cache/lm/{key}.json")
-
-    def _dump_cache(self, key: str, val: Any) -> None:
-        try:
-            path = self._cache_path(key)
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "w") as fh:
-                json.dump(
-                    (
-                        val
-                        if isinstance(val, dict)
-                        else getattr(val, "__dict__", str(val))
-                    ),
-                    fh,
-                )
-        except Exception as exc:  # pragma: no cover
-            logger.debug(f"cache write skipped: {exc}")
-
-    def _load_cache(self, key: str) -> Any | None:
-        path = self._cache_path(key)
-        if not os.path.exists(path):
-            return None
-        try:
-            with open(path) as fh:
-                return json.load(fh)
-        except Exception:  # pragma: no cover
-            return None

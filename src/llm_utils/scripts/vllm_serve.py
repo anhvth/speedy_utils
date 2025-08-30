@@ -72,6 +72,7 @@ import openai
 import requests
 from loguru import logger
 
+from llm_utils.lm.openai_memoize import MOpenAI
 from speedy_utils.common.utils_io import load_by_ext
 
 LORA_DIR: str = os.environ.get("LORA_DIR", "/loras")
@@ -82,7 +83,7 @@ logger.info(f"LORA_DIR: {LORA_DIR}")
 
 def model_list(host_port: str, api_key: str = "abc") -> None:
     """List models from the vLLM server."""
-    client = openai.OpenAI(base_url=f"http://{host_port}/v1", api_key=api_key)
+    client = MOpenAI(base_url=f"http://{host_port}/v1", api_key=api_key)
     models = client.models.list()
     for model in models:
         print(f"Model ID: {model.id}")

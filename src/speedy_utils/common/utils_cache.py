@@ -560,6 +560,7 @@ def _async_both_memoize(
 # Public decorator (only export memoize)
 # --------------------------------------------------------------------------------------
 
+
 @overload
 def memoize(
     _func: Callable[P, R],
@@ -624,24 +625,34 @@ def memoize(
     """
     if "~/" in cache_dir:
         cache_dir = osp.expanduser(cache_dir)
+    from speedy_utils import timef
 
     def decorator(func: Callable[P, Any]) -> Callable[P, Any]:
         is_async = inspect.iscoroutinefunction(func)
 
+        # Apply timing decorator if verbose=True
+        target_func = timef(func) if verbose else func
+
         if cache_type == "memory":
             if is_async:
-                return _async_memory_memoize(func, size, keys, ignore_self, key)  # type: ignore[return-value]
-            return _memory_memoize(func, size, keys, ignore_self, key)  # type: ignore[return-value]
+                return _async_memory_memoize(target_func, size, keys, ignore_self, key)  # type: ignore[return-value]
+            return _memory_memoize(target_func, size, keys, ignore_self, key)  # type: ignore[return-value]
 
         if cache_type == "disk":
             if is_async:
-                return _async_disk_memoize(func, keys, cache_dir, ignore_self, verbose, key)  # type: ignore[return-value]
-            return _disk_memoize(func, keys, cache_dir, ignore_self, verbose, key)  # type: ignore[return-value]
+                return _async_disk_memoize(
+                    target_func, keys, cache_dir, ignore_self, verbose, key
+                )  # type: ignore[return-value]
+            return _disk_memoize(
+                target_func, keys, cache_dir, ignore_self, verbose, key
+            )  # type: ignore[return-value]
 
         # cache_type == "both"
         if is_async:
-            return _async_both_memoize(func, keys, cache_dir, ignore_self, size, key)  # type: ignore[return-value]
-        return both_memoize(func, keys, cache_dir, ignore_self, size, key)  # type: ignore[return-value]
+            return _async_both_memoize(
+                target_func, keys, cache_dir, ignore_self, size, key
+            )  # type: ignore[return-value]
+        return both_memoize(target_func, keys, cache_dir, ignore_self, size, key)  # type: ignore[return-value]
 
     # Support both @memoize and @memoize(...)
     if _func is None:

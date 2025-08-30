@@ -98,73 +98,35 @@ class AsyncLM(AsyncLMBase):
         self,
         messages: RawMsgs,
         extra_body: Optional[dict] = None,
-        cache_suffix: str = "",
         max_tokens: Optional[int] = None,
     ) -> dict:
-        """Unified method for all client interactions with caching and error handling."""
+        """Unified method for all client interactions (caching handled by MAsyncOpenAI)."""
         converted_messages: Messages = (
             self._convert_messages(cast(LegacyMsgs, messages))
             if messages and isinstance(messages[0], dict)
             else cast(Messages, messages)
         )
-        cache_key = None
-        completion = None
         # override max_tokens if provided
         if max_tokens is not None:
             self.model_kwargs["max_tokens"] = max_tokens
 
-        # Handle caching
-        if self._cache:
-            cache_data = {
-                "messages": converted_messages,
-                "model_kwargs": self.model_kwargs,
-                "extra_body": extra_body or {},
-                "cache_suffix": cache_suffix,
-            }
-            cache_key = self._cache_key(cache_data, {}, str)
-            completion = self._load_cache(cache_key)
-
-        # Check for cached error responses
-        if (
-            completion
-            and isinstance(completion, dict)
-            and "error" in completion
-            and completion["error"]
-        ):
-            error_type = completion.get("error_type", "Unknown")
-            error_message = completion.get("error_message", "Cached error")
-            logger.warning(f"Found cached error ({error_type}): {error_message}")
-            raise ValueError(f"Cached {error_type}: {error_message}")
-
         try:
-            # Get completion from API if not cached
-            if not completion:
-                call_kwargs = {
-                    "messages": converted_messages,
-                    **self.model_kwargs,
-                }
-                if extra_body:
-                    call_kwargs["extra_body"] = extra_body
+            # Get completion from API (caching handled by MAsyncOpenAI)
+            call_kwargs = {
+                "messages": converted_messages,
+                **self.model_kwargs,
+            }
+            if extra_body:
+                call_kwargs["extra_body"] = extra_body
 
-                completion = await self.client.chat.completions.create(**call_kwargs)
+            completion = await self.client.chat.completions.create(**call_kwargs)
 
-                if hasattr(completion, "model_dump"):
-                    completion = completion.model_dump()
-                if cache_key:
-                    self._dump_cache(cache_key, completion)
+            if hasattr(completion, "model_dump"):
+                completion = completion.model_dump()
 
         except (AuthenticationError, RateLimitError, BadRequestError) as exc:
             error_msg = f"OpenAI API error ({type(exc).__name__}): {exc}"
             logger.error(error_msg)
-            if isinstance(exc, BadRequestError) and cache_key:
-                error_response = {
-                    "error": True,
-                    "error_type": "BadRequestError",
-                    "error_message": str(exc),
-                    "choices": [],
-                }
-                self._dump_cache(cache_key, error_response)
-                logger.debug(f"Cached BadRequestError for key: {cache_key}")
             raise
 
         return completion
@@ -187,7 +149,6 @@ class AsyncLM(AsyncLMBase):
             completion = await self._unified_client_call(
                 messages,
                 extra_body={**self.extra_body},
-                cache_suffix=f"_parse_{response_model.__name__}",
             )
 
             # Parse the response
@@ -242,7 +203,6 @@ class AsyncLM(AsyncLMBase):
             completion = await self._unified_client_call(
                 messages,
                 extra_body={"guided_json": json_schema, **self.extra_body},
-                cache_suffix=f"_beta_parse_{response_model.__name__}",
             )
 
             # Parse the response
@@ -308,7 +268,7 @@ class AsyncLM(AsyncLMBase):
 
         # Use unified client call
         raw_response = await self._unified_client_call(
-            list(openai_msgs), cache_suffix="_call", max_tokens=max_tokens
+            list(openai_msgs), max_tokens=max_tokens
         )
 
         if hasattr(raw_response, "model_dump"):

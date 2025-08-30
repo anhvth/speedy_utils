@@ -1,3 +1,4 @@
+from llm_utils.lm.openai_memoize import MOpenAI
 from .chat_format import (
     build_chatml_input,
     display_chat_messages_as_html,
@@ -23,4 +24,5 @@ __all__ = [
     "display_chat_messages_as_html",
     "AsyncLM",
     "AsyncLLMTask",
+    "MOpenAI"
 ]

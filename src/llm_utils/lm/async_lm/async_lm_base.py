@@ -1,6 +1,4 @@
 # from ._utils import *
-import base64
-import hashlib
 import json
 import os
 from typing import (
@@ -25,6 +23,8 @@ from openai.types.chat import (
 )
 from openai.types.model import Model
 from pydantic import BaseModel
+
+from llm_utils.lm.openai_memoize import MAsyncOpenAI
 
 from ._utils import (
     LegacyMsgs,
@@ -56,7 +56,7 @@ class AsyncLMBase:
         self._init_port = port  # <-- store the port provided at init
 
     @property
-    def client(self) -> AsyncOpenAI:
+    def client(self) -> MAsyncOpenAI:
         # if have multiple ports
         if self.ports:
             import random
@@ -66,9 +66,10 @@ class AsyncLMBase:
             logger.debug(f"Using port: {port}")
         else:
             api_base = self.base_url or f"http://{self._host}:{self._port}/v1"
-        client = AsyncOpenAI(
+        client = MAsyncOpenAI(
             api_key=self.api_key,
             base_url=api_base,
+            cache=self._cache,
         )
         self._last_client = client
         return client
@@ -175,175 +176,6 @@ class AsyncLMBase:
             raise ValueError(
                 f"Model did not return valid JSON:\n---\n{raw_response}"
             ) from exc
-
-    # ------------------------------------------------------------------ #
-    # Simple disk cache (sync)
-    # ------------------------------------------------------------------ #
-    @staticmethod
-    def _cache_key(
-        messages: Any, kw: Any, response_format: Union[type[str], Type[BaseModel]]
-    ) -> str:
-        tag = response_format.__name__ if response_format is not str else "text"
-        blob = json.dumps([messages, kw, tag], sort_keys=True).encode()
-        return base64.urlsafe_b64encode(hashlib.sha256(blob).digest()).decode()[:22]
-
-    @staticmethod
-    def _cache_path(key: str) -> str:
-        return os.path.expanduser(f"~/.cache/lm/{key}.json")
-
-    def _dump_cache(self, key: str, val: Any) -> None:
-        try:
-            path = self._cache_path(key)
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "w") as fh:
-                if isinstance(val, BaseModel):
-                    json.dump(val.model_dump(mode="json"), fh)
-                else:
-                    json.dump(val, fh)
-        except Exception as exc:
-            logger.debug(f"cache write skipped: {exc}")
-
-    def _load_cache(self, key: str) -> Any | None:
-        path = self._cache_path(key)
-        if not os.path.exists(path):
-            return None
-        try:
-            with open(path) as fh:
-                return json.load(fh)
-        except Exception:
-            return None
-
-    # async def inspect_word_probs(
-    #     self,
-    #     messages: Optional[List[Dict[str, Any]]] = None,
-    #     tokenizer: Optional[Any] = None,
-    #     do_print=True,
-    #     add_think: bool = True,
-    # ) -> tuple[List[Dict[str, Any]], Any, str]:
-    #     """
-    #     Inspect word probabilities in a language model response.
-
-    #     Args:
-    #         tokenizer: Tokenizer instance to encode words.
-    #         messages: List of messages to analyze.
-
-    #     Returns:
-    #         A tuple containing:
-    #         - List of word probabilities with their log probabilities.
-    #         - Token log probability dictionaries.
-    #         - Rendered string with colored word probabilities.
-    #     """
-    #     if messages is None:
-    #         messages = await self.last_messages(add_think=add_think)
-    #         if messages is None:
-    #             raise ValueError("No messages provided and no last messages available.")
-
-    #     if tokenizer is None:
-    #         tokenizer = get_tokenizer(self.model)
-
-    #     ret = await inspect_word_probs_async(self, tokenizer, messages)
-    #     if do_print:
-    #         print(ret[-1])
-    #     return ret
-
-    # async def last_messages(
-    #     self, add_think: bool = True
-    # ) -> Optional[List[Dict[str, str]]]:
-    #     """Get the last conversation messages including assistant response."""
-    #     if not hasattr(self, "last_log"):
-    #         return None
-
-    #     last_conv = self._last_log
-    #     messages = last_conv[1] if len(last_conv) > 1 else None
-    #     last_msg = last_conv[2]
-    #     if not isinstance(last_msg, dict):
-    #         last_conv[2] = last_conv[2].model_dump()  # type: ignore
-    #     msg = last_conv[2]
-    #     # Ensure msg is a dict
-    #     if hasattr(msg, "model_dump"):
-    #         msg = msg.model_dump()
-    #     message = msg["choices"][0]["message"]
-    #     reasoning = message.get("reasoning_content")
-    #     answer = message.get("content")
-    #     if reasoning and add_think:
-    #         final_answer = f"<think>{reasoning}</think>\n{answer}"
-    #     else:
-    #         final_answer = f"<think>\n\n</think>\n{answer}"
-    #     assistant = {"role": "assistant", "content": final_answer}
-    #     messages = messages + [assistant]  # type: ignore
-    #     return messages if messages else None
-
-    # async def inspect_history(self) -> None:
-    #     """Inspect the conversation history with proper formatting."""
-    #     if not hasattr(self, "last_log"):
-    #         raise ValueError("No history available. Please call the model first.")
-
-    #     prompt, messages, response = self._last_log
-    #     if hasattr(response, "model_dump"):
-    #         response = response.model_dump()
-    #     if not messages:
-    #         messages = [{"role": "user", "content": prompt}]
-
-    #     print("\n\n")
-    #     print(_blue("[Conversation History]") + "\n")
-
-    #     for msg in messages:
-    #         role = msg["role"]
-    #         content = msg["content"]
-    #         print(_red(f"{role.capitalize()}:"))
-    #         if isinstance(content, str):
-    #             print(content.strip())
-    #         elif isinstance(content, list):
-    #             for item in content:
-    #                 if item.get("type") == "text":
-    #                     print(item["text"].strip())
-    #                 elif item.get("type") == "image_url":
-    #                     image_url = item["image_url"]["url"]
-    #                     if "base64" in image_url:
-    #                         len_base64 = len(image_url.split("base64,")[1])
-    #                         print(_blue(f"<IMAGE BASE64 ENCODED({len_base64})>"))
-    #                     else:
-    #                         print(_blue(f"<image_url: {image_url}>"))
-    #         print("\n")
-
-    #     print(_red("Response:"))
-    #     if isinstance(response, dict) and response.get("choices"):
-    #         message = response["choices"][0].get("message", {})
-    #         reasoning = message.get("reasoning_content")
-    #         parsed = message.get("parsed")
-    #         content = message.get("content")
-    #         if reasoning:
-    #             print(_yellow("<think>"))
-    #             print(reasoning.strip())
-    #             print(_yellow("</think>\n"))
-    #         if parsed:
-    #             print(
-    #                 json.dumps(
-    #                     (
-    #                         parsed.model_dump()
-    #                         if hasattr(parsed, "model_dump")
-    #                         else parsed
-    #                     ),
-    #                     indent=2,
-    #                 )
-    #                 + "\n"
-    #             )
-    #         elif content:
-    #             print(content.strip())
-    #         else:
-    #             print(_green("[No content]"))
-    #         if len(response["choices"]) > 1:
-    #             print(
-    #                 _blue(f"\n(Plus {len(response['choices']) - 1} other completions)")
-    #             )
-    #     else:
-    #         print(_yellow("Warning: Not a standard OpenAI response object"))
-    #         if isinstance(response, str):
-    #             print(_green(response.strip()))
-    #         elif isinstance(response, dict):
-    #             print(_green(json.dumps(response, indent=2)))
-    #         else:
-    #             print(_green(str(response)))
 
     # ------------------------------------------------------------------ #
     # Misc helpers
