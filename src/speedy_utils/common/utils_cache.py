@@ -459,7 +459,12 @@ def both_memoize(
         disk_result: Optional[R] = None
         with disk_lock:
             if osp.exists(cache_path):
-                disk_result = load_json_or_pickle(cache_path)
+                try:
+                    disk_result = load_json_or_pickle(cache_path)
+                except Exception:
+                    if osp.exists(cache_path):
+                        os.remove(cache_path)
+                    disk_result = None
 
         if disk_result is not None:
             with mem_lock:

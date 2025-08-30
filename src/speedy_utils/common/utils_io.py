@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from json_repair import loads as jloads
+from openai import BaseModel
 
 from .utils_misc import mkdir_or_exist
 
@@ -46,8 +47,19 @@ def dump_json_or_pickle(
     elif fname.endswith(".jsonl"):
         dump_jsonl(obj, fname)
     elif fname.endswith(".pkl"):
-        with open(fname, "wb") as f:
-            pickle.dump(obj, f)
+        try:
+            with open(fname, "wb") as f:
+                pickle.dump(obj, f)
+        except Exception as e:
+            if isinstance(obj, BaseModel):
+                data = obj.model_dump()
+                from fastcore.all import obj2dict, dict2obj
+                obj2 = dict2obj(data)
+                with open(fname, "wb") as f:
+                    pickle.dump(obj2, f)
+            else:
+                raise ValueError(f"Error {e} while dumping {fname}") from e
+
     else:
         raise NotImplementedError(f"File type {fname} not supported")
 
