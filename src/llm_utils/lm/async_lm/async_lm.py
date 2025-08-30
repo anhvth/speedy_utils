@@ -99,6 +99,7 @@ class AsyncLM(AsyncLMBase):
         messages: RawMsgs,
         extra_body: Optional[dict] = None,
         cache_suffix: str = "",
+        max_tokens: Optional[int] = None,
     ) -> dict:
         """Unified method for all client interactions with caching and error handling."""
         converted_messages: Messages = (
@@ -108,6 +109,9 @@ class AsyncLM(AsyncLMBase):
         )
         cache_key = None
         completion = None
+        # override max_tokens if provided
+        if max_tokens is not None:
+            self.model_kwargs["max_tokens"] = max_tokens
 
         # Handle caching
         if self._cache:
@@ -281,6 +285,7 @@ class AsyncLM(AsyncLMBase):
         self,
         prompt: Optional[str] = None,
         messages: Optional[RawMsgs] = None,
+        max_tokens: Optional[int] = None,
     ):  # -> tuple[Any | dict[Any, Any], list[ChatCompletionMessagePar...:# -> tuple[Any | dict[Any, Any], list[ChatCompletionMessagePar...:
         """Unified async call for language model, returns (assistant_message.model_dump(), messages)."""
         if (prompt is None) == (messages is None):
@@ -303,7 +308,7 @@ class AsyncLM(AsyncLMBase):
 
         # Use unified client call
         raw_response = await self._unified_client_call(
-            list(openai_msgs), cache_suffix="_call"
+            list(openai_msgs), cache_suffix="_call", max_tokens=max_tokens
         )
 
         if hasattr(raw_response, "model_dump"):
