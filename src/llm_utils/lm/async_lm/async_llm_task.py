@@ -389,7 +389,7 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
         input_data: InputModelType,
         expected_response: Optional[OutputModelType] = None,
         label: Optional[str] = None,
-        cache_dir: pathlib.Path = DEFAULT_CACHE_DIR,
+        cache_dir: Optional[pathlib.Path] = None,
     ) -> OutputModelType:
         """
         Generate training data for both thinking and non-thinking modes.
@@ -414,6 +414,10 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
 
         # Create non-thinking mode equivalent
         no_think_messages = self._create_no_think_messages(think_messages)
+
+        # Use default cache directory if none provided
+        if cache_dir is None:
+            cache_dir = self.DEFAULT_CACHE_DIR or pathlib.Path("./cache")
 
         # Save training data
         self._save_training_data(

@@ -108,7 +108,7 @@ from .common.notebook_utils import (
 )
 
 # Cache utilities
-from .common.utils_cache import amemoize, identify, identify_uuid, memoize
+from .common.utils_cache import identify, identify_uuid, memoize
 
 # IO utilities
 from .common.utils_io import (
@@ -197,7 +197,6 @@ __all__ = [
     # Function decorators
     "retry_runtime",
     # Cache utilities
-    "amemoize",
     "memoize",
     "identify",
     "identify_uuid",
@@ -227,5 +226,4 @@ __all__ = [
     "multi_thread",
     # Notebook utilities
     "change_dir",
-    "amemoize",
 ]

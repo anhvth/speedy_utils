@@ -96,12 +96,16 @@ class AsyncLM(AsyncLMBase):
 
     async def _unified_client_call(
         self,
-        messages: list[dict],
+        messages: RawMsgs,
         extra_body: Optional[dict] = None,
         cache_suffix: str = "",
     ) -> dict:
         """Unified method for all client interactions with caching and error handling."""
-        converted_messages = self._convert_messages(messages)
+        converted_messages: Messages = (
+            self._convert_messages(cast(LegacyMsgs, messages))
+            if messages and isinstance(messages[0], dict)
+            else cast(Messages, messages)
+        )
         cache_key = None
         completion = None
 
@@ -385,3 +389,13 @@ class AsyncLM(AsyncLMBase):
             raise ValueError(
                 f"Failed to validate against response model {response_model.__name__}: {exc}\nRaw content: {content}"
             ) from exc
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if hasattr(self, "_last_client"):
+            last_client = self._last_client  # type: ignore
+            await last_client._client.aclose()
+        else:
+            logger.warning("No last client to close")
