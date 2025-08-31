@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from json_repair import loads as jloads
-from openai import BaseModel
+from pydantic import BaseModel
 
 from .utils_misc import mkdir_or_exist
 

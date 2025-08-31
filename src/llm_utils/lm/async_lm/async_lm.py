@@ -9,7 +9,7 @@ from typing import (
 )
 
 from loguru import logger
-from openai import AuthenticationError, BadRequestError, RateLimitError
+from openai import AuthenticationError, BadRequestError, OpenAI, RateLimitError
 from pydantic import BaseModel
 from speedy_utils import jloads
 
@@ -43,8 +43,8 @@ class AsyncLM(AsyncLMBase):
 
     def __init__(
         self,
-        model: str,
         *,
+        model: Optional[str] = None,
         response_model: Optional[type[BaseModel]] = None,
         temperature: float = 0.0,
         max_tokens: int = 2_000,
@@ -63,6 +63,13 @@ class AsyncLM(AsyncLMBase):
         repetition_penalty: float = 1.0,
         frequency_penalty: Optional[float] = None,
     ) -> None:
+
+        if model is None:
+            models = OpenAI(base_url=f'http://{host}:{port}/v1', api_key='abc').models.list().data
+            assert len(models) == 1, f"Found {len(models)} models, please specify one."
+            model = models[0].id
+            print(f"Using model: {model}")
+
         super().__init__(
             host=host,
             port=port,
