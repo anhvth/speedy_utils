@@ -4,7 +4,7 @@ import traceback
 from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from itertools import islice
-from typing import Any, TypeVar, cast
+from typing import Any, TypeVar, Union, cast
 
 T = TypeVar("T")
 
@@ -65,12 +65,12 @@ def multi_process(
     func: Callable[[Any], Any],
     inputs: Iterable[Any],
     *,
-    workers: int | None = None,
+    workers: Union[int, None] = None,
     batch: int = 1,
     ordered: bool = True,
     progress: bool = False,
-    inflight: int | None = None,
-    timeout: float | None = None,
+    inflight: Union[int, None] = None,
+    timeout: Union[float, None] = None,
     stop_on_error: bool = True,
     process_update_interval=10,
     for_loop: bool = False,

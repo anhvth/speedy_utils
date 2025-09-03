@@ -5,6 +5,7 @@ from typing import (
     Literal,
     Optional,
     Type,
+    Union,
     cast,
 )
 
@@ -49,7 +50,7 @@ class AsyncLM(AsyncLMBase):
         temperature: float = 0.0,
         max_tokens: int = 2_000,
         host: str = "localhost",
-        port: Optional[int | str] = None,
+        port: Optional[Union[int, str]] = None,
         base_url: Optional[str] = None,
         api_key: Optional[str] = None,
         cache: bool = True,

@@ -41,7 +41,7 @@ class AsyncLMBase:
         self,
         *,
         host: str = "localhost",
-        port: Optional[int | str] = None,
+        port: Optional[Union[int, str]] = None,
         base_url: Optional[str] = None,
         api_key: Optional[str] = None,
         cache: bool = True,
@@ -81,8 +81,8 @@ class AsyncLMBase:
     async def __call__(  # type: ignore
         self,
         *,
-        prompt: str | None = ...,
-        messages: RawMsgs | None = ...,
+        prompt: Optional[str] = ...,
+        messages: Optional[RawMsgs] = ...,
         response_format: type[str] = str,
         return_openai_response: bool = ...,
         **kwargs: Any,
@@ -92,8 +92,8 @@ class AsyncLMBase:
     async def __call__(
         self,
         *,
-        prompt: str | None = ...,
-        messages: RawMsgs | None = ...,
+        prompt: Optional[str] = ...,
+        messages: Optional[RawMsgs] = ...,
         response_format: Type[TModel],
         return_openai_response: bool = ...,
         **kwargs: Any,
@@ -137,7 +137,7 @@ class AsyncLMBase:
     @staticmethod
     def _parse_output(
         raw_response: Any, response_format: Union[type[str], Type[BaseModel]]
-    ) -> str | BaseModel:
+    ) -> Union[str, BaseModel]:
         if hasattr(raw_response, "model_dump"):
             raw_response = raw_response.model_dump()
 

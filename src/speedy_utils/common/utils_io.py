@@ -7,7 +7,7 @@ import pickle
 import time
 from glob import glob
 from pathlib import Path
-from typing import Any
+from typing import Any, Union
 
 from json_repair import loads as jloads
 from pydantic import BaseModel

@@ -83,7 +83,7 @@ import traceback
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from itertools import islice
-from typing import Any, TypeVar
+from typing import Any, TypeVar, Union
 
 from loguru import logger
 
@@ -125,16 +125,16 @@ def multi_thread(
     func: Callable,
     inputs: Iterable[Any],
     *,
-    workers: int | None = DEFAULT_WORKERS,
+    workers: Union[int, None] = DEFAULT_WORKERS,
     batch: int = 1,
     ordered: bool = True,
     progress: bool = True,
     progress_update: int = 10,
     prefetch_factor: int = 4,
-    timeout: float | None = None,
+    timeout: Union[float, None] = None,
     stop_on_error: bool = True,
     n_proc=0,
-    store_output_pkl_file: str | None = None,
+    store_output_pkl_file: Union[str, None] = None,
     **fixed_kwargs,
 ) -> list[Any]:
     """

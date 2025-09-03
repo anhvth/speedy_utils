@@ -5,7 +5,7 @@ import re
 import sys
 import time
 from collections import OrderedDict
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Union
 
 from loguru import logger
 
@@ -166,7 +166,7 @@ def log(
     *,
     level: Literal["info", "warning", "error", "critical", "success"] = "info",
     once: bool = False,
-    interval: float | None = None,
+    interval: Union[float, None] = None,
 ) -> None:
     """
     Log a message using loguru with optional `once` and `interval` control.
