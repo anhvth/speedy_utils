@@ -92,7 +92,7 @@ def load_jsonl(path):
     return [json.loads(line) for line in lines]
 
 
-def load_by_ext(fname: str | list[str], do_memoize: bool = False) -> Any:
+def load_by_ext(fname: Union[str, list[str]], do_memoize: bool = False) -> Any:
     """
     Load data based on file extension.
     """

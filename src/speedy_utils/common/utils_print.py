@@ -3,7 +3,7 @@
 import copy
 import pprint
 import textwrap
-from typing import Any
+from typing import Any, Union
 
 from tabulate import tabulate
 
@@ -24,17 +24,17 @@ def flatten_dict(d, parent_key="", sep="."):
 
 def fprint(
     input_data: Any,
-    key_ignore: list[str] | None = None,
-    key_keep: list[str] | None = None,
+    key_ignore: Union[list[str], None] = None,
+    key_keep: Union[list[str], None] = None,
     max_width: int = 100,
     indent: int = 2,
-    depth: int | None = None,
+    depth: Union[int, None] = None,
     table_format: str = "grid",
     str_wrap_width: int = 80,
     grep=None,
     is_notebook=None,
     f=print,
-) -> None | str:
+) -> Union[None, str]:
     """
     Pretty print structured data.
     """

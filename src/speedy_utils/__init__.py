@@ -18,7 +18,7 @@
 # • memoize(func) -> Callable - Function result caching decorator
 # • identify(obj: Any) -> str - Generate unique object identifier
 # • identify_uuid(obj: Any) -> str - Generate UUID-based object identifier
-# • load_by_ext(fname: str | list[str]) -> Any - Auto-detect file format loader
+# • load_by_ext(fname: Union[str, list[str]]) -> Any - Auto-detect file format loader
 # • dump_json_or_pickle(obj: Any, fname: str) -> None - Smart file serializer
 # • load_json_or_pickle(fname: str) -> Any - Smart file deserializer
 # • multi_thread(func, items, **kwargs) -> list - Parallel thread execution
