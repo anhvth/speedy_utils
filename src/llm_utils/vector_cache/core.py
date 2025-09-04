@@ -4,6 +4,7 @@ import hashlib
 import os
 import sqlite3
 from pathlib import Path
+from time import time
 from typing import Any, Dict, Literal, Optional, cast
 
 import numpy as np
@@ -78,7 +79,7 @@ class VectorCache:
         self.config = {
             # OpenAI
             "api_key": api_key or os.getenv("OPENAI_API_KEY"),
-            "model_name": model_name,
+            "model_name": self._try_infer_model_name(model_name),
             # vLLM
             "vllm_gpu_memory_utilization": vllm_gpu_memory_utilization,
             "vllm_tensor_parallel_size": vllm_tensor_parallel_size,
@@ -164,7 +165,22 @@ class VectorCache:
         
         # Default to vllm for local models
         return "vllm"
+    def _try_infer_model_name(self, model_name: Optional[str]) -> Optional[str]:
+        """Infer model name for OpenAI backend if not explicitly provided."""
+        # if self.backend != "openai":
+            # return model_name
+        if model_name:
+            return model_name
+        if 'https://' in self.url_or_model:
+            model_name =  "text-embedding-3-small"
+        if 'http://localhost' in self.url_or_model:
+            from openai import OpenAI
+            client = OpenAI(base_url=self.url_or_model, api_key='abc')
+            model_name =  client.models.list().data[0].id
 
+        # Default model name
+        print('Infer model name:', model_name)
+        return model_name
     def _optimize_connection(self) -> None:
         """Optimize SQLite connection for bulk operations."""
         # Performance optimizations for bulk operations
@@ -366,7 +382,7 @@ class VectorCache:
         """
         if not texts:
             return np.empty((0, 0), dtype=np.float32)
-
+        t = time()
         hashes = [self._hash_text(t) for t in texts]
 
         # Helper to yield chunks
@@ -414,6 +430,9 @@ class VectorCache:
             self._bulk_insert(bulk_insert_data)
 
         # Return embeddings in the original order
+        elapsed = time() - t
+        if self.verbose:
+            print(f"Retrieved {len(texts)} embeddings in {elapsed:.2f} seconds")
         return np.vstack([hit_map[h] for h in hashes])
 
     def __call__(self, texts: list[str], cache: bool = True) -> np.ndarray:
