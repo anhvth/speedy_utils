@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "speedy-utils"
-version = "1.1.13"
+version = "1.1.14"
 description = "Fast and easy-to-use package for data science"
 authors = ["AnhVTH <anhvth.226@gmail.com>"]
 readme = "README.md"
@@ -58,6 +58,7 @@ json-repair = ">=0.25.0,<0.31.0"
 fastprogress = "*"
 freezegun = "^1.5.1"
 packaging = ">=23.2,<25"
+openai = "^1.106.0"
 
 [tool.poetry.scripts]
 mpython = "speedy_utils.scripts.mpython:main"
