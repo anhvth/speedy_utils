@@ -167,12 +167,11 @@ class VectorCache:
         return "vllm"
     def _try_infer_model_name(self, model_name: Optional[str]) -> Optional[str]:
         """Infer model name for OpenAI backend if not explicitly provided."""
-        # if self.backend != "openai":
-            # return model_name
         if model_name:
             return model_name
         if 'https://' in self.url_or_model:
             model_name =  "text-embedding-3-small"
+        
         if 'http://localhost' in self.url_or_model:
             from openai import OpenAI
             client = OpenAI(base_url=self.url_or_model, api_key='abc')
