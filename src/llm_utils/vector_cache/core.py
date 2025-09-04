@@ -276,6 +276,8 @@ class VectorCache:
 
     def _get_embeddings(self, texts: list[str]) -> list[list[float]]:
         """Get embeddings using the configured backend."""
+        assert isinstance(texts, list), "texts must be a list"
+        assert all(isinstance(t, str) for t in texts), "all elements in texts must be strings"
         if self.backend == "openai":
             return self._get_openai_embeddings(texts)
         elif self.backend == "vllm":
@@ -287,6 +289,8 @@ class VectorCache:
 
     def _get_openai_embeddings(self, texts: list[str]) -> list[list[float]]:
         """Get embeddings using OpenAI API."""
+        assert isinstance(texts, list), "texts must be a list"
+        assert all(isinstance(t, str) for t in texts), "all elements in texts must be strings"
         # Assert valid model_name for OpenAI backend
         model_name = self.config["model_name"]
         assert model_name is not None and model_name.strip(), f"Invalid model_name for OpenAI backend: {model_name}. Model name must be provided and non-empty."
@@ -303,6 +307,8 @@ class VectorCache:
 
     def _get_vllm_embeddings(self, texts: list[str]) -> list[list[float]]:
         """Get embeddings using vLLM."""
+        assert isinstance(texts, list), "texts must be a list"
+        assert all(isinstance(t, str) for t in texts), "all elements in texts must be strings"
         if self._model is None:
             self._load_model()
         
@@ -312,6 +318,8 @@ class VectorCache:
 
     def _get_transformers_embeddings(self, texts: list[str]) -> list[list[float]]:
         """Get embeddings using transformers directly."""
+        assert isinstance(texts, list), "texts must be a list"
+        assert all(isinstance(t, str) for t in texts), "all elements in texts must be strings"
         if self._model is None:
             self._load_model()
         
@@ -379,6 +387,8 @@ class VectorCache:
         handle very large input lists. A tqdm progress bar is shown while
         computing missing embeddings.
         """
+        assert isinstance(texts, list), "texts must be a list"
+        assert all(isinstance(t, str) for t in texts), "all elements in texts must be strings"
         if not texts:
             return np.empty((0, 0), dtype=np.float32)
         t = time()
@@ -435,6 +445,8 @@ class VectorCache:
         return np.vstack([hit_map[h] for h in hashes])
 
     def __call__(self, texts: list[str], cache: bool = True) -> np.ndarray:
+        assert isinstance(texts, list), "texts must be a list"
+        assert all(isinstance(t, str) for t in texts), "all elements in texts must be strings"
         return self.embeds(texts, cache)
 
     def _bulk_insert(self, data: list[tuple[str, str, bytes]]) -> None:
@@ -453,6 +465,8 @@ class VectorCache:
         Precompute embeddings for a large list of texts efficiently.
         This is optimized for bulk operations when you know all texts upfront.
         """
+        assert isinstance(texts, list), "texts must be a list"
+        assert all(isinstance(t, str) for t in texts), "all elements in texts must be strings"
         if not texts:
             return
 
