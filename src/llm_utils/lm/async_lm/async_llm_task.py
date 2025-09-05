@@ -11,8 +11,6 @@ from venv import logger
 
 from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
-from pytest import Cache
-from speedy_utils import jdumps
 from speedy_utils.all import dump_json_or_pickle, identify
 
 from llm_utils.chat_format.display import get_conversation_one_turn
