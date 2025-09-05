@@ -14,6 +14,10 @@ class VectorCache:
     """
     A caching layer for text embeddings with support for multiple backends.
     
+    This cache is designed to be safe for multi-process environments where multiple
+    processes may access the same cache file simultaneously. It uses SQLite WAL mode
+    and retry logic with exponential backoff to handle concurrent access.
+    
     Examples:
         # OpenAI API
         from llm_utils import VectorCache
@@ -32,11 +36,26 @@ class VectorCache:
         # Explicit backend specification
         cache = VectorCache("model-name", backend="transformers")
         
-        # Lazy loading (default: True) - load model only when needed
+        # Eager loading (default: False) - load model immediately for better performance
+        cache = VectorCache("model-name", lazy=False)
+        
+        # Lazy loading - load model only when needed (may cause performance issues)
         cache = VectorCache("model-name", lazy=True)
         
-        # Eager loading - load model immediately
-        cache = VectorCache("model-name", lazy=False)
+    Multi-Process Safety:
+        The cache uses SQLite WAL (Write-Ahead Logging) mode and implements retry logic
+        with exponential backoff to handle database locks. Multiple processes can safely
+        read and write to the same cache file simultaneously.
+        
+        Race Condition Protection:
+        - Uses INSERT OR IGNORE to prevent overwrites when multiple processes compute the same text
+        - The first process to successfully cache a text wins, subsequent attempts are ignored
+        - This ensures deterministic results even with non-deterministic embedding models
+        
+        For best performance in multi-process scenarios, consider:
+        - Using separate cache files per process if cache hits are low
+        - Coordinating cache warm-up to avoid redundant computation
+        - Monitor for excessive lock contention in high-concurrency scenarios
     """
     def __init__(
         self,
@@ -62,9 +81,11 @@ class VectorCache:
         sqlite_chunk_size: int = 999,
         sqlite_cache_size: int = 10000,
         sqlite_mmap_size: int = 268435456,
+        # Processing parameters
+        embedding_batch_size: int = 20_000,
         # Other parameters
         verbose: bool = True,
-        lazy: bool = True,
+        lazy: bool = False,
     ) -> None:
         self.url_or_model = url_or_model
         self.embed_size = embed_size
@@ -95,6 +116,8 @@ class VectorCache:
             "sqlite_chunk_size": sqlite_chunk_size,
             "sqlite_cache_size": sqlite_cache_size,
             "sqlite_mmap_size": sqlite_mmap_size,
+            # Processing
+            "embedding_batch_size": embedding_batch_size,
         }
         
         # Auto-detect model_name for OpenAI if using custom URL and default model
@@ -147,10 +170,14 @@ class VectorCache:
         
         # Load model/client if not lazy
         if not self.lazy:
+            if self.verbose:
+                print(f"Loading {self.backend} model/client: {self.url_or_model}")
             if self.backend == "openai":
                 self._load_openai_client()
             elif self.backend in ["vllm", "transformers"]:
                 self._load_model()
+            if self.verbose:
+                print(f"✓ {self.backend.upper()} model/client loaded successfully")
 
     def _determine_backend(self, backend: Optional[Literal["vllm", "transformers", "openai"]]) -> str:
         """Determine the appropriate backend based on url_or_model and user preference."""
@@ -181,7 +208,7 @@ class VectorCache:
         print('Infer model name:', model_name)
         return model_name
     def _optimize_connection(self) -> None:
-        """Optimize SQLite connection for bulk operations."""
+        """Optimize SQLite connection for bulk operations and multi-process safety."""
         # Performance optimizations for bulk operations
         self.conn.execute(
             "PRAGMA journal_mode=WAL"
@@ -190,6 +217,10 @@ class VectorCache:
         self.conn.execute(f"PRAGMA cache_size={self.config['sqlite_cache_size']}")  # Configurable cache
         self.conn.execute("PRAGMA temp_store=MEMORY")  # Use memory for temp storage
         self.conn.execute(f"PRAGMA mmap_size={self.config['sqlite_mmap_size']}")  # Configurable memory mapping
+        
+        # Multi-process safety improvements
+        self.conn.execute("PRAGMA busy_timeout=30000")  # Wait up to 30 seconds for locks
+        self.conn.execute("PRAGMA wal_autocheckpoint=1000")  # Checkpoint WAL every 1000 pages
 
     def _ensure_schema(self) -> None:
         self.conn.execute("""
@@ -296,7 +327,11 @@ class VectorCache:
         assert model_name is not None and model_name.strip(), f"Invalid model_name for OpenAI backend: {model_name}. Model name must be provided and non-empty."
 
         if self._client is None:
+            if self.verbose:
+                print("🔧 Loading OpenAI client...")
             self._load_openai_client()
+            if self.verbose:
+                print("✓ OpenAI client loaded successfully")
         
         response = self._client.embeddings.create(  # type: ignore
             model=model_name, 
@@ -310,7 +345,11 @@ class VectorCache:
         assert isinstance(texts, list), "texts must be a list"
         assert all(isinstance(t, str) for t in texts), "all elements in texts must be strings"
         if self._model is None:
+            if self.verbose:
+                print("🔧 Loading vLLM model...")
             self._load_model()
+            if self.verbose:
+                print("✓ vLLM model loaded successfully")
         
         outputs = self._model.embed(texts)  # type: ignore
         embeddings = [o.outputs.embedding for o in outputs]
@@ -321,7 +360,11 @@ class VectorCache:
         assert isinstance(texts, list), "texts must be a list"
         assert all(isinstance(t, str) for t in texts), "all elements in texts must be strings"
         if self._model is None:
+            if self.verbose:
+                print("🔧 Loading Transformers model...")
             self._load_model()
+            if self.verbose:
+                print("✓ Transformers model loaded successfully")
         
         if not isinstance(self._model, dict):
             raise ValueError("Model not loaded properly for transformers backend")
@@ -376,6 +419,40 @@ class VectorCache:
     def _hash_text(self, text: str) -> str:
         return hashlib.sha1(text.encode("utf-8")).hexdigest()
 
+    def _execute_with_retry(self, query: str, params=None) -> sqlite3.Cursor:
+        """Execute SQLite query with retry logic for multi-process safety."""
+        max_retries = 3
+        base_delay = 0.05  # 50ms base delay for reads (faster than writes)
+        
+        last_exception = None
+        
+        for attempt in range(max_retries + 1):
+            try:
+                if params is None:
+                    return self.conn.execute(query)
+                else:
+                    return self.conn.execute(query, params)
+                    
+            except sqlite3.OperationalError as e:
+                last_exception = e
+                if "database is locked" in str(e).lower() and attempt < max_retries:
+                    # Exponential backoff: 0.05s, 0.1s, 0.2s
+                    delay = base_delay * (2 ** attempt)
+                    if self.verbose:
+                        print(f"⚠️  Database locked on read, retrying in {delay:.2f}s (attempt {attempt + 1}/{max_retries + 1})")
+                    import time
+                    time.sleep(delay)
+                    continue
+                else:
+                    # Re-raise if not a lock error or max retries exceeded
+                    raise
+            except Exception as e:
+                # Re-raise any other exceptions
+                raise
+        
+        # This should never be reached, but satisfy the type checker
+        raise last_exception or RuntimeError("Failed to execute query after retries")
+
     def embeds(self, texts: list[str], cache: bool = True) -> np.ndarray:
         """
         Return embeddings for all texts.
@@ -402,11 +479,11 @@ class VectorCache:
         hit_map: dict[str, np.ndarray] = {}
         chunk_size = self.config["sqlite_chunk_size"]
 
-        # Use bulk lookup with optimized query
+        # Use bulk lookup with optimized query and retry logic
         hash_chunks = _chunks(hashes, chunk_size)
         for chunk in hash_chunks:
             placeholders = ",".join("?" * len(chunk))
-            rows = self.conn.execute(
+            rows = self._execute_with_retry(
                 f"SELECT hash, embedding FROM cache WHERE hash IN ({placeholders})",
                 chunk,
             ).fetchall()
@@ -425,18 +502,8 @@ class VectorCache:
 
         if missing_items:
             if self.verbose:
-                print(f"Computing embeddings for {len(missing_items)} missing texts...")
-            missing_texts = [t for t, _ in missing_items]
-            embeds = self._get_embeddings(missing_texts)
-
-            # Prepare batch data for bulk insert
-            bulk_insert_data: list[tuple[str, str, bytes]] = []
-            for (text, h), vec in zip(missing_items, embeds):
-                arr = np.asarray(vec, dtype=np.float32)
-                bulk_insert_data.append((h, text, arr.tobytes()))
-                hit_map[h] = arr
-
-            self._bulk_insert(bulk_insert_data)
+                print(f"Computing {len(missing_items)}/{len(texts)} missing embeddings...")
+            self._process_missing_items_with_batches(missing_items, hit_map)
 
         # Return embeddings in the original order
         elapsed = time() - t
@@ -444,87 +511,212 @@ class VectorCache:
             print(f"Retrieved {len(texts)} embeddings in {elapsed:.2f} seconds")
         return np.vstack([hit_map[h] for h in hashes])
 
+    def _process_missing_items_with_batches(self, missing_items: list[tuple[str, str]], hit_map: dict[str, np.ndarray]) -> None:
+        """
+        Process missing items in batches with progress bar and incremental DB insertion.
+        """
+        t = time()  # Track total processing time
+        
+        # Try to import tqdm, fall back to simple progress if not available
+        try:
+            from tqdm import tqdm
+            use_tqdm = True
+        except ImportError:
+            use_tqdm = False
+            if self.verbose:
+                print("tqdm not available, using simple progress reporting")
+        
+        batch_size = self.config["embedding_batch_size"]
+        total_items = len(missing_items)
+        
+        if self.verbose:
+            print(f"Computing embeddings for {total_items} missing texts in batches of {batch_size}...")
+            if self.backend in ["vllm", "transformers"] and self._model is None:
+                print(f"⚠️  Model will be loaded on first batch (lazy loading enabled)")
+            elif self.backend in ["vllm", "transformers"]:
+                print(f"✓ Model already loaded, ready for efficient batch processing")
+        
+        # Create progress bar
+        if use_tqdm:
+            pbar = tqdm(total=total_items, desc="Computing embeddings", unit="texts")
+        else:
+            processed_count = 0
+        
+        # Track total committed items
+        total_committed = 0
+        
+        try:
+            # Process in batches
+            for i in range(0, total_items, batch_size):
+                batch_items = missing_items[i:i + batch_size]
+                batch_texts = [text for text, _ in batch_items]
+                
+                # Get embeddings for this batch
+                batch_embeds = self._get_embeddings(batch_texts)
+                
+                # Prepare batch data for immediate insert
+                batch_data: list[tuple[str, str, bytes]] = []
+                for (text, h), vec in zip(batch_items, batch_embeds):
+                    arr = np.asarray(vec, dtype=np.float32)
+                    batch_data.append((h, text, arr.tobytes()))
+                    hit_map[h] = arr
+                
+                # Immediate commit after each batch
+                self._bulk_insert(batch_data)
+                total_committed += len(batch_data)
+                
+                # Update progress
+                batch_size_actual = len(batch_items)
+                if use_tqdm:
+                    pbar.update(batch_size_actual)
+                else:
+                    processed_count += batch_size_actual
+                    if self.verbose:
+                        print(f"Progress: {processed_count}/{total_items} embeddings computed, {total_committed} committed")
+        
+        finally:
+            # Clean up progress bar
+            if use_tqdm:
+                pbar.close()
+                
+            if self.verbose:
+                total_time = time() - t
+                rate = total_items / total_time if total_time > 0 else 0
+                print(f"✅ Completed: {total_items} embeddings computed and {total_committed} items committed to database")
+                print(f"   Total time: {total_time:.2f}s | Rate: {rate:.1f} embeddings/sec")
+
     def __call__(self, texts: list[str], cache: bool = True) -> np.ndarray:
         assert isinstance(texts, list), "texts must be a list"
         assert all(isinstance(t, str) for t in texts), "all elements in texts must be strings"
         return self.embeds(texts, cache)
 
     def _bulk_insert(self, data: list[tuple[str, str, bytes]]) -> None:
-        """Perform bulk insert of embedding data."""
+        """
+        Perform bulk insert of embedding data with retry logic for multi-process safety.
+        
+        Uses INSERT OR IGNORE to prevent race conditions where multiple processes
+        might try to insert the same text hash. The first process to successfully
+        insert wins, subsequent attempts are ignored. This ensures deterministic
+        caching behavior in multi-process environments.
+        """
         if not data:
             return
 
-        self.conn.executemany(
-            "INSERT OR REPLACE INTO cache (hash, text, embedding) VALUES (?, ?, ?)",
-            data,
-        )
-        self.conn.commit()
+        max_retries = 3
+        base_delay = 0.1  # 100ms base delay
+        
+        for attempt in range(max_retries + 1):
+            try:
+                cursor = self.conn.executemany(
+                    "INSERT OR IGNORE INTO cache (hash, text, embedding) VALUES (?, ?, ?)",
+                    data,
+                )
+                self.conn.commit()
+                
+                # Check if some insertions were ignored due to existing entries
+                if self.verbose and cursor.rowcount < len(data):
+                    ignored_count = len(data) - cursor.rowcount
+                    if ignored_count > 0:
+                        print(f"ℹ️  {ignored_count}/{len(data)} embeddings already existed in cache (computed by another process)")
+                
+                return  # Success, exit the retry loop
+                
+            except sqlite3.OperationalError as e:
+                if "database is locked" in str(e).lower() and attempt < max_retries:
+                    # Exponential backoff: 0.1s, 0.2s, 0.4s
+                    delay = base_delay * (2 ** attempt)
+                    if self.verbose:
+                        print(f"⚠️  Database locked, retrying in {delay:.1f}s (attempt {attempt + 1}/{max_retries + 1})")
+                    import time
+                    time.sleep(delay)
+                    continue
+                else:
+                    # Re-raise if not a lock error or max retries exceeded
+                    raise
+            except Exception as e:
+                # Re-raise any other exceptions
+                raise
 
-    def precompute_embeddings(self, texts: list[str]) -> None:
-        """
-        Precompute embeddings for a large list of texts efficiently.
-        This is optimized for bulk operations when you know all texts upfront.
-        """
-        assert isinstance(texts, list), "texts must be a list"
-        assert all(isinstance(t, str) for t in texts), "all elements in texts must be strings"
-        if not texts:
-            return
+    # def precompute_embeddings(self, texts: list[str]) -> None:
+    #     """
+    #     Precompute embeddings for a large list of texts efficiently.
+    #     This is optimized for bulk operations when you know all texts upfront.
+    #     """
+    #     assert isinstance(texts, list), "texts must be a list"
+    #     assert all(isinstance(t, str) for t in texts), "all elements in texts must be strings"
+    #     if not texts:
+    #         return
 
-        # Remove duplicates while preserving order
-        unique_texts = list(dict.fromkeys(texts))
-        if self.verbose:
-            print(f"Precomputing embeddings for {len(unique_texts)} unique texts...")
+    #     # Remove duplicates while preserving order
+    #     unique_texts = list(dict.fromkeys(texts))
+    #     if self.verbose:
+    #         print(f"Precomputing embeddings for {len(unique_texts)} unique texts...")
 
-        # Check which ones are already cached
-        hashes = [self._hash_text(t) for t in unique_texts]
-        existing_hashes = set()
+    #     # Check which ones are already cached
+    #     hashes = [self._hash_text(t) for t in unique_texts]
+    #     existing_hashes = set()
 
-        # Bulk check for existing embeddings
-        chunk_size = self.config["sqlite_chunk_size"]
-        for i in range(0, len(hashes), chunk_size):
-            chunk = hashes[i : i + chunk_size]
-            placeholders = ",".join("?" * len(chunk))
-            rows = self.conn.execute(
-                f"SELECT hash FROM cache WHERE hash IN ({placeholders})",
-                chunk,
-            ).fetchall()
-            existing_hashes.update(h[0] for h in rows)
+    #     # Bulk check for existing embeddings
+    #     chunk_size = self.config["sqlite_chunk_size"]
+    #     for i in range(0, len(hashes), chunk_size):
+    #         chunk = hashes[i : i + chunk_size]
+    #         placeholders = ",".join("?" * len(chunk))
+    #         rows = self._execute_with_retry(
+    #             f"SELECT hash FROM cache WHERE hash IN ({placeholders})",
+    #             chunk,
+    #         ).fetchall()
+    #         existing_hashes.update(h[0] for h in rows)
 
-        # Find missing texts
-        missing_items = [
-            (t, h) for t, h in zip(unique_texts, hashes) if h not in existing_hashes
-        ]
+    #     # Find missing texts
+    #     missing_items = [
+    #         (t, h) for t, h in zip(unique_texts, hashes) if h not in existing_hashes
+    #     ]
 
-        if not missing_items:
-            if self.verbose:
-                print("All texts already cached!")
-            return
+    #     if not missing_items:
+    #         if self.verbose:
+    #             print("All texts already cached!")
+    #         return
 
-        if self.verbose:
-            print(f"Computing {len(missing_items)} missing embeddings...")
-        missing_texts = [t for t, _ in missing_items]
-        embeds = self._get_embeddings(missing_texts)
-
-        # Prepare batch data for bulk insert
-        bulk_insert_data: list[tuple[str, str, bytes]] = []
-        for (text, h), vec in zip(missing_items, embeds):
-            arr = np.asarray(vec, dtype=np.float32)
-            bulk_insert_data.append((h, text, arr.tobytes()))
-
-        self._bulk_insert(bulk_insert_data)
-        if self.verbose:
-            print(f"Successfully cached {len(missing_items)} new embeddings!")
+    #     if self.verbose:
+    #         print(f"Computing {len(missing_items)} missing embeddings...")
+        
+    #     # Process missing items with batches
+    #     missing_texts = [t for t, _ in missing_items]
+    #     missing_items_tupled = [(t, h) for t, h in zip(missing_texts, [self._hash_text(t) for t in missing_texts])]
+    #     hit_map_temp: dict[str, np.ndarray] = {}
+    #     self._process_missing_items_with_batches(missing_items_tupled, hit_map_temp)
+    #     if self.verbose:
+    #         print(f"Successfully cached {len(missing_items)} new embeddings!")
 
     def get_cache_stats(self) -> dict[str, int]:
         """Get statistics about the cache."""
-        cursor = self.conn.execute("SELECT COUNT(*) FROM cache")
+        cursor = self._execute_with_retry("SELECT COUNT(*) FROM cache")
         count = cursor.fetchone()[0]
         return {"total_cached": count}
 
     def clear_cache(self) -> None:
         """Clear all cached embeddings."""
-        self.conn.execute("DELETE FROM cache")
-        self.conn.commit()
+        max_retries = 3
+        base_delay = 0.1  # 100ms base delay
+        
+        for attempt in range(max_retries + 1):
+            try:
+                self.conn.execute("DELETE FROM cache")
+                self.conn.commit()
+                return  # Success
+                
+            except sqlite3.OperationalError as e:
+                if "database is locked" in str(e).lower() and attempt < max_retries:
+                    delay = base_delay * (2 ** attempt)
+                    if self.verbose:
+                        print(f"⚠️  Database locked during clear, retrying in {delay:.1f}s (attempt {attempt + 1}/{max_retries + 1})")
+                    import time
+                    time.sleep(delay)
+                    continue
+                else:
+                    raise
+            except Exception as e:
+                raise
 
     def get_config(self) -> Dict[str, Any]:
         """Get current configuration."""
@@ -556,7 +748,8 @@ class VectorCache:
                     "vllm_trust_remote_code", "vllm_max_model_len"],
             "transformers": ["transformers_device", "transformers_batch_size", 
                            "transformers_normalize_embeddings", "transformers_trust_remote_code"],
-            "openai": ["api_key", "model_name"]
+            "openai": ["api_key", "model_name"],
+            "processing": ["embedding_batch_size"]
         }
         
         if any(param in kwargs for param in backend_params.get(self.backend, [])):
