@@ -1,12 +1,13 @@
 from .async_lm.async_lm import AsyncLM
-from .lm import LM
-from .lm_base import LMBase
-
-OAI_LM = LM
+from .async_lm.async_llm_task import AsyncLLMTask
+from .lm_base import LMBase, get_model_name
+from .llm_task import  LLMTask
+from .base_prompt_builder import BasePromptBuilder
 
 __all__ = [
-    "LM",
     "LMBase",
-    "OAI_LM",
+    "LLMTask",
     "AsyncLM",
+    "AsyncLLMTask",
+    "BasePromptBuilder",
 ]

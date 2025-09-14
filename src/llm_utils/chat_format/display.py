@@ -1,9 +1,73 @@
 from __future__ import annotations
 
+import json
 from difflib import SequenceMatcher
 from typing import Any, Optional
 
 from IPython.display import HTML, display
+
+
+def _preprocess_as_json(content: str) -> str:
+    """
+    Preprocess content as JSON with proper formatting and syntax highlighting.
+    """
+    try:
+        # Try to parse and reformat JSON
+        parsed = json.loads(content)
+        return json.dumps(parsed, indent=2, ensure_ascii=False)
+    except (json.JSONDecodeError, TypeError):
+        # If not valid JSON, return as-is
+        return content
+
+
+def _preprocess_as_markdown(content: str) -> str:
+    """
+    Preprocess content as markdown with proper formatting.
+    """
+    # Basic markdown preprocessing - convert common patterns
+    lines = content.split('\n')
+    processed_lines = []
+    
+    for line in lines:
+        # Convert **bold** to span with bold styling
+        while '**' in line:
+            first_pos = line.find('**')
+            if first_pos != -1:
+                second_pos = line.find('**', first_pos + 2)
+                if second_pos != -1:
+                    before = line[:first_pos]
+                    bold_text = line[first_pos + 2:second_pos]
+                    after = line[second_pos + 2:]
+                    line = f'{before}<span style="font-weight: bold;">{bold_text}</span>{after}'
+                else:
+                    break
+            else:
+                break
+        
+        # Convert *italic* to span with italic styling
+        while '*' in line and line.count('*') >= 2:
+            first_pos = line.find('*')
+            if first_pos != -1:
+                second_pos = line.find('*', first_pos + 1)
+                if second_pos != -1:
+                    before = line[:first_pos]
+                    italic_text = line[first_pos + 1:second_pos]
+                    after = line[second_pos + 1:]
+                    line = f'{before}<span style="font-style: italic;">{italic_text}</span>{after}'
+                else:
+                    break
+            else:
+                break
+        
+        # Convert # headers to bold headers
+        if line.strip().startswith('#'):
+            level = len(line) - len(line.lstrip('#'))
+            header_text = line.lstrip('# ').strip()
+            line = f'<span style="font-weight: bold; font-size: 1.{min(4, level)}em;">{header_text}</span>'
+        
+        processed_lines.append(line)
+    
+    return '\n'.join(processed_lines)
 
 
 def show_chat(
@@ -11,9 +75,19 @@ def show_chat(
     return_html: bool = False,
     file: str = "/tmp/conversation.html",
     theme: str = "default",
+    as_markdown: bool = False,
+    as_json: bool = False,
 ) -> Optional[str]:
     """
     Display chat messages as HTML.
+    
+    Args:
+        msgs: Chat messages in various formats
+        return_html: If True, return HTML string instead of displaying
+        file: Path to save HTML file
+        theme: Color theme ('default', 'light', 'dark')
+        as_markdown: If True, preprocess content as markdown
+        as_json: If True, preprocess content as JSON
     """
     if isinstance(msgs, dict) and "messages" in msgs:
         msgs = msgs["messages"]
@@ -74,45 +148,66 @@ def show_chat(
                 name = tool_call["name"]
                 args = tool_call["arguments"]
                 content += f"Tool: {name}\nArguments: {args}"
-        content = content.replace("\n", "<br>")
-        content = content.replace("\t", "&nbsp;&nbsp;&nbsp;&nbsp;")
-        content = content.replace("  ", "&nbsp;&nbsp;")
-        content = (
-            content.replace("<br>", "TEMP_BR")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace("TEMP_BR", "<br>")
-        )
+        
+        # Preprocess content based on format options
+        if as_json:
+            content = _preprocess_as_json(content)
+        elif as_markdown:
+            content = _preprocess_as_markdown(content)
+        
+        # Handle HTML escaping differently for markdown vs regular content
+        if as_markdown:
+            # For markdown, preserve HTML tags but escape other characters carefully
+            content = content.replace("\n", "<br>")
+            content = content.replace("\t", "&nbsp;&nbsp;&nbsp;&nbsp;")
+            content = content.replace("  ", "&nbsp;&nbsp;")
+            # Don't escape < and > for markdown since we want to preserve our span tags
+        else:
+            # Regular escaping for non-markdown content
+            content = content.replace("\n", "<br>")
+            content = content.replace("\t", "&nbsp;&nbsp;&nbsp;&nbsp;")
+            content = content.replace("  ", "&nbsp;&nbsp;")
+            content = (
+                content.replace("<br>", "TEMP_BR")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("TEMP_BR", "<br>")
+            )
         if role in color_scheme:
             background_color = color_scheme[role]["background"]
             text_color = color_scheme[role]["text"]
         else:
             background_color = color_scheme["default"]["background"]
             text_color = color_scheme["default"]["text"]
+        
+        # Choose container based on whether we have markdown formatting
+        content_container = "div" if as_markdown else "pre"
+        container_style = 'style="white-space: pre-wrap;"' if as_markdown else ""
+        
         if role == "system":
             conversation_html += (
                 f'<div style="background-color: {background_color}; color: {text_color}; padding: 10px; margin-bottom: 10px;">'
-                f'<strong>System:</strong><br><pre id="system-{i}">{content}</pre></div>'
+                f'<strong>System:</strong><br><{content_container} id="system-{i}" {container_style}>{content}</{content_container}></div>'
             )
         elif role == "user":
             conversation_html += (
                 f'<div style="background-color: {background_color}; color: {text_color}; padding: 10px; margin-bottom: 10px;">'
-                f'<strong>User:</strong><br><pre id="user-{i}">{content}</pre></div>'
+                f'<strong>User:</strong><br><{content_container} id="user-{i}" {container_style}>{content}</{content_container}></div>'
             )
         elif role == "assistant":
             conversation_html += (
                 f'<div style="background-color: {background_color}; color: {text_color}; padding: 10px; margin-bottom: 10px;">'
-                f'<strong>Assistant:</strong><br><pre id="assistant-{i}">{content}</pre></div>'
+                f'<strong>Assistant:</strong><br><{content_container} id="assistant-{i}" {container_style}>{content}</{content_container}></div>'
             )
         elif role == "function":
             conversation_html += (
                 f'<div style="background-color: {background_color}; color: {text_color}; padding: 10px; margin-bottom: 10px;">'
-                f'<strong>Function:</strong><br><pre id="function-{i}">{content}</pre></div>'
+                f'<strong>Function:</strong><br><{content_container} id="function-{i}" {container_style}>{content}</{content_container}></div>'
             )
         else:
             conversation_html += (
                 f'<div style="background-color: {background_color}; color: {text_color}; padding: 10px; margin-bottom: 10px;">'
-                f'<strong>{role}:</strong><br><pre id="{role}-{i}">{content}</pre><br>'
+                f'<strong>{role}:</strong><br><{content_container} id="{role}-{i}" {container_style}>{content}</{content_container}><br>'
                 f"<button onclick=\"copyContent('{role}-{i}')\">Copy</button></div>"
             )
     html: str = f"""

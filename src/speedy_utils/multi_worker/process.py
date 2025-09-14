@@ -1,203 +1,134 @@
-import multiprocessing
-import os
-import traceback
-from collections.abc import Callable, Iterable, Iterator
-from concurrent.futures import ProcessPoolExecutor, as_completed
-from itertools import islice
-from typing import Any, TypeVar, Union, cast
+# ray_multi_process.py
+import time, os, pickle, uuid, datetime
+from pathlib import Path
+from typing import Any, Callable
+from tqdm import tqdm
+import ray
+from fastcore.parallel import parallel
 
-T = TypeVar("T")
+# ─── cache helpers ──────────────────────────────────────────
 
-if hasattr(multiprocessing, "set_start_method"):
-    try:
-        multiprocessing.set_start_method("spawn", force=True)
-    except RuntimeError:
-        pass
+def _build_cache_dir(func: Callable, items: list[Any]) -> Path:
+    """Build cache dir with function name + timestamp."""
+    func_name = getattr(func, "__name__", "func")
+    now = datetime.datetime.now()
+    stamp = now.strftime("%m%d_%Hh%Mm%Ss")
+    run_id = f"{func_name}_{stamp}_{uuid.uuid4().hex[:6]}"
+    path = Path(".cache") / run_id
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
-try:
-    from tqdm import tqdm
-except ImportError:  # pragma: no cover
-    tqdm = None  # type: ignore[assignment]
+def wrap_dump(func: Callable, cache_dir: Path | None):
+    """Wrap a function so results are dumped to .pkl when cache_dir is set."""
+    if cache_dir is None:
+        return func
 
+    def wrapped(x, *args, **kwargs):
+        res = func(x, *args, **kwargs)
+        p = cache_dir / f"{uuid.uuid4().hex}.pkl"
+        with open(p, "wb") as fh:
+            pickle.dump(res, fh)
+        return str(p)
+    return wrapped
 
-# ──── internal helpers ────────────────────────────────────────────────────
+# ─── ray management ─────────────────────────────────────────
 
+RAY_WORKER = None
 
-def _group_iter(src: Iterable[Any], size: int) -> Iterable[list[Any]]:
-    "Yield *size*-sized chunks from *src*."
-    it = iter(src)
-    while chunk := list(islice(it, size)):
-        yield chunk
+def ensure_ray(workers: int, pbar: tqdm | None = None):
+    """Initialize or reinitialize Ray with a given worker count, log to bar postfix."""
+    global RAY_WORKER
+    if not ray.is_initialized() or RAY_WORKER != workers:
+        if ray.is_initialized() and pbar:
+            pbar.set_postfix_str(f"Restarting Ray {workers} workers")
+            ray.shutdown()
+        t0 = time.time()
+        ray.init(num_cpus=workers, ignore_reinit_error=True)
+        took = time.time() - t0
+        if pbar:
+            pbar.set_postfix_str(f"ray.init {workers} took {took:.2f}s")
+        RAY_WORKER = workers
 
+# ─── main API ───────────────────────────────────────────────
+from typing import Literal
 
-def _short_tb() -> str:
-    tb = "".join(traceback.format_exc())
-    return "\n".join(ln for ln in tb.splitlines() if "multi_process" not in ln)
-
-
-def _safe_call(func: Callable, obj, fixed):
-    try:
-        return func(obj, **fixed)
-    except Exception as exc:
-        func_name = getattr(func, "__name__", str(func))
-        raise RuntimeError(
-            f"{func_name}({obj!r}) failed: {exc}\n{_short_tb()}"
-        ) from exc
-
-
-def _worker_process(
-    func: Callable, item_batch: Any, fixed_kwargs: dict, batch_size: int
-):
-    """Worker function executed in each process."""
-    if batch_size > 1:
-        results = []
-        for itm in item_batch:
-            try:
-                results.append(_safe_call(func, itm, fixed_kwargs))
-            except Exception:
-                results.append(None)
-        return results
-    return _safe_call(func, item_batch, fixed_kwargs)
-
-
-# ──── public API ──────────────────────────────────────────────────────────
 def multi_process(
     func: Callable[[Any], Any],
-    inputs: Iterable[Any],
+    items: list[Any] | None = None,
     *,
-    workers: Union[int, None] = None,
-    batch: int = 1,
-    ordered: bool = True,
-    progress: bool = False,
-    inflight: Union[int, None] = None,
-    timeout: Union[float, None] = None,
-    stop_on_error: bool = True,
-    process_update_interval=10,
-    for_loop: bool = False,
-    **fixed_kwargs,
+    inputs: list[Any] | None = None,
+    workers: int | None = None,
+    lazy_output: bool = False,
+    progress: bool = True,
+    # backend: str = "ray",   # "seq", "ray", or "fastcore"
+    backend: Literal["seq", "ray", "mp", "threadpool"] = "ray",
+    # Additional optional knobs (accepted for compatibility)
+    batch: int | None = None,
+    ordered: bool | None = None,
+    process_update_interval: int | None = None,
+    stop_on_error: bool | None = None,
+    **func_kwargs: Any,
 ) -> list[Any]:
     """
-    Simple multi‑processing parallel map that returns a *list*.
+    Multi-process map with selectable backend.
 
-    Parameters
-    ----------
-    func          – target callable executed in separate processes, must be of the form f(obj, ...).
-    inputs        – iterable with the objects.
-    workers       – process pool size (defaults to :pyfunc:`os.cpu_count()`).
-    batch         – package *batch* inputs into one call to reduce IPC overhead.
-    ordered       – keep original order; if ``False`` results stream as finished.
-    progress      – show a tqdm bar (requires *tqdm*).
-    inflight      – max logical items concurrently submitted
-                    *(default: ``workers × 4``)*.
-    timeout       – overall timeout for the mapping (seconds).
-    stop_on_error – raise immediately on first exception (default) or
-                    substitute failing result with ``None``.
-    **fixed_kwargs – static keyword args forwarded to every ``func()`` call.
+    backend:
+        - "seq": run sequentially
+        - "ray": run in parallel with Ray
+        - "fastcore": run in parallel with fastcore.parallel
+
+    If lazy_output=True, every result is saved to .pkl and
+    the returned list contains file paths.
     """
-    if for_loop:
-        ret = []
-        for arg in inputs:
-            ret.append(func(arg, **fixed_kwargs))
-        return ret
+
+    # unify items
+    if items is None and inputs is not None:
+        items = list(inputs)
+    if items is None:
+        raise ValueError("'items' or 'inputs' must be provided")
 
     if workers is None:
         workers = os.cpu_count() or 1
-    if inflight is None:
-        inflight = workers * 4
-    if batch < 1:
-        raise ValueError("batch must be ≥ 1")
 
-    try:
-        n_inputs = len(inputs)  # type: ignore[arg-type]
-    except Exception:
-        n_inputs = None
+    # build cache dir + wrap func
+    cache_dir = _build_cache_dir(func, items) if lazy_output else None
+    f_wrapped = wrap_dump(func, cache_dir)
 
-    src_iter: Iterator[Any] = iter(inputs)
-    if batch > 1:
-        src_iter = cast(Iterator[Any], _group_iter(src_iter, batch))
+    total = len(items)
+    with tqdm(total=total, desc=f"multi_process [{backend}]", disable=not progress) as pbar:
 
-    logical_total = n_inputs
-    bar = None
-    last_bar = 0
-    if progress and tqdm is not None and logical_total is not None:
-        bar = tqdm(
-            total=logical_total,
-            ncols=80,
-            colour="green",
-            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt}"
-            " [{elapsed}<{remaining}, {rate_fmt}{postfix}]",
-        )
+        # ---- sequential backend ----
+        if backend == "seq":
+            pbar.set_postfix_str("backend=seq")
+            results = []
+            for x in items:
+                results.append(f_wrapped(x, **func_kwargs))
+                pbar.update(1)
+            return results
 
-    if ordered and logical_total is not None:
-        results: list[Any] = [None] * logical_total
-    else:
-        results = []
+        # ---- ray backend ----
+        if backend == "ray":
+            pbar.set_postfix_str("backend=ray")
+            ensure_ray(workers, pbar)
 
-    completed = 0
-    next_idx = 0
+            @ray.remote
+            def _task(x):
+                return f_wrapped(x, **func_kwargs)
 
-    with ProcessPoolExecutor(max_workers=workers) as pool:
-        futures = set()
+            refs = [_task.remote(x) for x in items]
 
-        for _ in range(min(inflight, workers)):
-            try:
-                arg = next(src_iter)
-            except StopIteration:
-                break
-            fut = pool.submit(_worker_process, func, arg, fixed_kwargs, batch)
-            fut.idx = next_idx  # type: ignore[attr-defined]
-            futures.add(fut)
-            next_idx += len(arg) if batch > 1 else 1
+            results = []
+            for r in refs:
+                results.append(ray.get(r))
+                pbar.update(1)
+            return results
 
-        while futures:
-            for fut in as_completed(futures, timeout=timeout):
-                futures.remove(fut)
-                idx = fut.idx  # type: ignore[attr-defined]
-                try:
-                    res = fut.result()
-                except Exception:
-                    if stop_on_error:
-                        raise
-                    num_items = batch if batch > 1 else 1
-                    res = [None] * num_items if batch > 1 else None
+        # ---- fastcore backend ----
+        if backend == "mp":
+            results = parallel(f_wrapped, items, n_workers=workers, progress=progress, threadpool=False)
+            return list(results)
+        if backend == "threadpool":
+            results = parallel(f_wrapped, items, n_workers=workers, progress=progress, threadpool=True)
+            return list(results)
 
-                out_items = res if batch > 1 else [res]
-                if out_items is None:
-                    out_items = []
-
-                if ordered and logical_total is not None:
-                    if isinstance(out_items, list) and len(out_items) > 0:
-                        for i, item in enumerate(out_items):
-                            if idx + i < len(results):
-                                results[idx + i] = item
-                else:
-                    if isinstance(out_items, list):
-                        results.extend(out_items)
-
-                completed += len(out_items)
-
-                if bar and completed - last_bar >= process_update_interval:
-                    bar.update(completed - last_bar)
-                    last_bar = completed
-
-                try:
-                    while next_idx - completed < inflight:
-                        arg = next(src_iter)
-                        fut2 = pool.submit(
-                            _worker_process, func, arg, fixed_kwargs, batch
-                        )
-                        fut2.idx = next_idx  # type: ignore[attr-defined]
-                        futures.add(fut2)
-                        next_idx += len(arg) if batch > 1 else 1
-                except StopIteration:
-                    pass
-                break
-
-    if bar:
-        bar.update(completed - last_bar)
-        bar.close()
-
-    return results
-
-
-__all__ = ["multi_process"]
+        raise ValueError(f"Unsupported backend: {backend!r}")

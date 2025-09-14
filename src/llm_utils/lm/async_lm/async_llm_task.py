@@ -33,8 +33,6 @@ class LMConfiguration:
     model: Optional[str] = None
     temperature: Optional[float] = None
     max_tokens: Optional[int] = None
-    host: Optional[str] = None
-    port: Optional[Union[int, str]] = None
     base_url: Optional[str] = None
     api_key: Optional[str] = None
     cache: Optional[bool] = True
@@ -53,8 +51,6 @@ class LMConfiguration:
             "model": self.model,
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
-            "host": self.host,
-            "port": self.port,
             "base_url": self.base_url,
             "api_key": self.api_key,
             "cache": self.cache,
@@ -90,8 +86,6 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
     DEFAULT_CACHE_DIR: Optional[pathlib.Path] = None
     DEFAULT_TEMPERATURE: Optional[float] = None
     DEFAULT_MAX_TOKENS: Optional[int] = None
-    DEFAULT_HOST: Optional[str] = None
-    DEFAULT_PORT: Optional[Union[int, str]] = None
     DEFAULT_TOP_P: Optional[float] = None
     DEFAULT_PRESENCE_PENALTY: Optional[float] = None
     DEFAULT_TOP_K: Optional[int] = None
@@ -112,8 +106,6 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
         model: Optional[str] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
-        host: Optional[str] = None,
-        port: Optional[Union[int, str]] = None,
         base_url: Optional[str] = None,
         api_key: Optional[str] = None,
         cache: Optional[bool] = None,
@@ -139,8 +131,6 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
             max_tokens=max_tokens
             if max_tokens is not None
             else self.DEFAULT_MAX_TOKENS,
-            host=host if host is not None else self.DEFAULT_HOST,
-            port=port if port is not None else self.DEFAULT_PORT,
             base_url=base_url if base_url is not None else self.DEFAULT_BASE_URL,
             api_key=api_key if api_key is not None else self.DEFAULT_API_KEY,
             cache=cache if cache is not None else self.DEFAULT_CACHE,

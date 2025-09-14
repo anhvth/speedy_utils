@@ -1,7 +1,7 @@
 import time
 from unittest.mock import MagicMock, patch
 
-import pytest
+import pytest  # type: ignore[import-not-found]
 from freezegun import freeze_time
 
 from speedy_utils.common.logger import (
