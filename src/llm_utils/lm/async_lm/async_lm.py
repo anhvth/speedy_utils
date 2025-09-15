@@ -295,6 +295,17 @@ class AsyncLM(AsyncLMBase):
             msg_dump = dict(assistant_msg)
         return msg_dump, full_messages
 
+    
+    def call_sync(
+        self,
+        prompt: Optional[str] = None,
+        messages: Optional[RawMsgs] = None,
+        max_tokens: Optional[int] = None,
+    ):
+        """Synchronous wrapper around the async __call__ method."""
+        import asyncio
+        return asyncio.run(self.__call__(prompt=prompt, messages=messages, max_tokens=max_tokens))
+    
     async def parse(
         self,
         instruction,
