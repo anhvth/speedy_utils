@@ -112,6 +112,9 @@ def fast_load_jsonl(
     on_error: str = "raise",   # 'raise' | 'warn' | 'skip'
     skip_empty: bool = True,
     max_lines: Optional[int] = None,
+    use_multiworker: bool = True,
+    multiworker_threshold: int = 50000,
+    workers: Optional[int] = None,
 ) -> Iterable[Any]:
     """
     Lazily iterate objects from a JSON Lines file.
@@ -120,6 +123,7 @@ def fast_load_jsonl(
     - Optional tqdm progress over bytes (compressed size if gz/bz2/xz/zst).
     - Auto-detects compression by extension: .gz, .bz2, .xz/.lzma, .zst/.zstd.
     - Uses orjson if available (use_orjson=True), falls back to json.
+    - Automatically uses multi-worker processing for large files (>50k lines).
 
     Args:
         path_or_file: Path-like or file-like object. File-like can be binary or text.
@@ -130,6 +134,9 @@ def fast_load_jsonl(
         on_error: What to do on a malformed line: 'raise', 'warn', or 'skip'.
         skip_empty: Skip blank/whitespace-only lines.
         max_lines: Stop after reading this many lines (useful for sampling).
+        use_multiworker: Enable multi-worker processing for large files.
+        multiworker_threshold: Line count threshold to trigger multi-worker processing.
+        workers: Number of worker threads (defaults to CPU count).
 
     Yields:
         Parsed Python objects per line.
@@ -145,34 +152,109 @@ def fast_load_jsonl(
             return pth_or_f  # assume binary
         s = str(pth_or_f).lower()
         if s.endswith(".gz"):
-            return gzip.open(pth_or_f, "rb")
+            return gzip.open(pth_or_f, "rb")  # type: ignore
         if s.endswith(".bz2"):
-            return bz2.open(pth_or_f, "rb")
+            return bz2.open(pth_or_f, "rb")  # type: ignore
         if s.endswith((".xz", ".lzma")):
-            return lzma.open(pth_or_f, "rb")
+            return lzma.open(pth_or_f, "rb")  # type: ignore
         if s.endswith((".zst", ".zstd")) and zstd is not None:
             fh = open(pth_or_f, "rb")
             dctx = zstd.ZstdDecompressor()
             stream = dctx.stream_reader(fh)
-            return io.BufferedReader(stream)
+            return io.BufferedReader(stream)  # type: ignore
         # plain
         return open(pth_or_f, "rb", buffering=1024 * 1024)
 
+    def _count_lines_fast(file_path: Union[str, os.PathLike]) -> int:
+        """Quickly count lines in a file, handling compression."""
+        try:
+            f = _open_auto(file_path)
+            count = 0
+            for _ in f:
+                count += 1
+            f.close()
+            return count
+        except Exception:
+            # If we can't count lines, assume it's small
+            return 0
+
+    def _process_chunk(chunk_lines: list[bytes]) -> list[Any]:
+        """Process a chunk of lines and return parsed objects."""
+        results = []
+        for line_bytes in chunk_lines:
+            if skip_empty and not line_bytes.strip():
+                continue
+            line_bytes = line_bytes.rstrip(b"\r\n")
+            try:
+                if use_orjson and orjson is not None:
+                    obj = orjson.loads(line_bytes)
+                else:
+                    obj = json.loads(line_bytes.decode(encoding, errors))
+                results.append(obj)
+            except Exception as e:
+                if on_error == "raise":
+                    raise
+                if on_error == "warn":
+                    warnings.warn(f"Skipping malformed line: {e}")
+                # 'skip' and 'warn' both skip the line
+                continue
+        return results
+
+    # Check if we should use multi-worker processing
+    should_use_multiworker = (
+        use_multiworker 
+        and not hasattr(path_or_file, "read")  # Only for file paths, not file objects
+        and max_lines is None  # Don't use multiworker if we're limiting lines
+    )
+    
+    if should_use_multiworker:
+        line_count = _count_lines_fast(cast(Union[str, os.PathLike], path_or_file))
+        if line_count > multiworker_threshold:
+            # Use multi-worker processing
+            from ..multi_worker.thread import multi_thread
+            
+            # Read all lines into chunks
+            f = _open_auto(path_or_file)
+            all_lines = list(f)
+            f.close()
+            
+            # Split into chunks for workers
+            num_workers = workers or os.cpu_count() or 4
+            chunk_size = max(len(all_lines) // num_workers, 1000)
+            chunks = []
+            for i in range(0, len(all_lines), chunk_size):
+                chunks.append(all_lines[i:i + chunk_size])
+            
+            # Process chunks in parallel
+            if progress:
+                print(f"Processing {line_count} lines with {num_workers} workers...")
+            
+            chunk_results = multi_thread(_process_chunk, chunks, workers=num_workers, progress=progress)
+            
+            # Flatten results and yield
+            for chunk_result in chunk_results:
+                for obj in chunk_result:
+                    yield obj
+            return
+
+    # Single-threaded processing (original logic)
+
     f = _open_auto(path_or_file)
 
-
-    try:
-        from tqdm import tqdm  # type: ignore
-    except Exception as e:
-        raise ImportError("tqdm is required when progress=True") from e
-    total = None
-    if not hasattr(path_or_file, "read"):
+    pbar = None
+    if progress:
         try:
-            path_for_size = cast(Union[str, os.PathLike], path_or_file)
-            total = os.path.getsize(path_for_size)  # compressed size if any
-        except Exception:
-            total = None
-    pbar = tqdm(total=total, unit="B", unit_scale=True, desc=desc)
+            from tqdm import tqdm  # type: ignore
+        except Exception as e:
+            raise ImportError("tqdm is required when progress=True") from e
+        total = None
+        if not hasattr(path_or_file, "read"):
+            try:
+                path_for_size = cast(Union[str, os.PathLike], path_or_file)
+                total = os.path.getsize(path_for_size)  # compressed size if any
+            except Exception:
+                total = None
+        pbar = tqdm(total=total, unit="B", unit_scale=True, desc=desc)
 
     line_no = 0
     try:

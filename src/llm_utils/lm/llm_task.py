@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Type, Union, cast
 from openai import OpenAI
 from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
+from .base_prompt_builder import BasePromptBuilder
 
 # Type aliases for better readability
 Messages = List[ChatCompletionMessageParam]
@@ -79,7 +80,7 @@ class LLMTask:
         self,
         instruction: Optional[str] = None,
         input_model: Union[Type[BaseModel], type[str]] = str,
-        output_model: Type[BaseModel] = None,
+        output_model: Type[BaseModel]|Type[str] = None,
         client: Union[OpenAI, int, str, None] = None,
         cache=True,
         **model_kwargs
@@ -287,7 +288,7 @@ class LLMTask:
     
     
     @classmethod
-    def from_prompt_builder(builder: BasePromptBuilder) -> "LLMTask":
+    def from_prompt_builder(builder: BasePromptBuilder, client: Union[OpenAI, int, str, None] = None, cache=True, **model_kwargs) -> 'LLMTask':
         """
         Create an LLMTask instance from a BasePromptBuilder instance.
         
@@ -302,5 +303,6 @@ class LLMTask:
         return LLMTask(
             instruction=instruction,
             input_model=input_model,
-            output_model=output_model
+            output_model=output_model,
+            client=client,
         )
