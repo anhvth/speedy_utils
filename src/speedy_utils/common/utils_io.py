@@ -351,7 +351,7 @@ def load_by_ext(fname: Union[str, list[str]], do_memoize: bool = False) -> Any:
 
         def load_default(path: str) -> Any:
             if path.endswith(".jsonl"):
-                return list(fast_load_jsonl(path))
+                return list(fast_load_jsonl(path, progress=True))
             elif path.endswith(".json"):
                 try:
                     return load_json_or_pickle(path)

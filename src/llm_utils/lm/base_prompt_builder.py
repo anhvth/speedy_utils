@@ -212,7 +212,7 @@ class BasePromptBuilder(BaseModel, ABC):
     # ------------------------------------------------------------------ #
     # Training & preview (JSON or Markdown)
     # ------------------------------------------------------------------ #
-    def build_training_data(self, format: str = "json", indent=0) -> dict[str, Any] | str:
+    def build_training_data(self, format: str = "json", indent=None) -> dict[str, Any]:
         """
         Build training data in either JSON (dict for OpenAI-style messages)
         or Markdown (clean format without role prefixes).
@@ -226,8 +226,6 @@ class BasePromptBuilder(BaseModel, ABC):
                 ]
             }
         elif format == "markdown":
-
-            
             system_content = self.get_instruction()
             
             return {
@@ -237,8 +235,7 @@ class BasePromptBuilder(BaseModel, ABC):
                     {"role": "assistant", "content": self.model_dump_markdown_output()},
                 ]
             }
-        else:
-            raise ValueError("format must be either 'json' or 'markdown'")
+        raise ValueError("format must be either 'json' or 'markdown'")
 
     def __str__(self) -> str:
         # Return clean format without explicit role prefixes
