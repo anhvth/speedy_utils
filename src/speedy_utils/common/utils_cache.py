@@ -563,7 +563,7 @@ def _async_both_memoize(
 
 @overload
 def memoize(
-    _func: Callable[P, R],
+    _func: Callable[P, R | Awaitable[R]],
     *,
     keys: Optional[list[str]] = ...,
     key: Optional[Callable[..., Any]] = ...,
@@ -572,19 +572,7 @@ def memoize(
     size: int = ...,
     ignore_self: bool = ...,
     verbose: bool = ...,
-) -> Callable[P, R]: ...
-@overload
-def memoize(
-    _func: Callable[P, Awaitable[R]],
-    *,
-    keys: Optional[list[str]] = ...,
-    key: Optional[Callable[..., Any]] = ...,
-    cache_dir: str = ...,
-    cache_type: Literal["memory", "disk", "both"] = ...,
-    size: int = ...,
-    ignore_self: bool = ...,
-    verbose: bool = ...,
-) -> Callable[P, Awaitable[R]]: ...
+) -> Callable[P, R | Awaitable[R]]: ...
 @overload
 def memoize(
     _func: None = ...,
@@ -597,6 +585,18 @@ def memoize(
     ignore_self: bool = ...,
     verbose: bool = ...,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]: ...
+@overload
+def memoize(
+    _func: None = ...,
+    *,
+    keys: Optional[list[str]] = ...,
+    key: Optional[Callable[..., Any]] = ...,
+    cache_dir: str = ...,
+    cache_type: Literal["memory", "disk", "both"] = ...,
+    size: int = ...,
+    ignore_self: bool = ...,
+    verbose: bool = ...,
+) -> Callable[[Callable[P, Awaitable[R]]], Callable[P, Awaitable[R]]]: ...
 
 
 def memoize(

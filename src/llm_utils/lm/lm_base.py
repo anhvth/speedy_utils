@@ -40,32 +40,40 @@ class LMBase:
     def __init__(
         self,
         *,
-        host: str = "localhost",
-        port: Optional[Union[int, str]] = None,
         base_url: Optional[str] = None,
         api_key: Optional[str] = None,
         cache: bool = True,
         ports: Optional[List[int]] = None,
     ) -> None:
-        self._port = port
-        self._host = host
-        self.base_url = base_url or (f"http://{host}:{port}/v1" if port else None)
+        self.base_url = base_url
         self.api_key = api_key or os.getenv("OPENAI_API_KEY", "abc")
         self._cache = cache
         self.ports = ports
-        self._init_port = port  # <-- store the port provided at init
 
     @property
     def client(self) -> MOpenAI:
         # if have multiple ports
-        if self.ports:
+        if self.ports and self.base_url:
             import random
-
+            import re
+            
             port = random.choice(self.ports)
-            api_base = f"http://{self._host}:{port}/v1"
+            # Replace port in base_url if it exists
+            base_url_pattern = r'(https?://[^:/]+):?\d*(/.*)?'
+            match = re.match(base_url_pattern, self.base_url)
+            if match:
+                host_part = match.group(1)
+                path_part = match.group(2) or '/v1'
+                api_base = f"{host_part}:{port}{path_part}"
+            else:
+                api_base = self.base_url
             logger.debug(f"Using port: {port}")
         else:
-            api_base = self.base_url or f"http://{self._host}:{self._port}/v1"
+            api_base = self.base_url
+            
+        if api_base is None:
+            raise ValueError("base_url must be provided")
+            
         client = MOpenAI(
             api_key=self.api_key,
             base_url=api_base,
@@ -182,11 +190,13 @@ class LMBase:
     # ------------------------------------------------------------------ #
 
     @staticmethod
-    def list_models(port=None, host="localhost") -> List[str]:
+    def list_models(base_url: Optional[str] = None) -> List[str]:
         try:
-            client = LMBase(port=port, host=host).client  # type: ignore[arg-type]
-            base_url: URL = client.base_url
-            logger.debug(f"Base URL: {base_url}")
+            if base_url is None:
+                raise ValueError("base_url must be provided")
+            client = LMBase(base_url=base_url).client
+            base_url_obj: URL = client.base_url
+            logger.debug(f"Base URL: {base_url_obj}")
             models: SyncPage[Model] = client.models.list()  # type: ignore[assignment]
             return [model.id for model in models.data]
         except Exception as exc:
@@ -236,3 +246,40 @@ class LMBase:
     def inspect_history(self):
         """Inspect the history of the LLM calls."""
         pass
+    
+
+def get_model_name(client: OpenAI|str|int) -> str:
+    """
+    Get the first available model name from the client.
+    
+    Args:
+        client: OpenAI client, base_url string, or port number
+        
+    Returns:
+        Name of the first available model
+        
+    Raises:
+        ValueError: If no models are available or client is invalid
+    """
+    try:
+        if isinstance(client, OpenAI):
+            openai_client = client
+        elif isinstance(client, str):
+            # String base_url
+            openai_client = OpenAI(base_url=client, api_key='abc')
+        elif isinstance(client, int):
+            # Port number
+            base_url = f"http://localhost:{client}/v1"
+            openai_client = OpenAI(base_url=base_url, api_key='abc')
+        else:
+            raise ValueError(f"Unsupported client type: {type(client)}")
+            
+        models = openai_client.models.list()
+        if not models.data:
+            raise ValueError("No models available")
+            
+        return models.data[0].id
+        
+    except Exception as exc:
+        logger.error(f"Failed to get model name: {exc}")
+        raise ValueError(f"Could not retrieve model name: {exc}") from exc

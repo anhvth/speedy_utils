@@ -1,375 +1,207 @@
-# from ._utils import *
-from typing import (
-    Any,
-    List,
-    Literal,
-    Optional,
-    Type,
-    Union,
-    cast,
-)
+# # from ._utils import *
+# from typing import (
+#     Any,
+#     List,
+#     Literal,
+#     Optional,
+#     Type,
+#     Union,
+#     cast,
+# )
 
-from loguru import logger
-from openai import AuthenticationError, BadRequestError, OpenAI, RateLimitError
-from pydantic import BaseModel
-from speedy_utils import jloads
+# from loguru import logger
+# from openai import AuthenticationError, BadRequestError, OpenAI, RateLimitError
+# from pydantic import BaseModel
+# from speedy_utils import jloads
 
-# from llm_utils.lm.async_lm.async_llm_task import OutputModelType
-from llm_utils.lm.lm_base import LMBase
+# # from llm_utils.lm.async_lm.async_llm_task import OutputModelType
+# from llm_utils.lm.lm_base import LMBase
 
-from .async_lm._utils import (
-    LegacyMsgs,
-    Messages,
-    OutputModelType,
-    ParsedOutput,
-    RawMsgs,
-)
-
-
-def jloads_safe(content: str) -> Any:
-    # if contain ```json, remove it
-    if "```json" in content:
-        content = content.split("```json")[1].strip().split("```")[0].strip()
-    try:
-        return jloads(content)
-    except Exception as e:
-        logger.error(
-            f"Failed to parse JSON content: {content[:100]}... with error: {e}"
-        )
-        raise ValueError(f"Invalid JSON content: {content}") from e
+# from .async_lm._utils import (
+#     LegacyMsgs,
+#     Messages,
+#     OutputModelType,
+#     ParsedOutput,
+#     RawMsgs,
+# )
 
 
-class LM(LMBase):
-    """Unified **sync** language‑model wrapper with optional JSON parsing."""
+# class LM(LMBase):
+#     """Unified **sync** language‑model wrapper with optional JSON parsing."""
 
-    def __init__(
-        self,
-        *,
-        model: Optional[str] = None,
-        response_model: Optional[type[BaseModel]] = None,
-        temperature: float = 0.0,
-        max_tokens: int = 2_000,
-        host: str = "localhost",
-        port: Optional[Union[int, str]] = None,
-        base_url: Optional[str] = None,
-        api_key: Optional[str] = None,
-        cache: bool = True,
-        think: Literal[True, False, None] = None,
-        add_json_schema_to_instruction: Optional[bool] = None,
-        use_beta: bool = False,
-        ports: Optional[List[int]] = None,
-        top_p: float = 1.0,
-        presence_penalty: float = 0.0,
-        top_k: int = 1,
-        repetition_penalty: float = 1.0,
-        frequency_penalty: Optional[float] = None,
-    ) -> None:
+#     def __init__(
+#         self,
+#         *,
+#         model: Optional[str] = None,
+#         response_model: Optional[type[BaseModel]] = None,
+#         temperature: float = 0.0,
+#         max_tokens: int = 2_000,
+#         base_url: Optional[str] = None,
+#         api_key: Optional[str] = None,
+#         cache: bool = True,
+#         ports: Optional[List[int]] = None,
+#         top_p: float = 1.0,
+#         presence_penalty: float = 0.0,
+#         top_k: int = 1,
+#         repetition_penalty: float = 1.0,
+#         frequency_penalty: Optional[float] = None,
+#     ) -> None:
 
-        if model is None:
-            models = OpenAI(base_url=f'http://{host}:{port}/v1', api_key='abc').models.list().data
-            assert len(models) == 1, f"Found {len(models)} models, please specify one."
-            model = models[0].id
-            print(f"Using model: {model}")
+#         if model is None:
+#             if base_url is None:
+#                 raise ValueError("Either model or base_url must be provided")
+#             models = OpenAI(base_url=base_url, api_key=api_key or 'abc').models.list().data
+#             assert len(models) == 1, f"Found {len(models)} models, please specify one."
+#             model = models[0].id
+#             print(f"Using model: {model}")
 
-        super().__init__(
-            host=host,
-            port=port,
-            ports=ports,
-            base_url=base_url,
-            cache=cache,
-            api_key=api_key,
-        )
+#         super().__init__(
+#             ports=ports,
+#             base_url=base_url,
+#             cache=cache,
+#             api_key=api_key,
+#         )
 
-        # Model behavior options
-        self.response_model = response_model
-        self.think = think
-        self._use_beta = use_beta
-        self.add_json_schema_to_instruction = add_json_schema_to_instruction
-        if not use_beta:
-            self.add_json_schema_to_instruction = True
+#         # Model behavior options
+#         self.response_model = response_model
 
-        # Store all model-related parameters in model_kwargs
-        self.model_kwargs = dict(
-            model=model,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            top_p=top_p,
-            presence_penalty=presence_penalty,
-        )
-        self.extra_body = dict(
-            top_k=top_k,
-            repetition_penalty=repetition_penalty,
-            frequency_penalty=frequency_penalty,
-        )
+#         # Store all model-related parameters in model_kwargs
+#         self.model_kwargs = dict(
+#             model=model,
+#             temperature=temperature,
+#             max_tokens=max_tokens,
+#             top_p=top_p,
+#             presence_penalty=presence_penalty,
+#         )
+#         self.extra_body = dict(
+#             top_k=top_k,
+#             repetition_penalty=repetition_penalty,
+#             frequency_penalty=frequency_penalty,
+#         )
 
-    def _unified_client_call(
-        self,
-        messages: RawMsgs,
-        extra_body: Optional[dict] = None,
-        max_tokens: Optional[int] = None,
-    ) -> dict:
-        """Unified method for all client interactions (caching handled by MOpenAI)."""
-        converted_messages: Messages = (
-            self._convert_messages(cast(LegacyMsgs, messages))
-            if messages and isinstance(messages[0], dict)
-            else cast(Messages, messages)
-        )
-        # override max_tokens if provided
-        if max_tokens is not None:
-            self.model_kwargs["max_tokens"] = max_tokens
+#     def _unified_client_call(
+#         self,
+#         messages: RawMsgs,
+#         extra_body: Optional[dict] = None,
+#         max_tokens: Optional[int] = None,
+#     ) -> dict:
+#         """Unified method for all client interactions (caching handled by MOpenAI)."""
+#         converted_messages: Messages = (
+#             self._convert_messages(cast(LegacyMsgs, messages))
+#             if messages and isinstance(messages[0], dict)
+#             else cast(Messages, messages)
+#         )
+#         if max_tokens is not None:
+#             self.model_kwargs["max_tokens"] = max_tokens
 
-        try:
-            # Get completion from API (caching handled by MOpenAI)
-            call_kwargs = {
-                "messages": converted_messages,
-                **self.model_kwargs,
-            }
-            if extra_body:
-                call_kwargs["extra_body"] = extra_body
+#         try:
+#             # Get completion from API (caching handled by MOpenAI)
+#             call_kwargs = {
+#                 "messages": converted_messages,
+#                 **self.model_kwargs,
+#             }
+#             if extra_body:
+#                 call_kwargs["extra_body"] = extra_body
 
-            completion = self.client.chat.completions.create(**call_kwargs)
+#             completion = self.client.chat.completions.create(**call_kwargs)
 
-            if hasattr(completion, "model_dump"):
-                completion = completion.model_dump()
+#             if hasattr(completion, "model_dump"):
+#                 completion = completion.model_dump()
 
-        except (AuthenticationError, RateLimitError, BadRequestError) as exc:
-            error_msg = f"OpenAI API error ({type(exc).__name__}): {exc}"
-            logger.error(error_msg)
-            raise
+#         except (AuthenticationError, RateLimitError, BadRequestError) as exc:
+#             error_msg = f"OpenAI API error ({type(exc).__name__}): {exc}"
+#             logger.error(error_msg)
+#             raise
 
-        return completion
+#         return completion
 
-    def _call_and_parse(
-        self,
-        messages: list[dict],
-        response_model: Type[OutputModelType],
-        json_schema: dict,
-    ) -> tuple[dict, list[dict], OutputModelType]:
-        """Unified call and parse with cache and error handling."""
-        if self._use_beta:
-            return self._call_and_parse_with_beta(
-                messages, response_model, json_schema
-            )
+#     def __call__(
+#         self,
+#         prompt: Optional[str] = None,
+#         messages: Optional[RawMsgs] = None,
+#         max_tokens: Optional[int] = None,
+#     ):  # -> tuple[Any | dict[Any, Any], list[ChatCompletionMessagePar...:# -> tuple[Any | dict[Any, Any], list[ChatCompletionMessagePar...:
+#         """Unified sync call for language model, returns (assistant_message.model_dump(), messages)."""
+#         if (prompt is None) == (messages is None):
+#             raise ValueError("Provide *either* `prompt` or `messages` (but not both).")
 
-        choice = None
-        try:
-            # Use unified client call
-            completion = self._unified_client_call(
-                messages,
-                extra_body={**self.extra_body},
-            )
+#         if prompt is not None:
+#             messages = [{"role": "user", "content": prompt}]
 
-            # Parse the response
-            choice = completion["choices"][0]["message"]
-            if "content" not in choice:
-                raise ValueError("Response choice must contain 'content' field.")
+#         assert messages is not None
 
-            content = choice["content"]
-            if not content:
-                raise ValueError("Response content is empty")
+#         openai_msgs: Messages = (
+#             self._convert_messages(cast(LegacyMsgs, messages))
+#             if isinstance(messages[0], dict)
+#             else cast(Messages, messages)
+#         )
 
-            parsed = response_model.model_validate(jloads_safe(content))
+#         assert self.model_kwargs["model"] is not None, (
+#             "Model must be set before making a call."
+#         )
 
-        except Exception as e:
-            # Try fallback to beta mode if regular parsing fails
-            if not isinstance(
-                e, (AuthenticationError, RateLimitError, BadRequestError)
-            ):
-                content = choice.get("content", "N/A") if choice else "N/A"
-                logger.info(
-                    f"Regular parsing failed due to wrong format or content, now falling back to beta mode: {content=}, {e=}"
-                )
-                try:
-                    return self._call_and_parse_with_beta(
-                        messages, response_model, json_schema
-                    )
-                except Exception as beta_e:
-                    logger.warning(f"Beta mode fallback also failed: {beta_e}")
-                    choice_info = choice if choice is not None else "N/A"
-                    raise ValueError(
-                        f"Failed to parse model response with both regular and beta modes. "
-                        f"Regular error: {e}. Beta error: {beta_e}. "
-                        f"Model response message: {choice_info}"
-                    ) from e
-            raise
+#         # Use unified client call
+#         raw_response = self._unified_client_call(
+#             list(openai_msgs), max_tokens=max_tokens
+#         )
 
-        assistant_msg = self._extract_assistant_message(choice)
-        full_messages = messages + [assistant_msg]
+#         if hasattr(raw_response, "model_dump"):
+#             raw_response = raw_response.model_dump()  # type: ignore
 
-        return completion, full_messages, cast(OutputModelType, parsed)
+#         # Extract the assistant's message
+#         assistant_msg = raw_response["choices"][0]["message"]
+#         # Build the full messages list (input + assistant reply)
+#         full_messages = list(messages) + [
+#             {"role": assistant_msg["role"], "content": assistant_msg["content"]}
+#         ]
+#         # Return the OpenAI message as model_dump (if available) and the messages list
+#         if hasattr(assistant_msg, "model_dump"):
+#             msg_dump = assistant_msg.model_dump()
+#         else:
+#             msg_dump = dict(assistant_msg)
+#         return msg_dump, full_messages
 
-    def _call_and_parse_with_beta(
-        self,
-        messages: list[dict],
-        response_model: Type[OutputModelType],
-        json_schema: dict,
-    ) -> tuple[dict, list[dict], OutputModelType]:
-        """Call and parse for beta mode with guided JSON."""
-        choice = None
-        try:
-            # Use unified client call with guided JSON
-            completion = self._unified_client_call(
-                messages,
-                extra_body={"guided_json": json_schema, **self.extra_body},
-            )
+#     def parse(
+#         self,
+#         messages: Messages,
+#         response_model: Optional[type[BaseModel]] = None,
+#     ) -> ParsedOutput[BaseModel]:
+#         """Parse response using OpenAI's native parse API."""
+#         # Use provided response_model or fall back to instance default
+#         model_to_use = response_model or self.response_model
+#         assert model_to_use is not None, "response_model must be provided or set at init."
 
-            # Parse the response
-            choice = completion["choices"][0]["message"]
-            parsed = self._parse_complete_output(completion, response_model)
+#         # Use OpenAI's native parse API directly
+#         response = self.client.chat.completions.parse(
+#             model=self.model_kwargs["model"],
+#             messages=messages,
+#             response_format=model_to_use,
+#             **{k: v for k, v in self.model_kwargs.items() if k != "model"}
+#         )
+        
+#         parsed = response.choices[0].message.parsed
+#         completion = response.model_dump() if hasattr(response, "model_dump") else {}
+#         full_messages = list(messages) + [
+#             {"role": "assistant", "content": parsed}
+#         ]
 
-        except Exception as e:
-            choice_info = choice if choice is not None else "N/A"
-            raise ValueError(
-                f"Failed to parse model response: {e}\nModel response message: {choice_info}"
-            ) from e
+#         return ParsedOutput(
+#             messages=full_messages,
+#             parsed=cast(BaseModel, parsed),
+#             completion=completion,
+#             model_kwargs=self.model_kwargs,
+#         )
 
-        assistant_msg = self._extract_assistant_message(choice)
-        full_messages = messages + [assistant_msg]
 
-        return completion, full_messages, cast(OutputModelType, parsed)
 
-    def _extract_assistant_message(self, choice):  # -> dict[str, str] | dict[str, Any]:
-        # TODO this current assume choice is a dict with "reasoning_content" and "content"
-        has_reasoning = False
-        if "reasoning_content" in choice and isinstance(
-            choice["reasoning_content"], str
-        ):
-            reasoning_content = choice["reasoning_content"].strip()
-            has_reasoning = True
+#     def __enter__(self):
+#         return self
 
-        content = choice["content"]
-        _content = content.lstrip("\n")
-        if has_reasoning:
-            assistant_msg = {
-                "role": "assistant",
-                "content": f"<think>\n{reasoning_content}\n</think>\n\n{_content}",
-            }
-        else:
-            assistant_msg = {"role": "assistant", "content": _content}
-
-        return assistant_msg
-
-    def __call__(
-        self,
-        prompt: Optional[str] = None,
-        messages: Optional[RawMsgs] = None,
-        max_tokens: Optional[int] = None,
-    ):  # -> tuple[Any | dict[Any, Any], list[ChatCompletionMessagePar...:# -> tuple[Any | dict[Any, Any], list[ChatCompletionMessagePar...:
-        """Unified sync call for language model, returns (assistant_message.model_dump(), messages)."""
-        if (prompt is None) == (messages is None):
-            raise ValueError("Provide *either* `prompt` or `messages` (but not both).")
-
-        if prompt is not None:
-            messages = [{"role": "user", "content": prompt}]
-
-        assert messages is not None
-
-        openai_msgs: Messages = (
-            self._convert_messages(cast(LegacyMsgs, messages))
-            if isinstance(messages[0], dict)
-            else cast(Messages, messages)
-        )
-
-        assert self.model_kwargs["model"] is not None, (
-            "Model must be set before making a call."
-        )
-
-        # Use unified client call
-        raw_response = self._unified_client_call(
-            list(openai_msgs), max_tokens=max_tokens
-        )
-
-        if hasattr(raw_response, "model_dump"):
-            raw_response = raw_response.model_dump()  # type: ignore
-
-        # Extract the assistant's message
-        assistant_msg = raw_response["choices"][0]["message"]
-        # Build the full messages list (input + assistant reply)
-        full_messages = list(messages) + [
-            {"role": assistant_msg["role"], "content": assistant_msg["content"]}
-        ]
-        # Return the OpenAI message as model_dump (if available) and the messages list
-        if hasattr(assistant_msg, "model_dump"):
-            msg_dump = assistant_msg.model_dump()
-        else:
-            msg_dump = dict(assistant_msg)
-        return msg_dump, full_messages
-
-    def parse(
-        self,
-        instruction,
-        prompt,
-    ) -> ParsedOutput[BaseModel]:
-        """Parse response using guided JSON generation. Returns (parsed.model_dump(), messages)."""
-        if not self._use_beta:
-            assert self.add_json_schema_to_instruction, (
-                "add_json_schema_to_instruction must be True when use_beta is False. otherwise model will not be able to parse the response."
-            )
-
-        assert self.response_model is not None, "response_model must be set at init."
-        json_schema = self.response_model.model_json_schema()
-
-        # Build system message content in a single, clear block
-        assert instruction is not None, "Instruction must be provided."
-        assert prompt is not None, "Prompt must be provided."
-        system_content = instruction
-
-        # Add schema if needed
-        system_content = self.build_system_prompt(
-            self.response_model,
-            self.add_json_schema_to_instruction,
-            json_schema,
-            system_content,
-            think=self.think,
-        )
-
-        messages = [
-            {"role": "system", "content": system_content},
-            {"role": "user", "content": prompt},
-        ]  # type: ignore
-
-        completion, full_messages, parsed = self._call_and_parse(
-            messages,
-            self.response_model,
-            json_schema,
-        )
-
-        return ParsedOutput(
-            messages=full_messages,
-            parsed=cast(BaseModel, parsed),
-            completion=completion,
-            model_kwargs=self.model_kwargs,
-        )
-
-    def _parse_complete_output(
-        self, completion: Any, response_model: Type[BaseModel]
-    ) -> BaseModel:
-        """Parse completion output to response model."""
-        if hasattr(completion, "model_dump"):
-            completion = completion.model_dump()
-
-        if "choices" not in completion or not completion["choices"]:
-            raise ValueError("No choices in OpenAI response")
-
-        content = completion["choices"][0]["message"]["content"]
-        if not content:
-            raise ValueError("Response content is empty")
-
-        try:
-            data = jloads(content)
-            return response_model.model_validate(data)
-        except Exception as exc:
-            raise ValueError(
-                f"Failed to validate against response model {response_model.__name__}: {exc}\nRaw content: {content}"
-            ) from exc
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if hasattr(self, "_last_client"):
-            last_client = self._last_client  # type: ignore
-            if hasattr(last_client, "close"):
-                last_client.close()
-        else:
-            logger.warning("No last client to close")
+#     def __exit__(self, exc_type, exc_val, exc_tb):
+#         if hasattr(self, "_last_client"):
+#             last_client = self._last_client  # type: ignore
+#             if hasattr(last_client, "close"):
+#                 last_client.close()
+#         else:
+#             logger.warning("No last client to close")
+LM = None

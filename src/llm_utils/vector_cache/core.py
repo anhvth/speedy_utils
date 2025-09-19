@@ -247,7 +247,7 @@ class VectorCache:
     def _load_model(self) -> None:
         """Load the model for vLLM or Transformers."""
         if self.backend == "vllm":
-            from vllm import LLM
+            from vllm import LLM  # type: ignore[import-not-found]
             
             gpu_memory_utilization = cast(float, self.config["vllm_gpu_memory_utilization"])
             tensor_parallel_size = cast(int, self.config["vllm_tensor_parallel_size"])
@@ -288,8 +288,8 @@ class VectorCache:
                 else:
                     raise
         elif self.backend == "transformers":
-            from transformers import AutoTokenizer, AutoModel
-            import torch
+            from transformers import AutoTokenizer, AutoModel  # type: ignore[import-not-found]
+            import torch  # type: ignore[import-not-found]
             
             device = self.config["transformers_device"]
             # Handle "auto" device selection - default to CPU for transformers to avoid memory conflicts
@@ -391,7 +391,7 @@ class VectorCache:
         batch_dict = {k: v.to(device) for k, v in batch_dict.items()}
         
         # Run model
-        import torch
+        import torch  # type: ignore[import-not-found]
         with torch.no_grad():
             outputs = model(**batch_dict)
         
@@ -400,14 +400,14 @@ class VectorCache:
         
         # Normalize if needed
         if normalize_embeddings:
-            import torch.nn.functional as F
+            import torch.nn.functional as F  # type: ignore[import-not-found]
             embeddings = F.normalize(embeddings, p=2, dim=1)
         
         return embeddings.cpu().numpy().tolist()
 
     def _last_token_pool(self, last_hidden_states, attention_mask):
         """Apply last token pooling to get embeddings."""
-        import torch
+        import torch  # type: ignore[import-not-found]
         left_padding = (attention_mask[:, -1].sum() == attention_mask.shape[0])
         if left_padding:
             return last_hidden_states[:, -1]
@@ -518,8 +518,11 @@ class VectorCache:
         t = time()  # Track total processing time
         
         # Try to import tqdm, fall back to simple progress if not available
+        tqdm = None  # avoid "possibly unbound" in type checker
+        use_tqdm = False
         try:
-            from tqdm import tqdm
+            from tqdm import tqdm as _tqdm  # type: ignore[import-not-found]
+            tqdm = _tqdm
             use_tqdm = True
         except ImportError:
             use_tqdm = False
@@ -537,10 +540,10 @@ class VectorCache:
                 print(f"✓ Model already loaded, ready for efficient batch processing")
         
         # Create progress bar
-        if use_tqdm:
+        pbar = None
+        processed_count = 0
+        if use_tqdm and tqdm is not None:
             pbar = tqdm(total=total_items, desc="Computing embeddings", unit="texts")
-        else:
-            processed_count = 0
         
         # Track total committed items
         total_committed = 0
@@ -576,7 +579,7 @@ class VectorCache:
         
         finally:
             # Clean up progress bar
-            if use_tqdm:
+            if pbar is not None:
                 pbar.close()
                 
             if self.verbose:

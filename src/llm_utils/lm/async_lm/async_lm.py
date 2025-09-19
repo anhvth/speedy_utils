@@ -27,7 +27,6 @@ from ._utils import (
 
 
 def jloads_safe(content: str) -> Any:
-    # if contain ```json, remove it
     if "```json" in content:
         content = content.split("```json")[1].strip().split("```")[0].strip()
     try:
@@ -72,8 +71,6 @@ class AsyncLM(AsyncLMBase):
             print(f"Using model: {model}")
 
         super().__init__(
-            host=host,
-            port=port,
             ports=ports,
             base_url=base_url,
             cache=cache,
@@ -231,6 +228,7 @@ class AsyncLM(AsyncLMBase):
     def _extract_assistant_message(self, choice):  # -> dict[str, str] | dict[str, Any]:
         # TODO this current assume choice is a dict with "reasoning_content" and "content"
         has_reasoning = False
+        reasoning_content = ""
         if "reasoning_content" in choice and isinstance(
             choice["reasoning_content"], str
         ):
@@ -249,7 +247,7 @@ class AsyncLM(AsyncLMBase):
 
         return assistant_msg
 
-    async def __call__(
+    async def call_with_messages(
         self,
         prompt: Optional[str] = None,
         messages: Optional[RawMsgs] = None,

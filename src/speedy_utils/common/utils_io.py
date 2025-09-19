@@ -87,9 +87,236 @@ def load_json_or_pickle(fname: str, counter=0) -> Any:
             raise ValueError(f"Error {e} while loading {fname}") from e
 
 
-def load_jsonl(path):
-    lines = open(path, encoding="utf-8").read().splitlines()
-    return [json.loads(line) for line in lines]
+import os, io, json, gzip, bz2, lzma, warnings
+from typing import Iterable, Union, IO, Any, Optional, cast
+
+try:
+    import orjson  # type: ignore[import-not-found]  # fastest JSON parser when available
+except Exception:
+    orjson = None
+
+try:
+    import zstandard as zstd  # type: ignore[import-not-found]  # optional .zst support
+except Exception:
+    zstd = None
+
+
+def fast_load_jsonl(
+    path_or_file: Union[str, os.PathLike, IO],
+    *,
+    progress: bool = False,
+    desc: str = "Reading JSONL",
+    use_orjson: bool = True,
+    encoding: str = "utf-8",
+    errors: str = "strict",
+    on_error: str = "raise",   # 'raise' | 'warn' | 'skip'
+    skip_empty: bool = True,
+    max_lines: Optional[int] = None,
+    use_multiworker: bool = True,
+    multiworker_threshold: int = 50000,
+    workers: Optional[int] = None,
+) -> Iterable[Any]:
+    """
+    Lazily iterate objects from a JSON Lines file.
+
+    - Streams line-by-line (constant memory).
+    - Optional tqdm progress over bytes (compressed size if gz/bz2/xz/zst).
+    - Auto-detects compression by extension: .gz, .bz2, .xz/.lzma, .zst/.zstd.
+    - Uses orjson if available (use_orjson=True), falls back to json.
+    - Automatically uses multi-worker processing for large files (>50k lines).
+
+    Args:
+        path_or_file: Path-like or file-like object. File-like can be binary or text.
+        progress: Show a tqdm progress bar (bytes). Requires `tqdm` if True.
+        desc: tqdm description if progress=True.
+        use_orjson: Prefer orjson for speed if installed.
+        encoding, errors: Used when decoding text or when falling back to `json`.
+        on_error: What to do on a malformed line: 'raise', 'warn', or 'skip'.
+        skip_empty: Skip blank/whitespace-only lines.
+        max_lines: Stop after reading this many lines (useful for sampling).
+        use_multiworker: Enable multi-worker processing for large files.
+        multiworker_threshold: Line count threshold to trigger multi-worker processing.
+        workers: Number of worker threads (defaults to CPU count).
+
+    Yields:
+        Parsed Python objects per line.
+    """
+    def _open_auto(pth_or_f) -> IO[Any]:
+        if hasattr(pth_or_f, "read"):
+            # ensure binary buffer for consistent byte-length progress
+            fobj = pth_or_f
+            # If it's text, wrap it to binary via encoding; else just return
+            if isinstance(fobj, io.TextIOBase):
+                # TextIO -> re-encode to bytes on the fly
+                return io.BufferedReader(io.BytesIO(fobj.read().encode(encoding, errors)))
+            return pth_or_f  # assume binary
+        s = str(pth_or_f).lower()
+        if s.endswith(".gz"):
+            return gzip.open(pth_or_f, "rb")  # type: ignore
+        if s.endswith(".bz2"):
+            return bz2.open(pth_or_f, "rb")  # type: ignore
+        if s.endswith((".xz", ".lzma")):
+            return lzma.open(pth_or_f, "rb")  # type: ignore
+        if s.endswith((".zst", ".zstd")) and zstd is not None:
+            fh = open(pth_or_f, "rb")
+            dctx = zstd.ZstdDecompressor()
+            stream = dctx.stream_reader(fh)
+            return io.BufferedReader(stream)  # type: ignore
+        # plain
+        return open(pth_or_f, "rb", buffering=1024 * 1024)
+
+    def _count_lines_fast(file_path: Union[str, os.PathLike]) -> int:
+        """Quickly count lines in a file, handling compression."""
+        try:
+            f = _open_auto(file_path)
+            count = 0
+            for _ in f:
+                count += 1
+            f.close()
+            return count
+        except Exception:
+            # If we can't count lines, assume it's small
+            return 0
+
+    def _process_chunk(chunk_lines: list[bytes]) -> list[Any]:
+        """Process a chunk of lines and return parsed objects."""
+        results = []
+        for line_bytes in chunk_lines:
+            if skip_empty and not line_bytes.strip():
+                continue
+            line_bytes = line_bytes.rstrip(b"\r\n")
+            try:
+                if use_orjson and orjson is not None:
+                    obj = orjson.loads(line_bytes)
+                else:
+                    obj = json.loads(line_bytes.decode(encoding, errors))
+                results.append(obj)
+            except Exception as e:
+                if on_error == "raise":
+                    raise
+                if on_error == "warn":
+                    warnings.warn(f"Skipping malformed line: {e}")
+                # 'skip' and 'warn' both skip the line
+                continue
+        return results
+
+    # Check if we should use multi-worker processing
+    should_use_multiworker = (
+        use_multiworker 
+        and not hasattr(path_or_file, "read")  # Only for file paths, not file objects
+        and max_lines is None  # Don't use multiworker if we're limiting lines
+    )
+    
+    if should_use_multiworker:
+        line_count = _count_lines_fast(cast(Union[str, os.PathLike], path_or_file))
+        if line_count > multiworker_threshold:
+            # Use multi-worker processing
+            from ..multi_worker.thread import multi_thread
+            
+            # Read all lines into chunks
+            f = _open_auto(path_or_file)
+            all_lines = list(f)
+            f.close()
+            
+            # Split into chunks for workers
+            num_workers = workers or os.cpu_count() or 4
+            chunk_size = max(len(all_lines) // num_workers, 1000)
+            chunks = []
+            for i in range(0, len(all_lines), chunk_size):
+                chunks.append(all_lines[i:i + chunk_size])
+            
+            # Process chunks in parallel
+            if progress:
+                print(f"Processing {line_count} lines with {num_workers} workers...")
+            
+            chunk_results = multi_thread(_process_chunk, chunks, workers=num_workers, progress=progress)
+            
+            # Flatten results and yield
+            for chunk_result in chunk_results:
+                for obj in chunk_result:
+                    yield obj
+            return
+
+    # Single-threaded processing (original logic)
+
+    f = _open_auto(path_or_file)
+
+    pbar = None
+    if progress:
+        try:
+            from tqdm import tqdm  # type: ignore
+        except Exception as e:
+            raise ImportError("tqdm is required when progress=True") from e
+        total = None
+        if not hasattr(path_or_file, "read"):
+            try:
+                path_for_size = cast(Union[str, os.PathLike], path_or_file)
+                total = os.path.getsize(path_for_size)  # compressed size if any
+            except Exception:
+                total = None
+        pbar = tqdm(total=total, unit="B", unit_scale=True, desc=desc)
+
+    line_no = 0
+    try:
+        for raw_line in f:
+            line_no += 1
+            if pbar is not None:
+                # raw_line is bytes here; if not, compute byte length
+                nbytes = len(raw_line) if isinstance(raw_line, (bytes, bytearray)) else len(str(raw_line).encode(encoding, errors))
+                pbar.update(nbytes)
+
+            # Normalize to bytes -> str only if needed
+            if isinstance(raw_line, (bytes, bytearray)):
+                if skip_empty and not raw_line.strip():
+                    if max_lines and line_no >= max_lines:
+                        break
+                    continue
+                line_bytes = raw_line.rstrip(b"\r\n")
+                # Parse
+                try:
+                    if use_orjson and orjson is not None:
+                        obj = orjson.loads(line_bytes)
+                    else:
+                        obj = json.loads(line_bytes.decode(encoding, errors))
+                except Exception as e:
+                    if on_error == "raise":
+                        raise
+                    if on_error == "warn":
+                        warnings.warn(f"Skipping malformed line {line_no}: {e}")
+                    # 'skip' and 'warn' both skip the line
+                    if max_lines and line_no >= max_lines:
+                        break
+                    continue
+            else:
+                # Text line path (unlikely)
+                if skip_empty and not raw_line.strip():
+                    if max_lines and line_no >= max_lines:
+                        break
+                    continue
+                try:
+                    obj = json.loads(raw_line)
+                except Exception as e:
+                    if on_error == "raise":
+                        raise
+                    if on_error == "warn":
+                        warnings.warn(f"Skipping malformed line {line_no}: {e}")
+                    if max_lines and line_no >= max_lines:
+                        break
+                    continue
+
+            yield obj
+            if max_lines and line_no >= max_lines:
+                break
+    finally:
+        if pbar is not None:
+            pbar.close()
+        # Close only if we opened it (i.e., not an external stream)
+        if not hasattr(path_or_file, "read"):
+            try:
+                f.close()
+            except Exception:
+                pass
+
 
 
 def load_by_ext(fname: Union[str, list[str]], do_memoize: bool = False) -> Any:
@@ -124,7 +351,7 @@ def load_by_ext(fname: Union[str, list[str]], do_memoize: bool = False) -> Any:
 
         def load_default(path: str) -> Any:
             if path.endswith(".jsonl"):
-                return load_jsonl(path)
+                return list(fast_load_jsonl(path, progress=True))
             elif path.endswith(".json"):
                 try:
                     return load_json_or_pickle(path)
@@ -159,14 +386,13 @@ def jdumps(obj, ensure_ascii=False, indent=2, **kwargs):
     return json.dumps(obj, ensure_ascii=ensure_ascii, indent=indent, **kwargs)
 
 
-
+load_jsonl = lambda path: list(fast_load_jsonl(path))
 
 __all__ = [
     "dump_json_or_pickle",
     "dump_jsonl",
     "load_by_ext",
     "load_json_or_pickle",
-    "load_jsonl",
     "jdumps",
     "jloads",
 ]
