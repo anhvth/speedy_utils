@@ -321,9 +321,9 @@ class LLMTask:
                 try:
                     parsed = pydantic_model_to_use.model_validate_json(response_text)
                 except Exception as e:
-                    logger.info(
-                        f"Warning: Failed to parsed JSON, Falling back to LLM parsing. Error: {str(e)[:100]}..."
-                    )
+                    # logger.info(
+                    #     f"Warning: Failed to parsed JSON, Falling back to LLM parsing. Error: {str(e)[:100]}..."
+                    # )
                     # use model to parse the response_text
                     _parsed_messages = [
                         {
