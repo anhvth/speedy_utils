@@ -4,8 +4,10 @@
 Simplified LLM Task module for handling language model interactions with structured input/output.
 """
 
+import os
 from typing import Any, Dict, List, Optional, Type, Union, cast
 
+import requests
 from loguru import logger
 from openai import OpenAI
 from openai.types.chat import ChatCompletionMessageParam
@@ -36,6 +38,90 @@ def get_base_client(
         raise ValueError(
             "Invalid client type. Must be OpenAI instance, port number (int), base_url (str), or None."
         )
+
+
+def _is_lora_path(path: str) -> bool:
+    """Check if the given path is a LoRA adapter directory.
+    
+    Args:
+        path: Path to check
+        
+    Returns:
+        True if the path contains adapter_config.json, False otherwise
+    """
+    if not os.path.isdir(path):
+        return False
+    adapter_config_path = os.path.join(path, 'adapter_config.json')
+    return os.path.isfile(adapter_config_path)
+
+
+def _get_port_from_client(client: OpenAI) -> Optional[int]:
+    """Extract port number from OpenAI client base_url.
+    
+    Args:
+        client: OpenAI client instance
+        
+    Returns:
+        Port number if found, None otherwise
+    """
+    if hasattr(client, 'base_url') and client.base_url:
+        base_url = str(client.base_url)
+        if 'localhost:' in base_url:
+            try:
+                # Extract port from localhost:PORT/v1 format
+                port_part = base_url.split('localhost:')[1].split('/')[0]
+                return int(port_part)
+            except (IndexError, ValueError):
+                pass
+    return None
+
+
+def _load_lora_adapter(lora_path: str, port: int) -> str:
+    """Load a LoRA adapter from the specified path.
+    
+    Args:
+        lora_path: Path to the LoRA adapter directory
+        port: Port number for the API endpoint
+        
+    Returns:
+        Name of the loaded LoRA adapter
+        
+    Raises:
+        requests.RequestException: If the API call fails
+    """
+    lora_name = os.path.basename(lora_path.rstrip('/\\'))
+    if not lora_name:  # Handle edge case of empty basename
+        lora_name = os.path.basename(os.path.dirname(lora_path))
+    
+    response = requests.post(
+        f'http://localhost:{port}/v1/load_lora_adapter',
+        headers={'accept': 'application/json', 'Content-Type': 'application/json'},
+        json={"lora_name": lora_name, "lora_path": os.path.abspath(lora_path)}
+    )
+    response.raise_for_status()
+    return lora_name
+
+
+def _unload_lora_adapter(lora_path: str, port: int) -> None:
+    """Unload the current LoRA adapter.
+    
+    Args:
+        lora_path: Path to the LoRA adapter directory
+        port: Port number for the API endpoint
+    """
+    try:
+        lora_name = os.path.basename(lora_path.rstrip('/\\'))
+        if not lora_name:  # Handle edge case of empty basename
+            lora_name = os.path.basename(os.path.dirname(lora_path))
+            
+        response = requests.post(
+            f'http://localhost:{port}/v1/unload_lora_adapter',
+            headers={'accept': 'application/json', 'Content-Type': 'application/json'},
+            json={"lora_name": lora_name, "lora_int_id": 0}
+        )
+        response.raise_for_status()
+    except requests.RequestException as e:
+        logger.warning(f"Error unloading LoRA adapter: {str(e)[:100]}")
 
 
 class LLMTask:
@@ -107,6 +193,7 @@ class LLMTask:
         client: Union[OpenAI, int, str, None] = None,
         cache=True,
         is_reasoning_model: bool = False,
+        force_lora_unload: bool = False,
         **model_kwargs,
     ):
         """
@@ -120,6 +207,8 @@ class LLMTask:
             cache: Whether to use cached responses (default True)
             is_reasoning_model: Whether the model is a reasoning model (o1-preview, o1-mini, etc.)
                               that outputs reasoning_content separately from content (default False)
+            force_lora_unload: If True, forces unloading of any existing LoRA adapter before loading
+                             a new one when model parameter is a LoRA path (default False)
             **model_kwargs: Additional model parameters including:
                 - temperature: Controls randomness (0.0 to 2.0)
                 - n: Number of responses to generate (when n > 1, returns list)
@@ -131,6 +220,7 @@ class LLMTask:
         self.output_model = output_model
         self.model_kwargs = model_kwargs
         self.is_reasoning_model = is_reasoning_model
+        self.force_lora_unload = force_lora_unload
 
         # if cache:
         #     print("Caching is enabled will use llm_utils.MOpenAI")
@@ -148,7 +238,147 @@ class LLMTask:
 
         if not self.model_kwargs.get("model", ""):
             self.model_kwargs["model"] = self.client.models.list().data[0].id
+        else:
+            # Validate and potentially load LoRA adapter
+            self._validate_and_load_model()
         print(self.model_kwargs)
+
+    def _validate_and_load_model(self) -> None:
+        """
+        Validate the specified model and load LoRA adapter if needed.
+        
+        This method:
+        1. Checks if the model exists in the available models list
+        2. If not found, checks if it's a LoRA adapter path
+        3. If it's a LoRA path, loads it and updates the model name
+        """
+        model_name = self.model_kwargs.get("model", "")
+        if not model_name:
+            return
+            
+        # Get list of available models
+        try:
+            available_models = [m.id for m in self.client.models.list().data]
+        except Exception as e:
+            logger.warning(f"Failed to list models, skipping validation: {str(e)[:100]}")
+            return
+            
+        # If model exists in available models, use it as-is
+        if model_name in available_models:
+            logger.info(f"Using existing model: {model_name}")
+            return
+            
+        # Check if model_name is a LoRA adapter path
+        if _is_lora_path(model_name):
+            logger.info(f"Detected LoRA adapter path: {model_name}")
+            
+            # Get the expected LoRA name (basename of the path)
+            lora_name = os.path.basename(model_name.rstrip('/\\'))
+            if not lora_name:  # Handle edge case of empty basename
+                lora_name = os.path.basename(os.path.dirname(model_name))
+            
+            # Check if LoRA is already loaded (name exists in available models)
+            if lora_name in available_models and not self.force_lora_unload:
+                logger.info(f"LoRA adapter '{lora_name}' is already loaded, using existing model")
+                self.model_kwargs["model"] = lora_name
+                return
+            
+            # Force unload if requested
+            if self.force_lora_unload and lora_name in available_models:
+                logger.info(f"Force unloading LoRA adapter '{lora_name}' before reloading")
+                port = _get_port_from_client(self.client)
+                if port is not None:
+                    try:
+                        LLMTask.unload_lora(port, lora_name)
+                        logger.info(f"Successfully unloaded LoRA adapter: {lora_name}")
+                    except Exception as e:
+                        logger.warning(f"Failed to unload LoRA adapter: {str(e)[:100]}")
+            
+            # Get port from client for API calls
+            port = _get_port_from_client(self.client)
+            if port is None:
+                raise ValueError(
+                    f"Cannot load LoRA adapter '{model_name}': "
+                    "Unable to determine port from client base_url. "
+                    "LoRA loading requires a client initialized with port number."
+                )
+            
+            try:
+                # Load the LoRA adapter
+                loaded_lora_name = _load_lora_adapter(model_name, port)
+                logger.info(f"Successfully loaded LoRA adapter: {loaded_lora_name}")
+                
+                # Update model name to the loaded LoRA name
+                self.model_kwargs["model"] = loaded_lora_name
+                
+            except requests.RequestException as e:
+                # Check if the error is due to LoRA already being loaded
+                error_msg = str(e)
+                if "400" in error_msg or "Bad Request" in error_msg:
+                    logger.info(f"LoRA adapter may already be loaded, attempting to use '{lora_name}'")
+                    # Refresh the model list to check if it's now available
+                    try:
+                        updated_models = [m.id for m in self.client.models.list().data]
+                        if lora_name in updated_models:
+                            logger.info(f"Found LoRA adapter '{lora_name}' in updated model list")
+                            self.model_kwargs["model"] = lora_name
+                            return
+                    except Exception:
+                        pass  # Fall through to original error
+                
+                raise ValueError(
+                    f"Failed to load LoRA adapter from '{model_name}': {error_msg[:100]}"
+                )
+        else:
+            logger.warning(
+                f"Model '{model_name}' not found in available models and is not a valid LoRA path. "
+                f"Available models: {available_models[:5]}{'...' if len(available_models) > 5 else ''}"
+            )
+
+    def unload_lora_adapter(self, lora_path: str) -> None:
+        """
+        Unload a LoRA adapter.
+        
+        Args:
+            lora_path: Path to the LoRA adapter directory to unload
+            
+        Raises:
+            ValueError: If unable to determine port from client
+        """
+        port = _get_port_from_client(self.client)
+        if port is None:
+            raise ValueError(
+                "Cannot unload LoRA adapter: "
+                "Unable to determine port from client base_url. "
+                "LoRA operations require a client initialized with port number."
+            )
+        
+        _unload_lora_adapter(lora_path, port)
+        lora_name = os.path.basename(lora_path.rstrip('/\\'))
+        logger.info(f"Unloaded LoRA adapter: {lora_name}")
+
+    @staticmethod
+    def unload_lora(port: int, lora_name: str) -> None:
+        """Static method to unload a LoRA adapter by name.
+        
+        Args:
+            port: Port number for the API endpoint
+            lora_name: Name of the LoRA adapter to unload
+            
+        Raises:
+            requests.RequestException: If the API call fails
+        """
+        try:
+            response = requests.post(
+                f'http://localhost:{port}/v1/unload_lora_adapter',
+                headers={'accept': 'application/json', 'Content-Type': 'application/json'},
+                json={"lora_name": lora_name, "lora_int_id": 0}
+            )
+            response.raise_for_status()
+            logger.info(f"Successfully unloaded LoRA adapter: {lora_name}")
+        except requests.RequestException as e:
+            logger.error(f"Error unloading LoRA adapter '{lora_name}': {str(e)[:100]}")
+            raise
 
     def _prepare_input(self, input_data: Union[str, BaseModel, List[Dict]]) -> Messages:
         """Convert input to messages format."""
