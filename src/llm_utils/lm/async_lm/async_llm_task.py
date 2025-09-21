@@ -1,3 +1,4 @@
+# type: ignore
 """
 Async LLM Task module for handling language model interactions with structured input/output.
 """

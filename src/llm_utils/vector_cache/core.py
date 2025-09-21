@@ -535,9 +535,9 @@ class VectorCache:
         if self.verbose:
             print(f"Computing embeddings for {total_items} missing texts in batches of {batch_size}...")
             if self.backend in ["vllm", "transformers"] and self._model is None:
-                print(f"⚠️  Model will be loaded on first batch (lazy loading enabled)")
+                print("⚠️  Model will be loaded on first batch (lazy loading enabled)")
             elif self.backend in ["vllm", "transformers"]:
-                print(f"✓ Model already loaded, ready for efficient batch processing")
+                print("✓ Model already loaded, ready for efficient batch processing")
         
         # Create progress bar
         pbar = None
@@ -571,7 +571,7 @@ class VectorCache:
                 # Update progress
                 batch_size_actual = len(batch_items)
                 if use_tqdm:
-                    pbar.update(batch_size_actual)
+                    pbar.update(batch_size_actual) # type: ignore
                 else:
                     processed_count += batch_size_actual
                     if self.verbose:

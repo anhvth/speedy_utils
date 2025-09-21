@@ -1,9 +1,15 @@
 # ray_multi_process.py
-import time, os, pickle, uuid, datetime
+import time, os, pickle, uuid, datetime, multiprocessing
 from pathlib import Path
 from typing import Any, Callable
 from tqdm import tqdm
-import ray
+ray: Any
+try:
+    import ray as ray  # type: ignore
+    _HAS_RAY = True
+except Exception:  # pragma: no cover
+    ray = None  # type: ignore
+    _HAS_RAY = False
 from fastcore.parallel import parallel
 
 # ─── cache helpers ──────────────────────────────────────────
@@ -61,7 +67,7 @@ def multi_process(
     lazy_output: bool = False,
     progress: bool = True,
     # backend: str = "ray",   # "seq", "ray", or "fastcore"
-    backend: Literal["seq", "ray", "mp", "threadpool"] = "ray",
+    backend: Literal["seq", "ray", "mp", "threadpool", "safe"] | None = None,
     # Additional optional knobs (accepted for compatibility)
     batch: int | None = None,
     ordered: bool | None = None,
@@ -75,11 +81,17 @@ def multi_process(
     backend:
         - "seq": run sequentially
         - "ray": run in parallel with Ray
-        - "fastcore": run in parallel with fastcore.parallel
+        - "mp": run in parallel with multiprocessing (uses threadpool to avoid fork warnings)
+        - "threadpool": run in parallel with thread pool
+        - "safe": run in parallel with thread pool (explicitly safe for tests)
 
     If lazy_output=True, every result is saved to .pkl and
     the returned list contains file paths.
     """
+
+    # default backend selection
+    if backend is None:
+        backend = "ray" if _HAS_RAY else "mp"
 
     # unify items
     if items is None and inputs is not None:
@@ -108,6 +120,13 @@ def multi_process(
 
         # ---- ray backend ----
         if backend == "ray":
+            if not _HAS_RAY:
+                msg = (
+                    "Ray backend requested but 'ray' is not installed. "
+                    "Install extra: pip install 'speedy-utils[ray]' or "
+                    "poetry install -E ray."
+                )
+                raise RuntimeError(msg)
             pbar.set_postfix_str("backend=ray")
             ensure_ray(workers, pbar)
 
@@ -125,10 +144,18 @@ def multi_process(
 
         # ---- fastcore backend ----
         if backend == "mp":
-            results = parallel(f_wrapped, items, n_workers=workers, progress=progress, threadpool=False)
+            # Use threadpool instead of multiprocessing to avoid fork warnings
+            # in multi-threaded environments like pytest
+            results = parallel(f_wrapped, items, n_workers=workers, progress=progress, threadpool=True)
             return list(results)
         if backend == "threadpool":
             results = parallel(f_wrapped, items, n_workers=workers, progress=progress, threadpool=True)
             return list(results)
+        if backend == "safe":
+            # Completely safe backend for tests - no multiprocessing, no external progress bars
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+                results = list(executor.map(f_wrapped, items))
+                return results
 
         raise ValueError(f"Unsupported backend: {backend!r}")

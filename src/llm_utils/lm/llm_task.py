@@ -106,6 +106,7 @@ class LLMTask:
         output_model: Type[BaseModel] | Type[str] = None,
         client: Union[OpenAI, int, str, None] = None,
         cache=True,
+        is_reasoning_model: bool = False,
         **model_kwargs,
     ):
         """
@@ -117,6 +118,8 @@ class LLMTask:
             output_model: Output BaseModel type
             client: OpenAI client, port number, or base_url string
             cache: Whether to use cached responses (default True)
+            is_reasoning_model: Whether the model is a reasoning model (o1-preview, o1-mini, etc.)
+                              that outputs reasoning_content separately from content (default False)
             **model_kwargs: Additional model parameters including:
                 - temperature: Controls randomness (0.0 to 2.0)
                 - n: Number of responses to generate (when n > 1, returns list)
@@ -127,6 +130,7 @@ class LLMTask:
         self.input_model = input_model
         self.output_model = output_model
         self.model_kwargs = model_kwargs
+        self.is_reasoning_model = is_reasoning_model
 
         # if cache:
         #     print("Caching is enabled will use llm_utils.MOpenAI")
@@ -135,6 +139,12 @@ class LLMTask:
         # else:
         #     self.client = OpenAI(base_url=base_url, api_key=api_key)
         self.client = get_base_client(client, cache=cache)
+        # check connection of client
+        try:
+            self.client.models.list()
+        except Exception as e:
+            logger.error(f"Failed to connect to OpenAI client: {str(e)}, base_url={self.client.base_url}")
+            raise e
 
         if not self.model_kwargs.get("model", ""):
             self.model_kwargs["model"] = self.client.models.list().data[0].id
@@ -211,9 +221,13 @@ class LLMTask:
                 Messages,
                 messages + [{"role": "assistant", "content": choice.message.content}],
             )
-            results.append(
-                {"parsed": choice.message.content, "messages": choice_messages}
-            )
+            result_dict = {"parsed": choice.message.content, "messages": choice_messages}
+            
+            # Add reasoning content if this is a reasoning model
+            if self.is_reasoning_model and hasattr(choice.message, 'reasoning_content'):
+                result_dict["reasoning_content"] = choice.message.reasoning_content
+            
+            results.append(result_dict)
         return results
 
     def pydantic_parse(
@@ -278,9 +292,13 @@ class LLMTask:
                 Messages,
                 messages + [{"role": "assistant", "content": choice.message.content}],
             )
-            results.append(
-                {"parsed": choice.message.parsed, "messages": choice_messages}
-            )  # type: ignore[attr-defined]
+            result_dict = {"parsed": choice.message.parsed, "messages": choice_messages}  # type: ignore[attr-defined]
+            
+            # Add reasoning content if this is a reasoning model
+            if self.is_reasoning_model and hasattr(choice.message, 'reasoning_content'):
+                result_dict["reasoning_content"] = choice.message.reasoning_content
+            
+            results.append(result_dict)
         return results
 
     def __call__(
@@ -364,6 +382,7 @@ class LLMTask:
         builder: BasePromptBuilder,
         client: Union[OpenAI, int, str, None] = None,
         cache=True,
+        is_reasoning_model: bool = False,
         **model_kwargs,
     ) -> "LLMTask":
         """
@@ -382,6 +401,9 @@ class LLMTask:
             input_model=input_model,
             output_model=output_model,
             client=client,
+            cache=cache,
+            is_reasoning_model=is_reasoning_model,
+            **model_kwargs,
         )
 
     @staticmethod
@@ -398,3 +420,4 @@ class LLMTask:
         client = get_base_client(client, cache=False)
         models = client.models.list().data
         return [m.id for m in models]
+

@@ -40,7 +40,7 @@ class MOpenAI(OpenAI):
     def __init__(self, *args, cache=True, **kwargs):
         super().__init__(*args, **kwargs)
         if cache:
-            self.post = memoize(self.post)
+            self.post = memoize(self.post) # type: ignore
 
 
 class MAsyncOpenAI(AsyncOpenAI):
@@ -69,4 +69,4 @@ class MAsyncOpenAI(AsyncOpenAI):
     def __init__(self, *args, cache=True, **kwargs):
         super().__init__(*args, **kwargs)
         if cache:
-            self.post = memoize(self.post)
+            self.post = memoize(self.post) # type: ignore

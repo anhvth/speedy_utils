@@ -44,6 +44,19 @@ cd speedy-utils
 pip install .
 ```
 
+### Extras
+
+Optional dependencies can be installed via extras. For the `ray` backend
+support (requires Python >= 3.9):
+
+```bash
+# pip
+pip install 'speedy-utils[ray]'
+
+# Poetry (for developing this repo)
+poetry install -E ray
+```
+
 ## Updating from previous versions
 
 To update from previous versions or switch to v1.x, first uninstall any old
@@ -242,8 +255,8 @@ python speedy_utils/common/dataclass_parser.py
 
 Example output:
 
-| Field              | Value                                 |
-|--------------------|---------------------------------------|
-| from_peft          | ./outputs/llm_hn_qw32b/hn_results_r3/ |
+| Field     | Value                                 |
+| --------- | ------------------------------------- |
+| from_peft | ./outputs/llm_hn_qw32b/hn_results_r3/ |
 
 Please ensure your code adheres to the project's coding standards and includes appropriate tests.

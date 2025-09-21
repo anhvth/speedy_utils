@@ -1,13 +1,18 @@
 # utils/utils_io.py
 
+import bz2
+import gzip
+import io
 import json
+import lzma
 import os
 import os.path as osp
 import pickle
 import time
+import warnings
 from glob import glob
 from pathlib import Path
-from typing import Any, Union
+from typing import IO, Any, Iterable, Optional, Union, cast
 
 from json_repair import loads as jloads
 from pydantic import BaseModel
@@ -53,7 +58,7 @@ def dump_json_or_pickle(
         except Exception as e:
             if isinstance(obj, BaseModel):
                 data = obj.model_dump()
-                from fastcore.all import obj2dict, dict2obj
+                from fastcore.all import dict2obj, obj2dict
                 obj2 = dict2obj(data)
                 with open(fname, "wb") as f:
                     pickle.dump(obj2, f)
@@ -87,8 +92,7 @@ def load_json_or_pickle(fname: str, counter=0) -> Any:
             raise ValueError(f"Error {e} while loading {fname}") from e
 
 
-import os, io, json, gzip, bz2, lzma, warnings
-from typing import Iterable, Union, IO, Any, Optional, cast
+
 
 try:
     import orjson  # type: ignore[import-not-found]  # fastest JSON parser when available
@@ -212,7 +216,7 @@ def fast_load_jsonl(
         if line_count > multiworker_threshold:
             # Use multi-worker processing
             from ..multi_worker.thread import multi_thread
-            
+
             # Read all lines into chunks
             f = _open_auto(path_or_file)
             all_lines = list(f)

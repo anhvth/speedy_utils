@@ -586,7 +586,7 @@ def memoize(
     verbose: bool = ...,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]: ...
 @overload
-def memoize(
+def memoize( # type: ignore
     _func: None = ...,
     *,
     keys: Optional[list[str]] = ...,

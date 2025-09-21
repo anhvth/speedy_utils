@@ -1,18 +1,71 @@
-[tool.poetry]
+[project]
 name = "speedy-utils"
 version = "1.1.18"
 description = "Fast and easy-to-use package for data science"
-authors = ["AnhVTH <anhvth.226@gmail.com>"]
+authors = [{ name = "AnhVTH", email = "anhvth.226@gmail.com" }]
 readme = "README.md"
-homepage = "https://github.com/anhvth/speedy"
-packages = [
-    { include = "speedy_utils", from = "src" },
-    { include = "llm_utils", from = "src" },
+license = { text = "MIT" }
+requires-python = ">=3.8"
+dependencies = [
+    "numpy",
+    "requests",
+    "xxhash",
+    "loguru",
+    "fastcore",
+    "debugpy",
+    "ipywidgets",
+    "jupyterlab",
+    "ipdb",
+    "scikit-learn",
+    "matplotlib",
+    "pandas",
+    "tabulate",
+    "pydantic",
+    "tqdm",
+    "cachetools",
+    "bump2version",
+    "json-repair>=0.25.0,<0.31.0",
+    "fastprogress",
+    "freezegun>=1.5.1",
+    "packaging>=23.2,<25",
+    "openai>=1.106.0",
+    "ray>=2.36.1",
+    "aiohttp>=3.10.11",
+    "pytest>=8.3.5",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
 ]
 
+[project.urls]
+Homepage = "https://github.com/anhvth/speedy"
+Repository = "https://github.com/anhvth/speedy"
+
+[project.optional-dependencies]
+ray = ["ray>=2.49.1; python_version >= '3.9'"]
+
+[project.scripts]
+mpython = "speedy_utils.scripts.mpython:main"
+svllm = "llm_utils.scripts.vllm_serve:main"
+svllm-lb = "llm_utils.scripts.vllm_load_balancer:run_load_balancer"
+openapi_client_codegen = "speedy_utils.scripts.openapi_client_codegen:main"
+
 [build-system]
-requires = ["poetry-core>=1.0.15"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/speedy_utils", "src/llm_utils"]
 
 [tool.black]
 line-length = 88
@@ -35,38 +88,6 @@ disallow_untyped_decorators = true
 no_implicit_optional = true
 strict_optional = true
 
-[tool.poetry.dependencies]
-python = ">=3.8"
-numpy = "*"
-requests = "*"
-xxhash = "*"
-loguru = "*"
-fastcore = "*"
-debugpy = "*"
-ipywidgets = "*"
-jupyterlab = "*"
-ipdb = "*"
-scikit-learn = "*"
-matplotlib = "*"
-pandas = "*"
-tabulate = "*"
-pydantic = "*"
-tqdm = "*"
-cachetools = "*"
-bump2version = "*"
-json-repair = ">=0.25.0,<0.31.0"
-fastprogress = "*"
-freezegun = "^1.5.1"
-packaging = ">=23.2,<25"
-openai = "^1.106.0"
-
-[tool.poetry.scripts]
-mpython = "speedy_utils.scripts.mpython:main"
-svllm = "llm_utils.scripts.vllm_serve:main"
-svllm-lb = "llm_utils.scripts.vllm_load_balancer:run_load_balancer"
-openapi_client_codegen = "speedy_utils.scripts.openapi_client_codegen:main"
-
-
 [tool.ruff]
 exclude = [
     "**/*.ipynb",
@@ -81,7 +102,6 @@ exclude = [
     "**/.vscode",
     "**/*.egg-info",
     "**/*.lock",
-    "poetry.lock",
     "Pipfile.lock",
     "package-lock.json",
     "yarn.lock",
