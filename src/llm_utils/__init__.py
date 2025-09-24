@@ -4,7 +4,7 @@ from llm_utils.vector_cache import VectorCache
 from llm_utils.lm.lm_base import get_model_name
 from llm_utils.lm.base_prompt_builder import BasePromptBuilder
 
-
+LLM = LLMTask
 
 from .chat_format import (
     build_chatml_input,
@@ -34,5 +34,6 @@ __all__ = [
     "MOpenAI",
     "get_model_name",
     "VectorCache",
-    "BasePromptBuilder"
+    "BasePromptBuilder",
+    "LLM"
 ]

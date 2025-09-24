@@ -1,0 +1,4 @@
+ignore = ["F401", "F403", "F405", "E501", "E731", "E402"]
+line-length = 120
+target-version = "py312"                                  # adjust to your Python version
+respect-gitignore = true

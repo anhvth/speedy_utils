@@ -11,6 +11,8 @@ except Exception:  # pragma: no cover
     ray = None  # type: ignore
     _HAS_RAY = False
 from fastcore.parallel import parallel
+import psutil
+import threading
 
 # ─── cache helpers ──────────────────────────────────────────
 
@@ -156,6 +158,33 @@ def multi_process(
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
                 results = list(executor.map(f_wrapped, items))
-                return results
-
         raise ValueError(f"Unsupported backend: {backend!r}")
+
+
+
+def cleanup_phantom_workers():
+    """
+    Kill all child processes (phantom workers) without killing the Jupyter kernel itself.
+    Also lists non-daemon threads that remain.
+    """
+    parent = psutil.Process(os.getpid())
+    
+    # Kill only children, never the current process
+    for child in parent.children(recursive=True):
+        try:
+            print(f"🔪 Killing child process {child.pid} ({child.name()})")
+            child.kill()
+        except psutil.NoSuchProcess:
+            pass
+    
+    # Report stray threads (can't hard-kill them in Python)
+    for t in threading.enumerate():
+        if t is threading.current_thread():
+            continue
+        if not t.daemon:
+            print(f"⚠️ Thread {t.name} is still running (cannot be force-killed).")
+    
+    print("✅ Cleaned up child processes (kernel untouched).")
+
+# Usage: run this anytime after cancelling a cell
+

@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Type, Union, cast
 
 import requests
 from loguru import logger
-from openai import OpenAI
+from openai import OpenAI, AuthenticationError, BadRequestError, RateLimitError
 from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
 
@@ -194,6 +194,7 @@ class LLMTask:
         cache=True,
         is_reasoning_model: bool = False,
         force_lora_unload: bool = False,
+        lora_path: Optional[str] = None,
         **model_kwargs,
     ):
         """
@@ -208,7 +209,9 @@ class LLMTask:
             is_reasoning_model: Whether the model is a reasoning model (o1-preview, o1-mini, etc.)
                               that outputs reasoning_content separately from content (default False)
             force_lora_unload: If True, forces unloading of any existing LoRA adapter before loading
-                             a new one when model parameter is a LoRA path (default False)
+                             a new one when lora_path is provided (default False)
+            lora_path: Optional path to LoRA adapter directory. If provided, will load the LoRA
+                      and use it as the model. Takes precedence over model parameter.
             **model_kwargs: Additional model parameters including:
                 - temperature: Controls randomness (0.0 to 2.0)
                 - n: Number of responses to generate (when n > 1, returns list)
@@ -221,6 +224,8 @@ class LLMTask:
         self.model_kwargs = model_kwargs
         self.is_reasoning_model = is_reasoning_model
         self.force_lora_unload = force_lora_unload
+        self.lora_path = lora_path
+        self.last_ai_response = None  # Store raw response from client
 
         # if cache:
         #     print("Caching is enabled will use llm_utils.MOpenAI")
@@ -238,101 +243,96 @@ class LLMTask:
 
         if not self.model_kwargs.get("model", ""):
             self.model_kwargs["model"] = self.client.models.list().data[0].id
-        else:
-            # Validate and potentially load LoRA adapter
-            self._validate_and_load_model()
+        
+        # Handle LoRA loading if lora_path is provided
+        if self.lora_path:
+            self._load_lora_adapter()
+        
         print(self.model_kwargs)
 
-    def _validate_and_load_model(self) -> None:
+    def _load_lora_adapter(self) -> None:
         """
-        Validate the specified model and load LoRA adapter if needed.
+        Load LoRA adapter from the specified lora_path.
         
         This method:
-        1. Checks if the model exists in the available models list
-        2. If not found, checks if it's a LoRA adapter path
-        3. If it's a LoRA path, loads it and updates the model name
+        1. Validates that lora_path is a valid LoRA directory
+        2. Checks if LoRA is already loaded (unless force_lora_unload is True)
+        3. Loads the LoRA adapter and updates the model name
         """
-        model_name = self.model_kwargs.get("model", "")
-        if not model_name:
+        if not self.lora_path:
             return
             
-        # Get list of available models
+        if not _is_lora_path(self.lora_path):
+            raise ValueError(
+                f"Invalid LoRA path '{self.lora_path}': "
+                "Directory must contain 'adapter_config.json'"
+            )
+            
+        logger.info(f"Loading LoRA adapter from: {self.lora_path}")
+        
+        # Get the expected LoRA name (basename of the path)
+        lora_name = os.path.basename(self.lora_path.rstrip('/\\'))
+        if not lora_name:  # Handle edge case of empty basename
+            lora_name = os.path.basename(os.path.dirname(self.lora_path))
+        
+        # Get list of available models to check if LoRA is already loaded
         try:
             available_models = [m.id for m in self.client.models.list().data]
         except Exception as e:
-            logger.warning(f"Failed to list models, skipping validation: {str(e)[:100]}")
+            logger.warning(f"Failed to list models, proceeding with LoRA load: {str(e)[:100]}")
+            available_models = []
+        
+        # Check if LoRA is already loaded
+        if lora_name in available_models and not self.force_lora_unload:
+            logger.info(f"LoRA adapter '{lora_name}' is already loaded, using existing model")
+            self.model_kwargs["model"] = lora_name
             return
-            
-        # If model exists in available models, use it as-is
-        if model_name in available_models:
-            logger.info(f"Using existing model: {model_name}")
-            return
-            
-        # Check if model_name is a LoRA adapter path
-        if _is_lora_path(model_name):
-            logger.info(f"Detected LoRA adapter path: {model_name}")
-            
-            # Get the expected LoRA name (basename of the path)
-            lora_name = os.path.basename(model_name.rstrip('/\\'))
-            if not lora_name:  # Handle edge case of empty basename
-                lora_name = os.path.basename(os.path.dirname(model_name))
-            
-            # Check if LoRA is already loaded (name exists in available models)
-            if lora_name in available_models and not self.force_lora_unload:
-                logger.info(f"LoRA adapter '{lora_name}' is already loaded, using existing model")
-                self.model_kwargs["model"] = lora_name
-                return
-            
-            # Force unload if requested
-            if self.force_lora_unload and lora_name in available_models:
-                logger.info(f"Force unloading LoRA adapter '{lora_name}' before reloading")
-                port = _get_port_from_client(self.client)
-                if port is not None:
-                    try:
-                        LLMTask.unload_lora(port, lora_name)
-                        logger.info(f"Successfully unloaded LoRA adapter: {lora_name}")
-                    except Exception as e:
-                        logger.warning(f"Failed to unload LoRA adapter: {str(e)[:100]}")
-            
-            # Get port from client for API calls
+        
+        # Force unload if requested
+        if self.force_lora_unload and lora_name in available_models:
+            logger.info(f"Force unloading LoRA adapter '{lora_name}' before reloading")
             port = _get_port_from_client(self.client)
-            if port is None:
-                raise ValueError(
-                    f"Cannot load LoRA adapter '{model_name}': "
-                    "Unable to determine port from client base_url. "
-                    "LoRA loading requires a client initialized with port number."
-                )
+            if port is not None:
+                try:
+                    LLMTask.unload_lora(port, lora_name)
+                    logger.info(f"Successfully unloaded LoRA adapter: {lora_name}")
+                except Exception as e:
+                    logger.warning(f"Failed to unload LoRA adapter: {str(e)[:100]}")
+        
+        # Get port from client for API calls
+        port = _get_port_from_client(self.client)
+        if port is None:
+            raise ValueError(
+                f"Cannot load LoRA adapter '{self.lora_path}': "
+                "Unable to determine port from client base_url. "
+                "LoRA loading requires a client initialized with port number."
+            )
+        
+        try:
+            # Load the LoRA adapter
+            loaded_lora_name = _load_lora_adapter(self.lora_path, port)
+            logger.info(f"Successfully loaded LoRA adapter: {loaded_lora_name}")
             
-            try:
-                # Load the LoRA adapter
-                loaded_lora_name = _load_lora_adapter(model_name, port)
-                logger.info(f"Successfully loaded LoRA adapter: {loaded_lora_name}")
-                
-                # Update model name to the loaded LoRA name
-                self.model_kwargs["model"] = loaded_lora_name
-                
-            except requests.RequestException as e:
-                # Check if the error is due to LoRA already being loaded
-                error_msg = str(e)
-                if "400" in error_msg or "Bad Request" in error_msg:
-                    logger.info(f"LoRA adapter may already be loaded, attempting to use '{lora_name}'")
-                    # Refresh the model list to check if it's now available
-                    try:
-                        updated_models = [m.id for m in self.client.models.list().data]
-                        if lora_name in updated_models:
-                            logger.info(f"Found LoRA adapter '{lora_name}' in updated model list")
-                            self.model_kwargs["model"] = lora_name
-                            return
-                    except Exception:
-                        pass  # Fall through to original error
-                
-                raise ValueError(
-                    f"Failed to load LoRA adapter from '{model_name}': {error_msg[:100]}"
-                )
-        else:
-            logger.warning(
-                f"Model '{model_name}' not found in available models and is not a valid LoRA path. "
-                f"Available models: {available_models[:5]}{'...' if len(available_models) > 5 else ''}"
+            # Update model name to the loaded LoRA name
+            self.model_kwargs["model"] = loaded_lora_name
+            
+        except requests.RequestException as e:
+            # Check if the error is due to LoRA already being loaded
+            error_msg = str(e)
+            if "400" in error_msg or "Bad Request" in error_msg:
+                logger.info(f"LoRA adapter may already be loaded, attempting to use '{lora_name}'")
+                # Refresh the model list to check if it's now available
+                try:
+                    updated_models = [m.id for m in self.client.models.list().data]
+                    if lora_name in updated_models:
+                        logger.info(f"Found LoRA adapter '{lora_name}' in updated model list")
+                        self.model_kwargs["model"] = lora_name
+                        return
+                except Exception:
+                    pass  # Fall through to original error
+            
+            raise ValueError(
+                f"Failed to load LoRA adapter from '{self.lora_path}': {error_msg[:100]}"
             )
 
     def unload_lora_adapter(self, lora_path: str) -> None:
@@ -440,9 +440,24 @@ class LLMTask:
         # Extract model name from kwargs for API call
         api_kwargs = {k: v for k, v in effective_kwargs.items() if k != "model"}
 
-        completion = self.client.chat.completions.create(
-            model=model_name, messages=messages, **api_kwargs
-        )
+        try:
+            completion = self.client.chat.completions.create(
+                model=model_name, messages=messages, **api_kwargs
+            )
+            # Store raw response from client
+            self.last_ai_response = completion
+        except (AuthenticationError, RateLimitError, BadRequestError) as exc:
+            error_msg = f"OpenAI API error ({type(exc).__name__}): {exc}"
+            logger.error(error_msg)
+            raise
+        except Exception as e:
+            is_length_error = "Length" in str(e) or "maximum context length" in str(e)
+            if is_length_error:
+                raise ValueError(
+                    f"Input too long for model {model_name}. Error: {str(e)[:100]}..."
+                )
+            # Re-raise all other exceptions
+            raise
         # print(completion)
 
         results: List[Dict[str, Any]] = []
@@ -483,6 +498,11 @@ class LLMTask:
             List of dicts [{'parsed': parsed_model, 'messages': messages}, ...]
             When n=1: List contains one dict
             When n>1: List contains multiple dicts
+            
+        Note:
+            This method ensures consistent Pydantic model output for both fresh and cached responses.
+            When responses are cached and loaded back, the parsed content is re-validated to maintain
+            type consistency between first-time and subsequent calls.
         """
         # Prepare messages
         messages = self._prepare_input(input_data)
@@ -509,12 +529,20 @@ class LLMTask:
                 response_format=pydantic_model_to_use,
                 **api_kwargs,
             )
+            # Store raw response from client
+            self.last_ai_response = completion
+        except (AuthenticationError, RateLimitError, BadRequestError) as exc:
+            error_msg = f"OpenAI API error ({type(exc).__name__}): {exc}"
+            logger.error(error_msg)
+            raise
         except Exception as e:
             is_length_error = "Length" in str(e) or "maximum context length" in str(e)
             if is_length_error:
                 raise ValueError(
                     f"Input too long for model {model_name}. Error: {str(e)[:100]}..."
                 )
+            # Re-raise all other exceptions
+            raise
 
         results: List[Dict[str, Any]] = []
         for choice in completion.choices:  # type: ignore[attr-defined]
@@ -522,7 +550,17 @@ class LLMTask:
                 Messages,
                 messages + [{"role": "assistant", "content": choice.message.content}],
             )
-            result_dict = {"parsed": choice.message.parsed, "messages": choice_messages}  # type: ignore[attr-defined]
+            
+            # Ensure consistent Pydantic model output for both fresh and cached responses
+            parsed_content = choice.message.parsed  # type: ignore[attr-defined]
+            if isinstance(parsed_content, dict):
+                # Cached response: validate dict back to Pydantic model
+                parsed_content = pydantic_model_to_use.model_validate(parsed_content)
+            elif not isinstance(parsed_content, pydantic_model_to_use):
+                # Fallback: ensure it's the correct type
+                parsed_content = pydantic_model_to_use.model_validate(parsed_content)
+            
+            result_dict = {"parsed": parsed_content, "messages": choice_messages}
             
             # Add reasoning content if this is a reasoning model
             if self.is_reasoning_model and hasattr(choice.message, 'reasoning_content'):
@@ -613,6 +651,7 @@ class LLMTask:
         client: Union[OpenAI, int, str, None] = None,
         cache=True,
         is_reasoning_model: bool = False,
+        lora_path: Optional[str] = None,
         **model_kwargs,
     ) -> "LLMTask":
         """
@@ -633,6 +672,7 @@ class LLMTask:
             client=client,
             cache=cache,
             is_reasoning_model=is_reasoning_model,
+            lora_path=lora_path,
             **model_kwargs,
         )
 
