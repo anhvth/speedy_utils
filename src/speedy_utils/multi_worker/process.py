@@ -1,12 +1,18 @@
 # ray_multi_process.py
-import time, os, pickle, uuid, datetime
+import datetime
+import os
+import pickle
+import time
+import uuid
 from pathlib import Path
 from typing import Any, Callable
-from tqdm import tqdm
+
 import ray
 from fastcore.parallel import parallel
+from tqdm import tqdm
 
 # ─── cache helpers ──────────────────────────────────────────
+
 
 def _build_cache_dir(func: Callable, items: list[Any]) -> Path:
     """Build cache dir with function name + timestamp."""
@@ -17,6 +23,7 @@ def _build_cache_dir(func: Callable, items: list[Any]) -> Path:
     path = Path(".cache") / run_id
     path.mkdir(parents=True, exist_ok=True)
     return path
+
 
 def wrap_dump(func: Callable, cache_dir: Path | None):
     """Wrap a function so results are dumped to .pkl when cache_dir is set."""
@@ -29,11 +36,14 @@ def wrap_dump(func: Callable, cache_dir: Path | None):
         with open(p, "wb") as fh:
             pickle.dump(res, fh)
         return str(p)
+
     return wrapped
+
 
 # ─── ray management ─────────────────────────────────────────
 
 RAY_WORKER = None
+
 
 def ensure_ray(workers: int, pbar: tqdm | None = None):
     """Initialize or reinitialize Ray with a given worker count, log to bar postfix."""
@@ -49,8 +59,10 @@ def ensure_ray(workers: int, pbar: tqdm | None = None):
             pbar.set_postfix_str(f"ray.init {workers} took {took:.2f}s")
         RAY_WORKER = workers
 
+
 # ─── main API ───────────────────────────────────────────────
 from typing import Literal
+
 
 def multi_process(
     func: Callable[[Any], Any],
@@ -61,7 +73,7 @@ def multi_process(
     lazy_output: bool = False,
     progress: bool = True,
     # backend: str = "ray",   # "seq", "ray", or "fastcore"
-    backend: Literal["seq", "ray", "mp", "threadpool"] = "ray",
+    backend: Literal["seq", "ray", "mp", "threadpool"] = "mp",
     # Additional optional knobs (accepted for compatibility)
     batch: int | None = None,
     ordered: bool | None = None,
@@ -95,8 +107,9 @@ def multi_process(
     f_wrapped = wrap_dump(func, cache_dir)
 
     total = len(items)
-    with tqdm(total=total, desc=f"multi_process [{backend}]", disable=not progress) as pbar:
-
+    with tqdm(
+        total=total, desc=f"multi_process [{backend}]", disable=not progress
+    ) as pbar:
         # ---- sequential backend ----
         if backend == "seq":
             pbar.set_postfix_str("backend=seq")
@@ -125,10 +138,14 @@ def multi_process(
 
         # ---- fastcore backend ----
         if backend == "mp":
-            results = parallel(f_wrapped, items, n_workers=workers, progress=progress, threadpool=False)
+            results = parallel(
+                f_wrapped, items, n_workers=workers, progress=progress, threadpool=False
+            )
             return list(results)
         if backend == "threadpool":
-            results = parallel(f_wrapped, items, n_workers=workers, progress=progress, threadpool=True)
+            results = parallel(
+                f_wrapped, items, n_workers=workers, progress=progress, threadpool=True
+            )
             return list(results)
 
         raise ValueError(f"Unsupported backend: {backend!r}")
