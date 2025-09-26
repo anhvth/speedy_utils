@@ -5,6 +5,7 @@ Simplified LLM Task module for handling language model interactions with structu
 """
 
 import os
+import subprocess
 from typing import Any, Dict, List, Optional, Type, Union, cast
 
 import requests
@@ -13,177 +14,27 @@ from openai import OpenAI, AuthenticationError, BadRequestError, RateLimitError
 from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
 
+from .utils import (
+    _extract_port_from_vllm_cmd,
+    _start_vllm_server,
+    _kill_vllm_on_port,
+    _is_server_running,
+    get_base_client,
+    _is_lora_path,
+    _get_port_from_client,
+    _load_lora_adapter,
+    _unload_lora_adapter,
+    kill_all_vllm_processes,
+    stop_vllm_process,
+)
 from .base_prompt_builder import BasePromptBuilder
 
 # Type aliases for better readability
 Messages = List[ChatCompletionMessageParam]
 
 
-def get_base_client(
-    client: Union[OpenAI, int, str, None] = None, cache: bool = True, api_key="abc"
-) -> OpenAI:
-    """Get OpenAI client from port number, base_url string, or existing client."""
-    from llm_utils import MOpenAI
-
-    open_ai_class = OpenAI if not cache else MOpenAI
-    if client is None:
-        return open_ai_class()
-    elif isinstance(client, int):
-        return open_ai_class(base_url=f"http://localhost:{client}/v1", api_key=api_key)
-    elif isinstance(client, str):
-        return open_ai_class(base_url=client, api_key=api_key)
-    elif isinstance(client, OpenAI):
-        return client
-    else:
-        raise ValueError(
-            "Invalid client type. Must be OpenAI instance, port number (int), base_url (str), or None."
-        )
-
-
-def _is_lora_path(path: str) -> bool:
-    """Check if the given path is a LoRA adapter directory.
-    
-    Args:
-        path: Path to check
-        
-    Returns:
-        True if the path contains adapter_config.json, False otherwise
-    """
-    if not os.path.isdir(path):
-        return False
-    adapter_config_path = os.path.join(path, 'adapter_config.json')
-    return os.path.isfile(adapter_config_path)
-
-
-def _get_port_from_client(client: OpenAI) -> Optional[int]:
-    """Extract port number from OpenAI client base_url.
-    
-    Args:
-        client: OpenAI client instance
-        
-    Returns:
-        Port number if found, None otherwise
-    """
-    if hasattr(client, 'base_url') and client.base_url:
-        base_url = str(client.base_url)
-        if 'localhost:' in base_url:
-            try:
-                # Extract port from localhost:PORT/v1 format
-                port_part = base_url.split('localhost:')[1].split('/')[0]
-                return int(port_part)
-            except (IndexError, ValueError):
-                pass
-    return None
-
-
-def _load_lora_adapter(lora_path: str, port: int) -> str:
-    """Load a LoRA adapter from the specified path.
-    
-    Args:
-        lora_path: Path to the LoRA adapter directory
-        port: Port number for the API endpoint
-        
-    Returns:
-        Name of the loaded LoRA adapter
-        
-    Raises:
-        requests.RequestException: If the API call fails
-    """
-    lora_name = os.path.basename(lora_path.rstrip('/\\'))
-    if not lora_name:  # Handle edge case of empty basename
-        lora_name = os.path.basename(os.path.dirname(lora_path))
-    
-    response = requests.post(
-        f'http://localhost:{port}/v1/load_lora_adapter',
-        headers={'accept': 'application/json', 'Content-Type': 'application/json'},
-        json={"lora_name": lora_name, "lora_path": os.path.abspath(lora_path)}
-    )
-    response.raise_for_status()
-    return lora_name
-
-
-def _unload_lora_adapter(lora_path: str, port: int) -> None:
-    """Unload the current LoRA adapter.
-    
-    Args:
-        lora_path: Path to the LoRA adapter directory
-        port: Port number for the API endpoint
-    """
-    try:
-        lora_name = os.path.basename(lora_path.rstrip('/\\'))
-        if not lora_name:  # Handle edge case of empty basename
-            lora_name = os.path.basename(os.path.dirname(lora_path))
-            
-        response = requests.post(
-            f'http://localhost:{port}/v1/unload_lora_adapter',
-            headers={'accept': 'application/json', 'Content-Type': 'application/json'},
-            json={"lora_name": lora_name, "lora_int_id": 0}
-        )
-        response.raise_for_status()
-    except requests.RequestException as e:
-        logger.warning(f"Error unloading LoRA adapter: {str(e)[:100]}")
-
-
 class LLMTask:
-    """
-    Language model task with structured input/output and optional system instruction.
-
-    Supports str or Pydantic models for both input and output. Automatically handles
-    message formatting and response parsing.
-
-    Two main APIs:
-    - text(): Returns raw text responses as list of dicts (alias for text_completion)
-    - parse(): Returns parsed Pydantic model responses as list of dicts (alias for pydantic_parse)
-    - __call__(): Backward compatibility method that delegates based on output_model
-
-    Example:
-        ```python
-        from pydantic import BaseModel
-        from llm_utils.lm.llm_task import LLMTask
-
-        class EmailOutput(BaseModel):
-            content: str
-            estimated_read_time: int
-
-        # Set up task with Pydantic output model
-        task = LLMTask(
-            instruction="Generate professional email content.",
-            output_model=EmailOutput,
-            client=OpenAI(),
-            temperature=0.7
-        )
-
-        # Use parse() for structured output
-        results = task.parse("Write a meeting follow-up email")
-        result = results[0]
-        print(result["parsed"].content, result["parsed"].estimated_read_time)
-
-        # Use text() for plain text output
-        results = task.text("Write a meeting follow-up email")
-        text_result = results[0]
-        print(text_result["parsed"])
-
-        # Multiple responses
-        results = task.parse("Write a meeting follow-up email", n=3)
-        for result in results:
-            print(f"Content: {result['parsed'].content}")
-
-        # Override parameters at runtime
-        results = task.text(
-            "Write a meeting follow-up email",
-            temperature=0.9,
-            n=2,
-            max_tokens=500
-        )
-        for result in results:
-            print(result["parsed"])
-
-        # Backward compatibility (uses output_model to choose method)
-        results = task("Write a meeting follow-up email")  # Calls parse()
-        result = results[0]
-        print(result["parsed"].content)
-        ```
-    """
+    """LLM task with structured input/output handling."""
 
     def __init__(
         self,
@@ -195,29 +46,12 @@ class LLMTask:
         is_reasoning_model: bool = False,
         force_lora_unload: bool = False,
         lora_path: Optional[str] = None,
+        vllm_cmd: Optional[str] = None,
+        vllm_timeout: int = 120,
+        vllm_reuse: bool = True,
         **model_kwargs,
     ):
-        """
-        Initialize the LLMTask.
-
-        Args:
-            instruction: Optional system instruction for the task
-            input_model: Input type (str or BaseModel subclass)
-            output_model: Output BaseModel type
-            client: OpenAI client, port number, or base_url string
-            cache: Whether to use cached responses (default True)
-            is_reasoning_model: Whether the model is a reasoning model (o1-preview, o1-mini, etc.)
-                              that outputs reasoning_content separately from content (default False)
-            force_lora_unload: If True, forces unloading of any existing LoRA adapter before loading
-                             a new one when lora_path is provided (default False)
-            lora_path: Optional path to LoRA adapter directory. If provided, will load the LoRA
-                      and use it as the model. Takes precedence over model parameter.
-            **model_kwargs: Additional model parameters including:
-                - temperature: Controls randomness (0.0 to 2.0)
-                - n: Number of responses to generate (when n > 1, returns list)
-                - max_tokens: Maximum tokens in response
-                - model: Model name (auto-detected if not provided)
-        """
+        """Initialize LLMTask."""
         self.instruction = instruction
         self.input_model = input_model
         self.output_model = output_model
@@ -225,15 +59,34 @@ class LLMTask:
         self.is_reasoning_model = is_reasoning_model
         self.force_lora_unload = force_lora_unload
         self.lora_path = lora_path
+        self.vllm_cmd = vllm_cmd
+        self.vllm_timeout = vllm_timeout
+        self.vllm_reuse = vllm_reuse
+        self.vllm_process: Optional[subprocess.Popen] = None
         self.last_ai_response = None  # Store raw response from client
 
-        # if cache:
-        #     print("Caching is enabled will use llm_utils.MOpenAI")
+        # Handle VLLM server startup if vllm_cmd is provided
+        if self.vllm_cmd:
+            port = _extract_port_from_vllm_cmd(self.vllm_cmd)
+            
+            # Check if server is already running
+            if _is_server_running(port):
+                if self.vllm_reuse:
+                    logger.info(f"VLLM server already running on port {port}, reusing existing server (vllm_reuse=True)")
+                else:
+                    logger.info(f"VLLM server already running on port {port}, killing it first (vllm_reuse=False)")
+                    _kill_vllm_on_port(port)
+                    logger.info(f"Starting new VLLM server on port {port}")
+                    self.vllm_process = _start_vllm_server(self.vllm_cmd, self.vllm_timeout)
+            else:
+                logger.info(f"Starting VLLM server on port {port}")
+                self.vllm_process = _start_vllm_server(self.vllm_cmd, self.vllm_timeout)
+            
+            # Set client to use the VLLM server port if not explicitly provided
+            if client is None:
+                client = port
 
-        #     self.client = MOpenAI(base_url=base_url, api_key=api_key)
-        # else:
-        #     self.client = OpenAI(base_url=base_url, api_key=api_key)
-        self.client = get_base_client(client, cache=cache)
+        self.client = get_base_client(client, cache=cache, vllm_cmd=self.vllm_cmd, vllm_process=self.vllm_process)
         # check connection of client
         try:
             self.client.models.list()
@@ -247,8 +100,20 @@ class LLMTask:
         # Handle LoRA loading if lora_path is provided
         if self.lora_path:
             self._load_lora_adapter()
-        
-        print(self.model_kwargs)
+
+    def cleanup_vllm_server(self) -> None:
+        """Stop the VLLM server process if it was started by this instance."""
+        if self.vllm_process is not None:
+            stop_vllm_process(self.vllm_process)
+            self.vllm_process = None
+
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit with cleanup."""
+        self.cleanup_vllm_server()
 
     def _load_lora_adapter(self) -> None:
         """
@@ -413,23 +278,7 @@ class LLMTask:
     def text_completion(
         self, input_data: Union[str, BaseModel, list[Dict]], **runtime_kwargs
     ) -> List[Dict[str, Any]]:
-        """
-        Execute the LLM task and return text responses.
-
-        Args:
-            input_data: Input as string or BaseModel
-            **runtime_kwargs: Runtime model parameters that override defaults
-                - temperature: Controls randomness (0.0 to 2.0)
-                - n: Number of responses to generate
-                - max_tokens: Maximum tokens in response
-                - model: Model name override
-                - Any other model parameters supported by OpenAI API
-
-        Returns:
-            List of dicts [{'parsed': text_response, 'messages': messages}, ...]
-            When n=1: List contains one dict
-            When n>1: List contains multiple dicts
-        """
+        """Execute LLM task and return text responses."""
         # Prepare messages
         messages = self._prepare_input(input_data)
 
@@ -481,29 +330,7 @@ class LLMTask:
         response_model: Optional[Type[BaseModel]] | Type[str] = None,
         **runtime_kwargs,
     ) -> List[Dict[str, Any]]:
-        """
-        Execute the LLM task and return parsed Pydantic model responses.
-
-        Args:
-            input_data: Input as string or BaseModel
-            response_model: Pydantic model for response parsing (overrides default)
-            **runtime_kwargs: Runtime model parameters that override defaults
-                - temperature: Controls randomness (0.0 to 2.0)
-                - n: Number of responses to generate
-                - max_tokens: Maximum tokens in response
-                - model: Model name override
-                - Any other model parameters supported by OpenAI API
-
-        Returns:
-            List of dicts [{'parsed': parsed_model, 'messages': messages}, ...]
-            When n=1: List contains one dict
-            When n>1: List contains multiple dicts
-            
-        Note:
-            This method ensures consistent Pydantic model output for both fresh and cached responses.
-            When responses are cached and loaded back, the parsed content is re-validated to maintain
-            type consistency between first-time and subsequent calls.
-        """
+        """Execute LLM task and return parsed Pydantic model responses."""
         # Prepare messages
         messages = self._prepare_input(input_data)
 
@@ -576,20 +403,7 @@ class LLMTask:
         two_step_parse_pydantic=False,
         **runtime_kwargs,
     ) -> List[Dict[str, Any]]:
-        """
-        Execute the LLM task. Delegates to text() or parse() based on output_model.
-
-        This method maintains backward compatibility by automatically choosing
-        between text and parse methods based on the output_model configuration.
-
-        Args:
-            input_data: Input as string or BaseModel
-            response_model: Optional override for output model
-            **runtime_kwargs: Runtime model parameters
-
-        Returns:
-            List of dicts [{'parsed': response, 'messages': messages}, ...]
-        """
+        """Execute LLM task. Delegates to text() or parse() based on output_model."""
         pydantic_model_to_use = response_model or self.output_model
 
         if pydantic_model_to_use is str or pydantic_model_to_use is None:
@@ -606,10 +420,8 @@ class LLMTask:
                     response_text = response_text.split("</think>")[1]
                 try:
                     parsed = pydantic_model_to_use.model_validate_json(response_text)
-                except Exception as e:
-                    # logger.info(
-                    #     f"Warning: Failed to parsed JSON, Falling back to LLM parsing. Error: {str(e)[:100]}..."
-                    # )
+                except Exception:
+                    # Failed to parse JSON, falling back to LLM parsing
                     # use model to parse the response_text
                     _parsed_messages = [
                         {
@@ -652,6 +464,9 @@ class LLMTask:
         cache=True,
         is_reasoning_model: bool = False,
         lora_path: Optional[str] = None,
+        vllm_cmd: Optional[str] = None,
+        vllm_timeout: int = 120,
+        vllm_reuse: bool = True,
         **model_kwargs,
     ) -> "LLMTask":
         """
@@ -659,6 +474,17 @@ class LLMTask:
 
         This method extracts the instruction, input model, and output model
         from the provided builder and initializes an LLMTask accordingly.
+        
+        Args:
+            builder: BasePromptBuilder instance
+            client: OpenAI client, port number, or base_url string  
+            cache: Whether to use cached responses (default True)
+            is_reasoning_model: Whether model is reasoning model (default False)
+            lora_path: Optional path to LoRA adapter directory
+            vllm_cmd: Optional VLLM command to start server automatically
+            vllm_timeout: Timeout in seconds to wait for VLLM server (default 120)
+            vllm_reuse: If True (default), reuse existing server on target port
+            **model_kwargs: Additional model parameters
         """
         instruction = builder.get_instruction()
         input_model = builder.get_input_model()
@@ -673,6 +499,9 @@ class LLMTask:
             cache=cache,
             is_reasoning_model=is_reasoning_model,
             lora_path=lora_path,
+            vllm_cmd=vllm_cmd,
+            vllm_timeout=vllm_timeout,
+            vllm_reuse=vllm_reuse,
             **model_kwargs,
         )
 
@@ -690,4 +519,75 @@ class LLMTask:
         client = get_base_client(client, cache=False)
         models = client.models.list().data
         return [m.id for m in models]
+
+    @staticmethod
+    def kill_all_vllm() -> int:
+        """Kill all tracked VLLM server processes."""
+        return kill_all_vllm_processes()
+
+    @staticmethod
+    def kill_vllm_on_port(port: int) -> bool:
+        """
+        Kill VLLM server running on a specific port.
+        
+        Args:
+            port: Port number to kill server on
+            
+        Returns:
+            True if a server was killed, False if no server was running
+        """
+        return _kill_vllm_on_port(port)
+
+
+# Example usage:
+if __name__ == "__main__":
+    # Example 1: Using VLLM with reuse (default behavior)
+    vllm_command = (
+        "vllm serve saves/vng/dpo/01 -tp 4 --port 8001 "
+        "--gpu-memory-utilization 0.9 --served-model-name sft --quantization experts_int8"
+    )
+    
+    print("Example 1: Using VLLM with server reuse (default)")
+    # Create LLM instance - will reuse existing server if running on port 8001
+    with LLMTask(vllm_cmd=vllm_command) as llm:  # vllm_reuse=True by default
+        result = llm.text("Hello, how are you?")
+        print("Response:", result[0]["parsed"])
+    
+    print("\nExample 2: Force restart server (vllm_reuse=False)")
+    # This will kill any existing server on port 8001 and start fresh
+    with LLMTask(vllm_cmd=vllm_command, vllm_reuse=False) as llm:
+        result = llm.text("Tell me a joke")
+        print("Joke:", result[0]["parsed"])
+        
+    print("\nExample 3: Multiple instances with reuse")
+    # First instance starts the server
+    llm1 = LLMTask(vllm_cmd=vllm_command)  # Starts server or reuses existing
+    
+    # Second instance reuses the same server
+    llm2 = LLMTask(vllm_cmd=vllm_command)  # Reuses server on port 8001
+    
+    try:
+        result1 = llm1.text("What's the weather like?")
+        result2 = llm2.text("How's the traffic?")
+        print("Weather response:", result1[0]["parsed"])
+        print("Traffic response:", result2[0]["parsed"])
+    finally:
+        # Only cleanup if we started the process
+        llm1.cleanup_vllm_server()
+        llm2.cleanup_vllm_server()  # Won't do anything if process not owned
+    
+    print("\nExample 4: Different ports")
+    # These will start separate servers
+    llm_8001 = LLMTask(vllm_cmd="vllm serve model1 --port 8001", vllm_reuse=True)
+    llm_8002 = LLMTask(vllm_cmd="vllm serve model2 --port 8002", vllm_reuse=True) 
+    
+    print("\nExample 5: Kill all VLLM servers")
+    # Kill all tracked VLLM processes
+    killed_count = LLMTask.kill_all_vllm()
+    print(f"Killed {killed_count} VLLM servers")
+    
+    print("\nYou can check VLLM server output at: /tmp/vllm.txt")
+    print("Server reuse behavior:")
+    print("- vllm_reuse=True (default): Reuse existing server on target port")
+    print("- vllm_reuse=False: Kill existing server first, then start fresh")
 

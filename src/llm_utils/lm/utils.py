@@ -1,123 +1,293 @@
-import fcntl
 import os
-import tempfile
+import signal
 import time
-from typing import List, Dict
-import numpy as np
+from typing import Any, List, Optional, cast
+
 from loguru import logger
 
 
-def _atomic_save(array: np.ndarray, filename: str):
-    tmp_dir = os.path.dirname(filename) or "."
-    with tempfile.NamedTemporaryFile(dir=tmp_dir, delete=False) as tmp:
-        np.save(tmp, array)
-        temp_name = tmp.name
-    os.replace(temp_name, filename)
+# Additional imports for VLLM utilities
+import re
+import subprocess
+import requests
+from openai import OpenAI
+
+try:
+    import psutil
+    HAS_PSUTIL = True
+except ImportError:
+    HAS_PSUTIL = False
+    psutil = cast(Any, None)
+    logger.warning("psutil not available. Some VLLM process management features may be limited.")
+
+# Global tracking of VLLM processes
+_VLLM_PROCESSES: List[subprocess.Popen] = []
 
 
-def _update_port_use(port: int, increment: int) -> None:
-    file_counter: str = f"/tmp/port_use_counter_{port}.npy"
-    file_counter_lock: str = f"/tmp/port_use_counter_{port}.lock"
-    with open(file_counter_lock, "w") as lock_file:
-        fcntl.flock(lock_file, fcntl.LOCK_EX)
+def _extract_port_from_vllm_cmd(vllm_cmd: str) -> int:
+    """Extract port from VLLM command string."""
+    port_match = re.search(r'--port\s+(\d+)', vllm_cmd)
+    if port_match:
+        return int(port_match.group(1))
+    return 8000
+
+
+def _start_vllm_server(vllm_cmd: str, timeout: int = 120) -> subprocess.Popen:
+    """Start VLLM server and wait for ready."""
+    port = _extract_port_from_vllm_cmd(vllm_cmd)
+    
+    logger.info(f"Starting VLLM server: {vllm_cmd}")
+    logger.info("VLLM output logged to: /tmp/vllm.txt")
+    
+    with open('/tmp/vllm.txt', 'w') as log_file:
+        log_file.write(f"VLLM Server started at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        log_file.write(f"Command: {vllm_cmd}\n")
+        log_file.write(f"Port: {port}\n")
+        log_file.write("-" * 50 + "\n")
+    
+    with open('/tmp/vllm.txt', 'a') as log_file:
+        process = subprocess.Popen(
+            vllm_cmd.split(),
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            text=True,
+            preexec_fn=os.setsid
+        )
+    
+    _VLLM_PROCESSES.append(process)
+    
+    start_time = time.time()
+    while time.time() - start_time < timeout:
         try:
-            if os.path.exists(file_counter):
-                try:
-                    counter = np.load(file_counter)
-                except Exception as e:
-                    logger.warning(f"Corrupted usage file {file_counter}: {e}")
-                    counter = np.array([0])
-            else:
-                counter: np.ndarray = np.array([0], dtype=np.int64)
-            counter[0] += increment
-            _atomic_save(counter, file_counter)
-        finally:
-            fcntl.flock(lock_file, fcntl.LOCK_UN)
+            response = requests.get(f"http://localhost:{port}/health", timeout=2)
+            if response.status_code == 200:
+                logger.info(f"VLLM server ready on port {port}")
+                return process
+        except requests.RequestException:
+            pass
+        
+        if process.poll() is not None:
+            stdout, stderr = process.communicate()
+            raise RuntimeError(
+                f"VLLM server terminated unexpectedly. "
+                f"Return code: {process.returncode}, "
+                f"stderr: {stderr[:200]}..."
+            )
+        
+        time.sleep(2)
+    
+    process.terminate()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+    
+    if process in _VLLM_PROCESSES:
+        _VLLM_PROCESSES.remove(process)
+    
+    raise RuntimeError(f"VLLM server failed to start within {timeout}s on port {port}")
 
 
-def _pick_least_used_port(ports: List[int]) -> int:
-    global_lock_file = "/tmp/ports.lock"
-    with open(global_lock_file, "w") as lock_file:
-        fcntl.flock(lock_file, fcntl.LOCK_EX)
+def _kill_vllm_on_port(port: int) -> bool:
+    """Kill VLLM server on port."""
+    killed = False
+    logger.info(f"Checking VLLM server on port {port}")
+    
+    processes_to_remove = []
+    for process in _VLLM_PROCESSES:
         try:
-            port_use: Dict[int, int] = {}
-            for port in ports:
-                file_counter = f"/tmp/port_use_counter_{port}.npy"
-                if os.path.exists(file_counter):
+            if process.poll() is None:
+                killed_process = False
+                if HAS_PSUTIL:
                     try:
-                        counter = np.load(file_counter)
-                    except Exception as e:
-                        logger.warning(f"Corrupted usage file {file_counter}: {e}")
-                        counter = np.array([0])
-                else:
-                    counter = np.array([0])
-                port_use[port] = counter[0]
-            if not port_use:
-                if ports:
-                    raise ValueError("Port usage data is empty, cannot pick a port.")
-                else:
-                    raise ValueError("No ports provided to pick from.")
-            lsp = min(port_use, key=lambda k: port_use[k])
-            _update_port_use(lsp, 1)
-        finally:
-            fcntl.flock(lock_file, fcntl.LOCK_UN)
-    return lsp
-
-
-def retry_on_exception(max_retries=10, exceptions=(Exception,), sleep_time=3):
-    def decorator(func):
-        from functools import wraps
-
-        def wrapper(self, *args, **kwargs):
-            retry_count = kwargs.get("retry_count", 0)
-            last_exception = None
-            while retry_count <= max_retries:
+                        proc = psutil.Process(process.pid)
+                        cmdline = ' '.join(proc.cmdline())
+                        if f'--port {port}' in cmdline or f'--port={port}' in cmdline:
+                            logger.info(f"Killing tracked VLLM process {process.pid} on port {port}")
+                            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+                            try:
+                                process.wait(timeout=5)
+                            except subprocess.TimeoutExpired:
+                                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                                process.wait()
+                            killed = True
+                            killed_process = True
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        pass
+                
+                if not HAS_PSUTIL or not killed_process:
+                    logger.info(f"Killing tracked VLLM process {process.pid}")
+                    try:
+                        os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+                        try:
+                            process.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                            process.wait()
+                        killed = True
+                    except (ProcessLookupError, OSError):
+                        pass
+                
+                processes_to_remove.append(process)
+            else:
+                processes_to_remove.append(process)
+        except (ProcessLookupError, OSError):
+            processes_to_remove.append(process)
+    
+    for process in processes_to_remove:
+        if process in _VLLM_PROCESSES:
+            _VLLM_PROCESSES.remove(process)
+    
+    if not killed and HAS_PSUTIL:
+        try:
+            for proc in psutil.process_iter(['pid', 'cmdline']):
                 try:
-                    return func(self, *args, **kwargs)
-                except exceptions as e:
-                    import litellm  # type: ignore
-
-                    if isinstance(
-                        e, (litellm.exceptions.APIError, litellm.exceptions.Timeout)
-                    ):
-                        base_url_info = kwargs.get(
-                            "base_url", getattr(self, "base_url", None)
-                        )
-                        logger.warning(
-                            f"[{base_url_info=}] {type(e).__name__}: {str(e)[:100]}, will sleep for {sleep_time}s and retry"
-                        )
-                        time.sleep(sleep_time)
-                        retry_count += 1
-                        kwargs["retry_count"] = retry_count
-                        last_exception = e
-                        continue
-                    elif hasattr(
-                        litellm.exceptions, "ContextWindowExceededError"
-                    ) and isinstance(e, litellm.exceptions.ContextWindowExceededError):
-                        logger.error(f"Context window exceeded: {e}")
-                        raise
-                    else:
-                        logger.error(f"Generic error during LLM call: {e}")
-                        import traceback
-
-                        traceback.print_exc()
-                        raise
-            logger.error(f"Retry limit exceeded, error: {last_exception}")
-            if last_exception:
-                raise last_exception
-            raise ValueError("Retry limit exceeded with no specific error.")
-
-        return wraps(func)(wrapper)
-
-    return decorator
+                    cmdline = ' '.join(proc.info['cmdline'] or [])
+                    if ('vllm' in cmdline.lower() and 
+                        (f'--port {port}' in cmdline or f'--port={port}' in cmdline)):
+                        logger.info(f"Killing untracked VLLM process {proc.info['pid']} on port {port}")
+                        proc.terminate()
+                        try:
+                            proc.wait(timeout=5)
+                        except psutil.TimeoutExpired:
+                            proc.kill()
+                        killed = True
+                        break
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+        except Exception as e:
+            logger.warning(f"Error searching processes on port {port}: {e}")
+    
+    if killed:
+        logger.info(f"Killed VLLM server on port {port}")
+        time.sleep(2)
+    else:
+        logger.info(f"No VLLM server on port {port}")
+    
+    return killed
 
 
-def forward_only(func):
-    from functools import wraps
+def stop_vllm_process(process: subprocess.Popen, wait_timeout: int = 10) -> None:
+    """Terminate a tracked VLLM process and remove it from tracking."""
+    logger.info(f"Stopping VLLM process {process.pid}")
+    try:
+        if process.poll() is None:
+            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+            try:
+                process.wait(timeout=wait_timeout)
+                logger.info("VLLM process stopped gracefully")
+            except subprocess.TimeoutExpired:
+                logger.warning("VLLM process didn't stop gracefully, forcing kill")
+                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                process.wait()
+        else:
+            logger.info("VLLM process already terminated")
+    except (ProcessLookupError, OSError) as exc:
+        logger.warning(f"Process may have already terminated: {exc}")
+    finally:
+        if process in _VLLM_PROCESSES:
+            _VLLM_PROCESSES.remove(process)
 
-    @wraps(func)
-    def wrapper(self, *args, **kwargs):
-        kwargs["retry_count"] = 0
-        return func(self, *args, **kwargs)
 
-    return wrapper
+def kill_all_vllm_processes() -> int:
+    """Kill all tracked VLLM processes."""
+    killed_count = 0
+    for process in list(_VLLM_PROCESSES):
+        if process.poll() is None:
+            logger.info(f"Killing VLLM process with PID {process.pid}")
+            stop_vllm_process(process, wait_timeout=5)
+            killed_count += 1
+        else:
+            _VLLM_PROCESSES.remove(process)
+    logger.info(f"Killed {killed_count} VLLM processes")
+    return killed_count
+
+
+def _is_server_running(port: int) -> bool:
+    """Check if server is running on port."""
+    try:
+        response = requests.get(f"http://localhost:{port}/health", timeout=2)
+        return response.status_code == 200
+    except requests.RequestException:
+        return False
+
+
+def get_base_client(
+    client=None, 
+    cache: bool = True, 
+    api_key="abc",
+    vllm_cmd=None,
+    vllm_process=None
+) -> OpenAI:
+    """Get OpenAI client from various inputs."""
+    from llm_utils import MOpenAI
+
+    open_ai_class = OpenAI if not cache else MOpenAI
+    
+    if client is None:
+        if vllm_cmd is not None:
+            port = _extract_port_from_vllm_cmd(vllm_cmd)
+            return open_ai_class(base_url=f"http://localhost:{port}/v1", api_key=api_key)
+        else:
+            return open_ai_class()
+    elif isinstance(client, int):
+        return open_ai_class(base_url=f"http://localhost:{client}/v1", api_key=api_key)
+    elif isinstance(client, str):
+        return open_ai_class(base_url=client, api_key=api_key)
+    elif isinstance(client, OpenAI):
+        return client
+    else:
+        raise ValueError("Invalid client type. Must be OpenAI, port (int), base_url (str), or None.")
+
+
+def _is_lora_path(path: str) -> bool:
+    """Check if path is LoRA adapter directory."""
+    if not os.path.isdir(path):
+        return False
+    adapter_config_path = os.path.join(path, 'adapter_config.json')
+    return os.path.isfile(adapter_config_path)
+
+
+def _get_port_from_client(client: OpenAI) -> Optional[int]:
+    """Extract port from OpenAI client base_url."""
+    if hasattr(client, 'base_url') and client.base_url:
+        base_url = str(client.base_url)
+        if 'localhost:' in base_url:
+            try:
+                port_part = base_url.split('localhost:')[1].split('/')[0]
+                return int(port_part)
+            except (IndexError, ValueError):
+                pass
+    return None
+
+
+def _load_lora_adapter(lora_path: str, port: int) -> str:
+    """Load LoRA adapter from path."""
+    lora_name = os.path.basename(lora_path.rstrip('/\\'))
+    if not lora_name:
+        lora_name = os.path.basename(os.path.dirname(lora_path))
+    
+    response = requests.post(
+        f'http://localhost:{port}/v1/load_lora_adapter',
+        headers={'accept': 'application/json', 'Content-Type': 'application/json'},
+        json={"lora_name": lora_name, "lora_path": os.path.abspath(lora_path)}
+    )
+    response.raise_for_status()
+    return lora_name
+
+
+def _unload_lora_adapter(lora_path: str, port: int) -> None:
+    """Unload LoRA adapter."""
+    try:
+        lora_name = os.path.basename(lora_path.rstrip('/\\'))
+        if not lora_name:
+            lora_name = os.path.basename(os.path.dirname(lora_path))
+            
+        response = requests.post(
+            f'http://localhost:{port}/v1/unload_lora_adapter',
+            headers={'accept': 'application/json', 'Content-Type': 'application/json'},
+            json={"lora_name": lora_name, "lora_int_id": 0}
+        )
+        response.raise_for_status()
+    except requests.RequestException as e:
+        logger.warning(f"Error unloading LoRA adapter: {str(e)[:100]}")
