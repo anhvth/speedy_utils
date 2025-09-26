@@ -258,13 +258,13 @@ def _memory_memoize(
 
         with mem_lock:
             if name in mem_cache:
-                return mem_cache[name]  # type: ignore[return-value]
+                return mem_cache[name]
 
         result = func(*args, **kwargs)
 
         with mem_lock:
             if name not in mem_cache:
-                mem_cache[name] = result  # type: ignore[index]
+                mem_cache[name] = result
         return result
 
     return wrapper
@@ -292,7 +292,7 @@ def _async_memory_memoize(
 
         async with alock:
             if name in mem_cache:
-                return mem_cache[name]  # type: ignore[return-value]
+                return mem_cache[name]
             task = inflight.get(name)
             if task is None:
                 task = asyncio.create_task(func(*args, **kwargs))  # type: ignore[arg-type]
@@ -305,7 +305,7 @@ def _async_memory_memoize(
                 inflight.pop(name, None)
 
         with mem_lock:
-            mem_cache[name] = result  # type: ignore[index]
+            mem_cache[name] = result
         return result
 
     return wrapper
@@ -447,7 +447,7 @@ def both_memoize(
         # Memory first
         with mem_lock:
             if mem_key in mem_cache:
-                return mem_cache[mem_key]  # type: ignore[return-value]
+                return mem_cache[mem_key]
 
         # Disk next
         if sub_dir == "funcs":
@@ -468,7 +468,7 @@ def both_memoize(
 
         if disk_result is not None:
             with mem_lock:
-                mem_cache[mem_key] = disk_result  # type: ignore[index]
+                mem_cache[mem_key] = disk_result
             return disk_result
 
         # Miss: compute, then write both
@@ -477,7 +477,7 @@ def both_memoize(
             if not osp.exists(cache_path):
                 dump_json_or_pickle(result, cache_path)
         with mem_lock:
-            mem_cache[mem_key] = result  # type: ignore[index]
+            mem_cache[mem_key] = result
         return result
 
     return wrapper
@@ -506,7 +506,7 @@ def _async_both_memoize(
         # Memory
         async with alock:
             if mem_key in mem_cache:
-                return mem_cache[mem_key]  # type: ignore[return-value]
+                return mem_cache[mem_key]
 
         # Disk
         if sub_dir == "funcs":
@@ -526,7 +526,7 @@ def _async_both_memoize(
 
         if disk_result is not None:
             with mem_lock:
-                mem_cache[mem_key] = disk_result  # type: ignore[index]
+                mem_cache[mem_key] = disk_result
             return disk_result
 
         # Avoid duplicate async work for same key
@@ -550,7 +550,7 @@ def _async_both_memoize(
         await loop.run_in_executor(None, write_disk_cache)
 
         with mem_lock:
-            mem_cache[mem_key] = result  # type: ignore[index]
+            mem_cache[mem_key] = result
         return result
 
     return wrapper
@@ -561,9 +561,10 @@ def _async_both_memoize(
 # --------------------------------------------------------------------------------------
 
 
+# Define overloads to preserve exact type information
 @overload
 def memoize(
-    _func: Callable[P, R | Awaitable[R]],
+    _func: Callable[P, R],
     *,
     keys: Optional[list[str]] = ...,
     key: Optional[Callable[..., Any]] = ...,
@@ -572,7 +573,23 @@ def memoize(
     size: int = ...,
     ignore_self: bool = ...,
     verbose: bool = ...,
-) -> Callable[P, R | Awaitable[R]]: ...
+) -> Callable[P, R]: ...
+
+
+@overload
+def memoize(
+    _func: Callable[P, Awaitable[R]],
+    *,
+    keys: Optional[list[str]] = ...,
+    key: Optional[Callable[..., Any]] = ...,
+    cache_dir: str = ...,
+    cache_type: Literal["memory", "disk", "both"] = ...,
+    size: int = ...,
+    ignore_self: bool = ...,
+    verbose: bool = ...,
+) -> Callable[P, Awaitable[R]]: ...
+
+
 @overload
 def memoize(
     _func: None = ...,
@@ -585,6 +602,8 @@ def memoize(
     ignore_self: bool = ...,
     verbose: bool = ...,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]: ...
+
+
 @overload
 def memoize(
     _func: None = ...,
@@ -635,24 +654,24 @@ def memoize(
 
         if cache_type == "memory":
             if is_async:
-                return _async_memory_memoize(target_func, size, keys, ignore_self, key)  # type: ignore[return-value]
-            return _memory_memoize(target_func, size, keys, ignore_self, key)  # type: ignore[return-value]
+                return _async_memory_memoize(target_func, size, keys, ignore_self, key)
+            return _memory_memoize(target_func, size, keys, ignore_self, key)
 
         if cache_type == "disk":
             if is_async:
                 return _async_disk_memoize(
                     target_func, keys, cache_dir, ignore_self, verbose, key
-                )  # type: ignore[return-value]
+                )
             return _disk_memoize(
                 target_func, keys, cache_dir, ignore_self, verbose, key
-            )  # type: ignore[return-value]
+            )
 
         # cache_type == "both"
         if is_async:
             return _async_both_memoize(
                 target_func, keys, cache_dir, ignore_self, size, key
-            )  # type: ignore[return-value]
-        return both_memoize(target_func, keys, cache_dir, ignore_self, size, key)  # type: ignore[return-value]
+            )
+        return both_memoize(target_func, keys, cache_dir, ignore_self, size, key)
 
     # Support both @memoize and @memoize(...)
     if _func is None:

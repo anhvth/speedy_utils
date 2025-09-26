@@ -5,7 +5,7 @@ import pickle
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 import ray
 from fastcore.parallel import parallel
@@ -66,9 +66,9 @@ from typing import Literal
 
 def multi_process(
     func: Callable[[Any], Any],
-    items: list[Any] | None = None,
+    items: Iterable[Any] | None = None,
     *,
-    inputs: list[Any] | None = None,
+    inputs: Iterable[Any] | None = None,
     workers: int | None = None,
     lazy_output: bool = False,
     progress: bool = True,
@@ -93,9 +93,12 @@ def multi_process(
     the returned list contains file paths.
     """
 
-    # unify items
+    # unify items and coerce to concrete list so we can use len() and
+    # iterate multiple times. This accepts ranges and other iterables.
     if items is None and inputs is not None:
         items = list(inputs)
+    if items is not None and not isinstance(items, list):
+        items = list(items)
     if items is None:
         raise ValueError("'items' or 'inputs' must be provided")
 
