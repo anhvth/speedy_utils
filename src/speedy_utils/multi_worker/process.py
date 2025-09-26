@@ -3,6 +3,8 @@ import time, os, pickle, uuid, datetime, multiprocessing
 from pathlib import Path
 from typing import Any, Callable
 from tqdm import tqdm
+import psutil
+import threading
 ray: Any
 try:
     import ray as ray  # type: ignore
@@ -11,8 +13,7 @@ except Exception:  # pragma: no cover
     ray = None  # type: ignore
     _HAS_RAY = False
 from fastcore.parallel import parallel
-import psutil
-import threading
+
 
 # ─── cache helpers ──────────────────────────────────────────
 

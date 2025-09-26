@@ -77,7 +77,9 @@
 # ============================================================================= #
 """
 
+import ctypes
 import os
+import threading
 import time
 import traceback
 from collections.abc import Callable, Iterable
@@ -97,6 +99,42 @@ DEFAULT_WORKERS = (os.cpu_count() or 4) * 2
 
 T = TypeVar("T")
 R = TypeVar("R")
+
+SPEEDY_RUNNING_THREADS: list[threading.Thread] = []
+_SPEEDY_THREADS_LOCK = threading.Lock()
+
+_PY_SET_ASYNC_EXC = ctypes.pythonapi.PyThreadState_SetAsyncExc
+try:
+    _PY_SET_ASYNC_EXC.argtypes = (ctypes.c_ulong, ctypes.py_object)  # type: ignore[attr-defined]
+    _PY_SET_ASYNC_EXC.restype = ctypes.c_int  # type: ignore[attr-defined]
+except AttributeError:  # pragma: no cover - platform specific
+    pass
+
+
+def _prune_dead_threads() -> None:
+    with _SPEEDY_THREADS_LOCK:
+        SPEEDY_RUNNING_THREADS[:] = [t for t in SPEEDY_RUNNING_THREADS if t.is_alive()]
+
+
+def _track_threads(threads: Iterable[threading.Thread]) -> None:
+    if not threads:
+        return
+    with _SPEEDY_THREADS_LOCK:
+        living = [t for t in SPEEDY_RUNNING_THREADS if t.is_alive()]
+        for candidate in threads:
+            if not candidate.is_alive():
+                continue
+            if any(existing is candidate for existing in living):
+                continue
+            living.append(candidate)
+        SPEEDY_RUNNING_THREADS[:] = living
+
+
+def _track_executor_threads(pool: ThreadPoolExecutor) -> None:
+    thread_set = getattr(pool, "_threads", None)
+    if not thread_set:
+        return
+    _track_threads(tuple(thread_set))
 
 
 def _group_iter(src: Iterable[T], size: int) -> Iterable[list[T]]:
@@ -273,11 +311,13 @@ def multi_thread(
                 fut.idx = next_logical_idx  # type: ignore[attr-defined]
                 inflight.add(fut)
                 next_logical_idx += len(arg)
+                _track_executor_threads(pool)
             else:
                 fut = pool.submit(_worker, arg, func, fixed_kwargs)
                 fut.idx = next_logical_idx  # type: ignore[attr-defined]
                 inflight.add(fut)
                 next_logical_idx += 1
+                _track_executor_threads(pool)
 
         try:
             # Process futures as they complete and add new ones to keep the pool busy
@@ -347,11 +387,13 @@ def multi_thread(
                                 fut2.idx = next_logical_idx  # type: ignore[attr-defined]
                                 inflight.add(fut2)
                                 next_logical_idx += len(arg)
+                                _track_executor_threads(pool)
                             else:
                                 fut2 = pool.submit(_worker, arg, func, fixed_kwargs)
                                 fut2.idx = next_logical_idx  # type: ignore[attr-defined]
                                 inflight.add(fut2)
                                 next_logical_idx += 1
+                                _track_executor_threads(pool)
                     except StopIteration:
                         pass
 
@@ -370,6 +412,7 @@ def multi_thread(
                 bar.close()
     if store_output_pkl_file:
         dump_json_or_pickle(results, store_output_pkl_file)
+    _prune_dead_threads()
     return results
 
 
@@ -396,9 +439,58 @@ def multi_thread_standard(
         Results in same order as input items.
     """
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = [executor.submit(fn, item) for item in items]
+        futures = []
+        for item in items:
+            futures.append(executor.submit(fn, item))
+            _track_executor_threads(executor)
         results = [fut.result() for fut in futures]
+    _prune_dead_threads()
     return results
 
 
-__all__ = ["multi_thread", "multi_thread_standard"]
+def _async_raise(thread_id: int, exc_type: type[BaseException]) -> bool:
+    if thread_id <= 0:
+        return False
+    if not issubclass(exc_type, BaseException):
+        raise TypeError("exc_type must derive from BaseException")
+    res = _PY_SET_ASYNC_EXC(ctypes.c_ulong(thread_id), ctypes.py_object(exc_type))
+    if res == 0:
+        return False
+    if res > 1:  # pragma: no cover - defensive branch
+        _PY_SET_ASYNC_EXC(ctypes.c_ulong(thread_id), None)
+        raise SystemError("PyThreadState_SetAsyncExc failed")
+    return True
+
+
+def kill_all_thread(exc_type: type[BaseException] = SystemExit, join_timeout: float = 0.1) -> int:
+    """Forcefully stop tracked worker threads. Returns number of threads signalled."""
+    _prune_dead_threads()
+    current = threading.current_thread()
+    with _SPEEDY_THREADS_LOCK:
+        targets = [t for t in SPEEDY_RUNNING_THREADS if t.is_alive()]
+
+    terminated = 0
+    for thread in targets:
+        if thread is current:
+            continue
+        ident = thread.ident
+        if ident is None:
+            continue
+        try:
+            if _async_raise(ident, exc_type):
+                terminated += 1
+                thread.join(timeout=join_timeout)
+            else:
+                logger.warning("Unable to signal thread %s", thread.name)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error("Failed to stop thread %s: %s", thread.name, exc)
+    _prune_dead_threads()
+    return terminated
+
+
+__all__ = [
+    "SPEEDY_RUNNING_THREADS",
+    "multi_thread",
+    "multi_thread_standard",
+    "kill_all_thread",
+]

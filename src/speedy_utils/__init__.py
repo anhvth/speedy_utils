@@ -138,7 +138,7 @@ from .common.utils_print import (
 
 # Multi-worker processing
 from .multi_worker.process import multi_process
-from .multi_worker.thread import multi_thread
+from .multi_worker.thread import kill_all_thread, multi_thread
 
 # Define __all__ explicitly
 __all__ = [
@@ -224,6 +224,7 @@ __all__ = [
     # Multi-worker processing
     "multi_process",
     "multi_thread",
+    "kill_all_thread",
     # Notebook utilities
     "change_dir",
 ]
