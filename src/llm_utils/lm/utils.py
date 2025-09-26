@@ -32,26 +32,76 @@ def _extract_port_from_vllm_cmd(vllm_cmd: str) -> int:
     return 8000
 
 
+def _parse_env_vars_from_cmd(cmd: str) -> tuple[dict[str, str], str]:
+    """Parse environment variables from command string.
+    
+    Args:
+        cmd: Command string that may contain environment variables like 'VAR=value command...'
+        
+    Returns:
+        Tuple of (env_dict, cleaned_cmd) where env_dict contains parsed env vars
+        and cleaned_cmd is the command without the env vars.
+    """
+    import shlex
+    
+    # Split the command while preserving quoted strings
+    parts = shlex.split(cmd)
+    
+    env_vars = {}
+    cmd_parts = []
+    
+    for part in parts:
+        if '=' in part and not part.startswith('-'):
+            # Check if this looks like an environment variable
+            # Should be KEY=VALUE format, not contain spaces (unless quoted), and KEY should be uppercase
+            key_value = part.split('=', 1)
+            if len(key_value) == 2:
+                key, value = key_value
+                if key.isupper() and key.replace('_', '').isalnum():
+                    env_vars[key] = value
+                    continue
+        
+        # Not an env var, add to command parts
+        cmd_parts.append(part)
+    
+    # Reconstruct the cleaned command
+    cleaned_cmd = ' '.join(cmd_parts)
+    
+    return env_vars, cleaned_cmd
+
+
 def _start_vllm_server(vllm_cmd: str, timeout: int = 120) -> subprocess.Popen:
     """Start VLLM server and wait for ready."""
-    port = _extract_port_from_vllm_cmd(vllm_cmd)
+    # Parse environment variables from command
+    env_vars, cleaned_cmd = _parse_env_vars_from_cmd(vllm_cmd)
     
-    logger.info(f"Starting VLLM server: {vllm_cmd}")
+    port = _extract_port_from_vllm_cmd(cleaned_cmd)
+    
+    logger.info(f"Starting VLLM server: {cleaned_cmd}")
+    if env_vars:
+        logger.info(f"Environment variables: {env_vars}")
     logger.info("VLLM output logged to: /tmp/vllm.txt")
     
     with open('/tmp/vllm.txt', 'w') as log_file:
         log_file.write(f"VLLM Server started at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-        log_file.write(f"Command: {vllm_cmd}\n")
+        log_file.write(f"Command: {cleaned_cmd}\n")
+        if env_vars:
+            log_file.write(f"Environment: {env_vars}\n")
         log_file.write(f"Port: {port}\n")
         log_file.write("-" * 50 + "\n")
     
+    # Prepare environment for subprocess
+    env = os.environ.copy()
+    env.update(env_vars)
+    
     with open('/tmp/vllm.txt', 'a') as log_file:
         process = subprocess.Popen(
-            vllm_cmd.split(),
+            cleaned_cmd.split(),
             stdout=log_file,
             stderr=subprocess.STDOUT,
             text=True,
-            preexec_fn=os.setsid
+            preexec_fn=os.setsid,
+            env=env
         )
     
     _VLLM_PROCESSES.append(process)
@@ -226,7 +276,9 @@ def get_base_client(
     
     if client is None:
         if vllm_cmd is not None:
-            port = _extract_port_from_vllm_cmd(vllm_cmd)
+            # Parse environment variables from command to get clean command for port extraction
+            _, cleaned_cmd = _parse_env_vars_from_cmd(vllm_cmd)
+            port = _extract_port_from_vllm_cmd(cleaned_cmd)
             return open_ai_class(base_url=f"http://localhost:{port}/v1", api_key=api_key)
         else:
             return open_ai_class()
