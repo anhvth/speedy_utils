@@ -47,7 +47,7 @@ class LLMTask:
         force_lora_unload: bool = False,
         lora_path: Optional[str] = None,
         vllm_cmd: Optional[str] = None,
-        vllm_timeout: int = 120,
+        vllm_timeout: int = 1200,
         vllm_reuse: bool = True,
         **model_kwargs,
     ):
@@ -68,20 +68,41 @@ class LLMTask:
         # Handle VLLM server startup if vllm_cmd is provided
         if self.vllm_cmd:
             port = _extract_port_from_vllm_cmd(self.vllm_cmd)
-            
-            # Check if server is already running
-            if _is_server_running(port):
-                if self.vllm_reuse:
-                    logger.info(f"VLLM server already running on port {port}, reusing existing server (vllm_reuse=True)")
-                else:
-                    logger.info(f"VLLM server already running on port {port}, killing it first (vllm_reuse=False)")
+            reuse_existing = False
+
+            if self.vllm_reuse:
+                try:
+                    reuse_client = get_base_client(port, cache=False)
+                    models_response = reuse_client.models.list()
+                    if getattr(models_response, "data", None):
+                        reuse_existing = True
+                        logger.info(
+                            f"VLLM server already running on port {port}, "
+                            "reusing existing server (vllm_reuse=True)"
+                        )
+                    else:
+                        logger.info(
+                            f"No models returned from VLLM server on port {port}; "
+                            "starting a new server"
+                        )
+                except Exception as exc:
+                    logger.info(
+                        f"Unable to reach VLLM server on port {port} (list_models failed): {exc}. "
+                        "Starting a new server."
+                    )
+
+            if not self.vllm_reuse:
+                if _is_server_running(port):
+                    logger.info(
+                        f"VLLM server already running on port {port}, killing it first (vllm_reuse=False)"
+                    )
                     _kill_vllm_on_port(port)
-                    logger.info(f"Starting new VLLM server on port {port}")
-                    self.vllm_process = _start_vllm_server(self.vllm_cmd, self.vllm_timeout)
-            else:
+                logger.info(f"Starting new VLLM server on port {port}")
+                self.vllm_process = _start_vllm_server(self.vllm_cmd, self.vllm_timeout)
+            elif not reuse_existing:
                 logger.info(f"Starting VLLM server on port {port}")
                 self.vllm_process = _start_vllm_server(self.vllm_cmd, self.vllm_timeout)
-            
+
             # Set client to use the VLLM server port if not explicitly provided
             if client is None:
                 client = port

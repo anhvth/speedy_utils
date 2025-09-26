@@ -80,9 +80,9 @@ def _start_vllm_server(vllm_cmd: str, timeout: int = 120) -> subprocess.Popen:
     logger.info(f"Starting VLLM server: {cleaned_cmd}")
     if env_vars:
         logger.info(f"Environment variables: {env_vars}")
-    logger.info("VLLM output logged to: /tmp/vllm.txt")
+    logger.info(f"VLLM output logged to: /tmp/vllm_{port}.txt")
     
-    with open('/tmp/vllm.txt', 'w') as log_file:
+    with open(f'/tmp/vllm_{port}.txt', 'w') as log_file:
         log_file.write(f"VLLM Server started at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
         log_file.write(f"Command: {cleaned_cmd}\n")
         if env_vars:
@@ -93,8 +93,8 @@ def _start_vllm_server(vllm_cmd: str, timeout: int = 120) -> subprocess.Popen:
     # Prepare environment for subprocess
     env = os.environ.copy()
     env.update(env_vars)
-    
-    with open('/tmp/vllm.txt', 'a') as log_file:
+
+    with open(f'/tmp/vllm_{port}.txt', 'a') as log_file:
         process = subprocess.Popen(
             cleaned_cmd.split(),
             stdout=log_file,
