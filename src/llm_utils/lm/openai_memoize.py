@@ -1,4 +1,5 @@
 from openai import OpenAI, AsyncOpenAI
+from typing import Any, Callable
 
 from speedy_utils.common.utils_cache import memoize
 
@@ -30,6 +31,8 @@ class MOpenAI(OpenAI):
     - If you need a shared cache across instances, or more advanced cache controls,
         modify `memoize` or wrap at a class/static level instead of assigning to the
         bound method.
+    - Type information is now fully preserved by the memoize decorator, eliminating
+        the need for type casting.
 
     Example
             m = MOpenAI(api_key="...", model="gpt-4")
@@ -40,7 +43,12 @@ class MOpenAI(OpenAI):
     def __init__(self, *args, cache=True, **kwargs):
         super().__init__(*args, **kwargs)
         if cache:
-            self.post = memoize(self.post) # type: ignore
+            # Create a memoized wrapper for the instance's post method.
+            # The memoize decorator now preserves exact type information,
+            # so no casting is needed.
+            orig_post = self.post
+            memoized = memoize(orig_post)
+            self.post = memoized
 
 
 class MAsyncOpenAI(AsyncOpenAI):
