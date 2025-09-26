@@ -86,8 +86,7 @@ def multi_process(
     lazy_output: bool = False,
     progress: bool = True,
     # backend: str = "ray",   # "seq", "ray", or "fastcore"
-    backend: Literal["seq", "ray", "mp", "threadpool", "safe"] | None = None,
-    backend: Literal["seq", "ray", "mp", "threadpool"] = "mp",
+    backend: Literal["seq", "ray", "mp", "threadpool", "safe"] = "mp",
     # Additional optional knobs (accepted for compatibility)
     batch: int | None = None,
     ordered: bool | None = None,
@@ -183,6 +182,8 @@ def multi_process(
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
                 results = list(executor.map(f_wrapped, items))
+            return results
+        
         raise ValueError(f"Unsupported backend: {backend!r}")
 
 
