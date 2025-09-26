@@ -1,6 +1,6 @@
 [project]
 name = "speedy-utils"
-version = "1.1.19"
+version = "1.1.20"
 description = "Fast and easy-to-use package for data science"
 authors = [{ name = "AnhVTH", email = "anhvth.226@gmail.com" }]
 readme = "README.md"
@@ -24,14 +24,14 @@ dependencies = [
     "tqdm",
     "cachetools",
     "bump2version",
-    "json-repair>=0.25.0,<0.31.0",
+    "json-repair",
     "fastprogress",
-    "freezegun>=1.5.1",
-    "packaging>=23.2,<25",
-    "openai>=1.106.0",
-    "ray>=2.36.1",
-    "aiohttp>=3.10.11",
-    "pytest>=8.3.5",
+    "freezegun",
+    "packaging",
+    "openai",
+    "ray",
+    "aiohttp",
+    "pytest",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
