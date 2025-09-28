@@ -6302,7 +6302,7 @@ wheels = [
 
 [[package]]
 name = "speedy-utils"
-version = "1.1.18"
+version = "1.1.23"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp", version = "3.10.11", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
@@ -6356,26 +6356,26 @@ ray = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aiohttp", specifier = ">=3.10.11" },
+    { name = "aiohttp" },
     { name = "bump2version" },
     { name = "cachetools" },
     { name = "debugpy" },
     { name = "fastcore" },
     { name = "fastprogress" },
-    { name = "freezegun", specifier = ">=1.5.1" },
+    { name = "freezegun" },
     { name = "ipdb" },
     { name = "ipywidgets" },
-    { name = "json-repair", specifier = ">=0.25.0,<0.31.0" },
+    { name = "json-repair" },
     { name = "jupyterlab" },
     { name = "loguru" },
     { name = "matplotlib" },
     { name = "numpy" },
-    { name = "openai", specifier = ">=1.106.0" },
-    { name = "packaging", specifier = ">=23.2,<25" },
+    { name = "openai" },
+    { name = "packaging" },
     { name = "pandas" },
     { name = "pydantic" },
-    { name = "pytest", specifier = ">=8.3.5" },
-    { name = "ray", specifier = ">=2.36.1" },
+    { name = "pytest" },
+    { name = "ray" },
     { name = "ray", marker = "python_full_version >= '3.9' and extra == 'ray'", specifier = ">=2.49.1" },
     { name = "requests" },
     { name = "scikit-learn" },

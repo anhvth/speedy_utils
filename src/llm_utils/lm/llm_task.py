@@ -33,7 +33,7 @@ from .base_prompt_builder import BasePromptBuilder
 Messages = List[ChatCompletionMessageParam]
 
 
-class LLMTask:
+class LLM:
     """LLM task with structured input/output handling."""
 
     def __init__(
@@ -180,7 +180,7 @@ class LLMTask:
             port = _get_port_from_client(self.client)
             if port is not None:
                 try:
-                    LLMTask.unload_lora(port, lora_name)
+                    LLM.unload_lora(port, lora_name)
                     logger.info(f"Successfully unloaded LoRA adapter: {lora_name}")
                 except Exception as e:
                     logger.warning(f"Failed to unload LoRA adapter: {str(e)[:100]}")
@@ -425,6 +425,36 @@ class LLMTask:
         **runtime_kwargs,
     ) -> List[Dict[str, Any]]:
         """Execute LLM task. Delegates to text() or parse() based on output_model."""
+        choices = self.__inner_call__(
+            input_data,
+            response_model=response_model,
+            two_step_parse_pydantic=two_step_parse_pydantic,
+            **runtime_kwargs,
+        )
+        _last_conv = choices[0]["messages"] if choices else []
+        if not hasattr(self, "_last_conversations"):
+            self._last_conversations = []
+        else:
+            self._last_conversations = self._last_conversations[-100:]  # keep last 100 to avoid memory bloat
+        self._last_conversations.append(_last_conv)
+        return choices
+    def inspect_history(self, idx: int = -1, k_last_messages:int=2) -> List[Dict[str, Any]]:
+        """Inspect the message history of a specific response choice."""
+        if hasattr(self, "_last_conversations"):
+            from llm_utils import show_chat
+            conv = self._last_conversations[idx]
+            if k_last_messages > 0:
+                conv = conv[-k_last_messages:]
+            return show_chat(conv)
+        else:
+            raise ValueError("No message history available. Make a call first.")
+    def __inner_call__(self,
+        input_data: Union[str, BaseModel, list[Dict]],
+        response_model: Optional[Type[BaseModel] | Type[str]] = None,
+        two_step_parse_pydantic=False,
+        **runtime_kwargs,
+    ) -> List[Dict[str, Any]]:
+        """Execute LLM task. Delegates to text() or parse() based on output_model."""
         pydantic_model_to_use = response_model or self.output_model
 
         if pydantic_model_to_use is str or pydantic_model_to_use is None:
@@ -489,7 +519,7 @@ class LLMTask:
         vllm_timeout: int = 120,
         vllm_reuse: bool = True,
         **model_kwargs,
-    ) -> "LLMTask":
+    ) -> "LLM":
         """
         Create an LLMTask instance from a BasePromptBuilder instance.
 
@@ -512,7 +542,7 @@ class LLMTask:
         output_model = builder.get_output_model()
 
         # Extract data from the builder to initialize LLMTask
-        return LLMTask(
+        return LLM(
             instruction=instruction,
             input_model=input_model,
             output_model=output_model,
@@ -570,22 +600,22 @@ if __name__ == "__main__":
     
     print("Example 1: Using VLLM with server reuse (default)")
     # Create LLM instance - will reuse existing server if running on port 8001
-    with LLMTask(vllm_cmd=vllm_command) as llm:  # vllm_reuse=True by default
+    with LLM(vllm_cmd=vllm_command) as llm:  # vllm_reuse=True by default
         result = llm.text("Hello, how are you?")
         print("Response:", result[0]["parsed"])
     
     print("\nExample 2: Force restart server (vllm_reuse=False)")
     # This will kill any existing server on port 8001 and start fresh
-    with LLMTask(vllm_cmd=vllm_command, vllm_reuse=False) as llm:
+    with LLM(vllm_cmd=vllm_command, vllm_reuse=False) as llm:
         result = llm.text("Tell me a joke")
         print("Joke:", result[0]["parsed"])
         
     print("\nExample 3: Multiple instances with reuse")
     # First instance starts the server
-    llm1 = LLMTask(vllm_cmd=vllm_command)  # Starts server or reuses existing
+    llm1 = LLM(vllm_cmd=vllm_command)  # Starts server or reuses existing
     
     # Second instance reuses the same server
-    llm2 = LLMTask(vllm_cmd=vllm_command)  # Reuses server on port 8001
+    llm2 = LLM(vllm_cmd=vllm_command)  # Reuses server on port 8001
     
     try:
         result1 = llm1.text("What's the weather like?")
@@ -599,12 +629,12 @@ if __name__ == "__main__":
     
     print("\nExample 4: Different ports")
     # These will start separate servers
-    llm_8001 = LLMTask(vllm_cmd="vllm serve model1 --port 8001", vllm_reuse=True)
-    llm_8002 = LLMTask(vllm_cmd="vllm serve model2 --port 8002", vllm_reuse=True) 
+    llm_8001 = LLM(vllm_cmd="vllm serve model1 --port 8001", vllm_reuse=True)
+    llm_8002 = LLM(vllm_cmd="vllm serve model2 --port 8002", vllm_reuse=True) 
     
     print("\nExample 5: Kill all VLLM servers")
     # Kill all tracked VLLM processes
-    killed_count = LLMTask.kill_all_vllm()
+    killed_count = LLM.kill_all_vllm()
     print(f"Killed {killed_count} VLLM servers")
     
     print("\nYou can check VLLM server output at: /tmp/vllm.txt")

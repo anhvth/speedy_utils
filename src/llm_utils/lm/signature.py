@@ -5,43 +5,38 @@ This module provides a declarative way to define LLM input/output schemas
 with field descriptions and type annotations.
 """
 
-from typing import Any, Dict, List, Type, Union, get_type_hints, Annotated, get_origin, get_args
+from typing import Any, Dict, List, Type, get_type_hints, Annotated, get_origin, get_args, cast
 from pydantic import BaseModel, Field
 import inspect
 
 
-class InputField:
-    """Represents an input field in a signature."""
+class _FieldProxy:
+    """Proxy that stores field information while appearing type-compatible."""
     
-    def __init__(self, desc: str = "", **kwargs):
+    def __init__(self, field_type: str, desc: str = "", **kwargs):
+        self.field_type = field_type  # 'input' or 'output'
         self.desc = desc
         self.kwargs = kwargs
-    
-    def __class_getitem__(cls, item):
-        """Support for InputField[type] syntax."""
-        return item
 
 
-class OutputField:
-    """Represents an output field in a signature."""
-    
-    def __init__(self, desc: str = "", **kwargs):
-        self.desc = desc
-        self.kwargs = kwargs
-    
-    def __class_getitem__(cls, item):
-        """Support for OutputField[type] syntax."""
-        return item
+def InputField(desc: str = "", **kwargs) -> Any:
+    """Create an input field descriptor."""
+    return cast(Any, _FieldProxy('input', desc=desc, **kwargs))
+
+
+def OutputField(desc: str = "", **kwargs) -> Any:
+    """Create an output field descriptor.""" 
+    return cast(Any, _FieldProxy('output', desc=desc, **kwargs))
 
 
 # Type aliases for cleaner syntax
 def Input(desc: str = "", **kwargs) -> Any:
-    """Create an input field descriptor."""
+    """Create an input field descriptor that's compatible with type annotations."""
     return InputField(desc=desc, **kwargs)
 
 
 def Output(desc: str = "", **kwargs) -> Any:
-    """Create an output field descriptor."""
+    """Create an output field descriptor that's compatible with type annotations."""
     return OutputField(desc=desc, **kwargs)
 
 
@@ -67,24 +62,24 @@ class SignatureMeta(type):
                 if args:
                     # First arg is the actual type
                     field_type = args[0]
-                    # Look for InputField or OutputField in the metadata
+                    # Look for _FieldProxy in the metadata
                     for metadata in args[1:]:
-                        if isinstance(metadata, (InputField, OutputField)):
+                        if isinstance(metadata, _FieldProxy):
                             field_desc = metadata
                             break
             
             # Handle old syntax with direct assignment
-            if field_desc is None and isinstance(field_value, (InputField, OutputField)):
+            if field_desc is None and isinstance(field_value, _FieldProxy):
                 field_desc = field_value
             
             # Store field information
-            if isinstance(field_desc, InputField):
+            if field_desc and field_desc.field_type == 'input':
                 input_fields[field_name] = {
                     'type': field_type,
                     'desc': field_desc.desc,
                     **field_desc.kwargs
                 }
-            elif isinstance(field_desc, OutputField):
+            elif field_desc and field_desc.field_type == 'output':
                 output_fields[field_name] = {
                     'type': field_type,
                     'desc': field_desc.desc,
@@ -136,10 +131,10 @@ class Signature(metaclass=SignatureMeta):
         return instruction
     
     @classmethod
-    def get_input_model(cls) -> Union[Type[BaseModel], type[str]]:
+    def get_input_model(cls) -> Type[BaseModel]:
         """Generate Pydantic input model from input fields."""
         if not cls._input_fields:
-            return str
+            raise ValueError(f"Signature {cls.__name__} must have at least one input field")
         
         fields = {}
         annotations = {}
@@ -170,10 +165,10 @@ class Signature(metaclass=SignatureMeta):
         return input_model
     
     @classmethod
-    def get_output_model(cls) -> Union[Type[BaseModel], type[str]]:
+    def get_output_model(cls) -> Type[BaseModel]:
         """Generate Pydantic output model from output fields."""
         if not cls._output_fields:
-            return str
+            raise ValueError(f"Signature {cls.__name__} must have at least one output field")
         
         fields = {}
         annotations = {}
@@ -259,17 +254,11 @@ if __name__ == "__main__":
         
         print("\nInput Model:")
         input_model = judge_class.get_input_model()
-        if input_model is not str and hasattr(input_model, 'model_json_schema'):
-            print(input_model.model_json_schema())  # type: ignore
-        else:
-            print("String input model")
+        print(input_model.model_json_schema())
         
         print("\nOutput Model:")
         output_model = judge_class.get_output_model()
-        if output_model is not str and hasattr(output_model, 'model_json_schema'):
-            print(output_model.model_json_schema())  # type: ignore
-        else:
-            print("String output model")
+        print(output_model.model_json_schema())
         
         # Test instance usage
         judge = judge_class()
