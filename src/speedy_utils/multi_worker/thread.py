@@ -14,13 +14,14 @@
 # making it suitable for data processing pipelines, batch operations, and concurrent API calls.
 #
 # Public API / Data Contracts:
-# • multi_thread(func, inputs, num_workers=None, progress=True, **kwargs) -> List[Any] - Main parallel execution
-# • multi_thread_batch(func, inputs, batch_size=10, num_workers=None, **kwargs) -> List[Any] - Batched processing
+# • multi_thread(func, inputs, *, workers=None, **kwargs) -> list[Any] - Main executor
+# • multi_thread_standard(func, inputs, workers=4) -> list[Any] - Simple ordered helper
+# • kill_all_thread(exc_type=SystemExit, join_timeout=0.1) -> int - Emergency stop
 # • DEFAULT_WORKERS = (cpu_count * 2) - Default worker thread count
-# • T = TypeVar("T"), R = TypeVar("R") - Generic type variables for input/output typing
-# • _group_iter(src, size) -> Iterable[List[T]] - Utility for chunking iterables
+# • T = TypeVar('T'), R = TypeVar('R') - Generic type variables for input/output typing
+# • _group_iter(src, size) -> Iterable[list[T]] - Utility for chunking iterables
 # • _worker(item, func, fixed_kwargs) -> R - Individual worker function wrapper
-# • _short_tb() -> str - Shortened traceback formatter for cleaner error logs
+# • _ResultCollector - Maintains ordered/unordered result aggregation
 #
 # Invariants / Constraints:
 # • Worker count MUST be positive integer, defaults to (CPU cores * 2)
@@ -81,11 +82,12 @@ import ctypes
 import os
 import threading
 import time
-import traceback
-from collections.abc import Callable, Iterable
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from heapq import heappop, heappush
 from itertools import islice
-from typing import Any, TypeVar, Union
+from types import MappingProxyType
+from typing import Any, Generic, TypeVar, cast
 
 from loguru import logger
 
@@ -97,10 +99,10 @@ except ImportError:  # pragma: no cover
 # Sensible defaults
 DEFAULT_WORKERS = (os.cpu_count() or 4) * 2
 
-T = TypeVar("T")
-R = TypeVar("R")
+T = TypeVar('T')
+R = TypeVar('R')
 
-SPEEDY_RUNNING_THREADS: list[threading.Thread] = []
+SPEEDY_RUNNING_THREADS: list[threading.Thread] = []  # cooperative shutdown tracking
 _SPEEDY_THREADS_LOCK = threading.Lock()
 
 _PY_SET_ASYNC_EXC = ctypes.pythonapi.PyThreadState_SetAsyncExc
@@ -131,7 +133,7 @@ def _track_threads(threads: Iterable[threading.Thread]) -> None:
 
 
 def _track_executor_threads(pool: ThreadPoolExecutor) -> None:
-    thread_set = getattr(pool, "_threads", None)
+    thread_set = getattr(pool, '_threads', None)
     if not thread_set:
         return
     _track_threads(tuple(thread_set))
@@ -144,55 +146,167 @@ def _group_iter(src: Iterable[T], size: int) -> Iterable[list[T]]:
         yield chunk
 
 
-def _short_tb() -> str:
-    """Return a shortened traceback, excluding internal frames."""
-    tb = "".join(traceback.format_exc())
-    # hide frames inside this helper to keep logs short
-    return "\n".join(ln for ln in tb.splitlines() if "multi_thread.py" not in ln)
-
-
-def _worker(item: T, func: Callable[[T], R], fixed_kwargs: dict[str, Any]) -> R:
+def _worker(
+    item: T,
+    func: Callable[[T], R],
+    fixed_kwargs: Mapping[str, Any],
+) -> R:
     """Execute the function with an item and fixed kwargs."""
     return func(item, **fixed_kwargs)
+
+
+def _run_batch(
+    items: Sequence[T],
+    func: Callable[[T], R],
+    fixed_kwargs: Mapping[str, Any],
+) -> list[R]:
+    return [_worker(item, func, fixed_kwargs) for item in items]
+
+
+def _attach_metadata(fut: Future[Any], idx: int, logical_size: int) -> None:
+    setattr(fut, '_speedy_idx', idx)
+    setattr(fut, '_speedy_size', logical_size)
+
+
+def _future_meta(fut: Future[Any]) -> tuple[int, int]:
+    return (
+        getattr(fut, '_speedy_idx'),
+        getattr(fut, '_speedy_size'),
+    )
+
+
+class _ResultCollector(Generic[R]):
+    def __init__(self, ordered: bool, logical_total: int | None) -> None:
+        self._ordered = ordered
+        self._logical_total = logical_total
+        self._results: list[R | None]
+        self._heap: list[tuple[int, list[R | None]]] | None
+        self._next_idx = 0
+        if ordered and logical_total is not None:
+            self._results = [None] * logical_total
+            self._heap = None
+        else:
+            self._results = []
+            self._heap = [] if ordered else None
+
+    def add(self, idx: int, items: Sequence[R | None]) -> None:
+        if not items:
+            return
+        if self._ordered and self._logical_total is not None:
+            self._results[idx : idx + len(items)] = list(items)
+            return
+        if self._ordered:
+            assert self._heap is not None
+            heappush(self._heap, (idx, list(items)))
+            self._flush_ready()
+            return
+        self._results.extend(items)
+
+    def _flush_ready(self) -> None:
+        if self._heap is None:
+            return
+        while self._heap and self._heap[0][0] == self._next_idx:
+            _, chunk = heappop(self._heap)
+            self._results.extend(chunk)
+            self._next_idx += len(chunk)
+
+    def finalize(self) -> list[R | None]:
+        self._flush_ready()
+        return self._results
+
+
+def _resolve_worker_count(workers: int | None) -> int:
+    if workers is None:
+        return DEFAULT_WORKERS
+    if workers <= 0:
+        raise ValueError('workers must be a positive integer')
+    return workers
+
+
+def _normalize_batch_result(result: Any, logical_size: int) -> list[Any]:
+    if logical_size == 1:
+        return [result]
+    if result is None:
+        raise ValueError('batched callable returned None for a batch result')
+    if isinstance(result, (str, bytes, bytearray)):
+        raise TypeError('batched callable must not return str/bytes when batching')
+    if isinstance(result, Sequence):
+        out = list(result)
+    elif isinstance(result, Iterable):
+        out = list(result)
+    else:
+        raise TypeError('batched callable must return an iterable of results')
+    if len(out) != logical_size:
+        raise ValueError(
+            f'batched callable returned {len(out)} items, expected {logical_size}',
+        )
+    return out
+
+
+def _cancel_futures(inflight: set[Future[Any]]) -> None:
+    for fut in inflight:
+        fut.cancel()
+    inflight.clear()
 
 
 # ────────────────────────────────────────────────────────────
 # main API
 # ────────────────────────────────────────────────────────────
 def multi_thread(
-    func: Callable,
-    inputs: Iterable[Any],
+    func: Callable[[T], R],
+    inputs: Iterable[T],
     *,
-    workers: Union[int, None] = DEFAULT_WORKERS,
+    workers: int | None = DEFAULT_WORKERS,
     batch: int = 1,
     ordered: bool = True,
     progress: bool = True,
     progress_update: int = 10,
     prefetch_factor: int = 4,
-    timeout: Union[float, None] = None,
+    timeout: float | None = None,
     stop_on_error: bool = True,
-    n_proc=0,
-    store_output_pkl_file: Union[str, None] = None,
-    **fixed_kwargs,
-) -> list[Any]:
-    """
-    ThreadPool **map** that returns a *list*.
+    n_proc: int = 0,
+    store_output_pkl_file: str | None = None,
+    **fixed_kwargs: Any,
+) -> list[R | None]:
+    """Execute ``func`` over ``inputs`` using a managed thread pool.
+
+    The scheduler supports batching, ordered result delivery, progress
+    reporting, cooperative error handling, and a whole-run timeout.
 
     Parameters
     ----------
-    func            – target callable.
-    inputs          – iterable with the arguments.
-    workers         – defaults to ``os.cpu_count()*2``.
-    batch           – package *batch* inputs into one call for low‑overhead.
-    ordered         – keep original order (costs memory); if ``False`` results
-                      are yielded as soon as they finish.
-    progress        – show a tqdm bar (requires *tqdm* installed).
-    progress_update – bar redraw frequency (logical items, *not* batches).
-    prefetch_factor – in‑flight tasks ≈ ``workers * prefetch_factor``.
-    timeout         – overall timeout (seconds) for the mapping.
-    stop_on_error   – raise immediately on first exception (default).  If
-                      ``False`` the failing task’s result becomes ``None``.
-    **fixed_kwargs  – static keyword args forwarded to every ``func()`` call.
+    func : Callable[[T], R]
+        Target callable applied to each logical input.
+    inputs : Iterable[T]
+        Source iterable with input payloads.
+    workers : int | None, optional
+        Worker thread count (defaults to ``cpu_count()*2`` when ``None``).
+    batch : int, optional
+        Logical items grouped per invocation. ``1`` disables batching.
+    ordered : bool, optional
+        Preserve original ordering when ``True`` (default).
+    progress : bool, optional
+        Toggle tqdm-based progress reporting.
+    progress_update : int, optional
+        Minimum logical items between progress refreshes.
+    prefetch_factor : int, optional
+        Multiplier controlling in-flight items (``workers * prefetch_factor``).
+    timeout : float | None, optional
+        Overall wall-clock timeout in seconds.
+    stop_on_error : bool, optional
+        Abort immediately on the first exception when ``True``.
+    n_proc : int, optional
+        Optional process-level fan-out; ``>1`` shards work across processes.
+    store_output_pkl_file : str | None, optional
+        When provided, persist the results to disk via speedy_utils helpers.
+    fixed_kwargs : dict[str, Any]
+        Extra kwargs forwarded to every invocation of ``func``.
+
+    Returns
+    -------
+    list[R | None]
+        Collected results, preserving order when requested. Failed tasks yield
+        ``None`` entries if ``stop_on_error`` is ``False``.
     """
     from speedy_utils import dump_json_or_pickle, load_by_ext
 
@@ -201,215 +315,223 @@ def multi_thread(
 
         from fastcore.all import threaded
 
-        # split the inputs by nproc
-        inputs = list(inputs)
-        n_per_proc = max(len(inputs) // n_proc, 1)
-        proc_inputs_list = []
-        for i in range(0, len(inputs), n_per_proc):
-            proc_inputs_list.append(inputs[i : i + n_per_proc])
+        items = list(inputs)
+        if not items:
+            return []
+        n_per_proc = max(len(items) // n_proc, 1)
+        chunks = [items[i : i + n_per_proc] for i in range(0, len(items), n_per_proc)]
         procs = []
         in_process_multi_thread = threaded(process=True)(multi_thread)
+        results: list[R | None] = []
 
-        for proc_id, proc_inputs in enumerate(proc_inputs_list):
-            with tempfile.NamedTemporaryFile(
-                delete=False, suffix="multi_thread.pkl"
-            ) as tmp_file:
-                file_pkl = tmp_file.name
+        for proc_idx, chunk in enumerate(chunks):
+            with tempfile.NamedTemporaryFile(delete=False, suffix='multi_thread.pkl') as fh:
+                file_pkl = fh.name
             assert isinstance(in_process_multi_thread, Callable)
             proc = in_process_multi_thread(
                 func,
-                proc_inputs,
+                chunk,
                 workers=workers,
                 batch=batch,
                 ordered=ordered,
-                progress=proc_id == 0,
+                progress=proc_idx == 0,
                 progress_update=progress_update,
                 prefetch_factor=prefetch_factor,
                 timeout=timeout,
                 stop_on_error=stop_on_error,
-                n_proc=0,  # prevent recursion
+                n_proc=0,
                 store_output_pkl_file=file_pkl,
                 **fixed_kwargs,
             )
-            procs.append([proc, file_pkl])
-        # join
-        results = []
+            procs.append((proc, file_pkl))
 
         for proc, file_pkl in procs:
             proc.join()
-            logger.info(f"Done proc {proc=}")
-            results.extend(load_by_ext(file_pkl))
+            logger.info('process finished: %s', proc)
+            try:
+                results.extend(load_by_ext(file_pkl))
+            finally:
+                try:
+                    os.unlink(file_pkl)
+                except OSError as exc:  # pragma: no cover - best effort cleanup
+                    logger.warning('failed to remove temp file %s: %s', file_pkl, exc)
         return results
 
     try:
         import pandas as pd
 
         if isinstance(inputs, pd.DataFrame):
-            inputs = inputs.to_dict(orient="records")
-    except ImportError:
+            inputs = cast(Iterable[T], inputs.to_dict(orient='records'))
+    except ImportError:  # pragma: no cover - optional dependency
         pass
 
+    if batch <= 0:
+        raise ValueError('batch must be a positive integer')
+    if prefetch_factor <= 0:
+        raise ValueError('prefetch_factor must be a positive integer')
+
+    workers_val = _resolve_worker_count(workers)
+    progress_update = max(progress_update, 1)
+    fixed_kwargs_map: Mapping[str, Any] = MappingProxyType(dict(fixed_kwargs))
+
     try:
-        n_inputs = len(inputs)  # type: ignore[arg-type]
-    except Exception:
-        n_inputs = None
-    workers_val = workers if workers is not None else DEFAULT_WORKERS
+        logical_total = len(inputs)  # type: ignore[arg-type]
+    except Exception:  # pragma: no cover - generic iterable
+        logical_total = None
 
-    if batch == 1 and n_inputs and n_inputs / max(workers_val, 1) > 20_000:
-        batch = 32  # empirically good for sub‑ms tasks
+    if batch == 1 and logical_total and logical_total / max(workers_val, 1) > 20_000:
+        batch = 32
 
-    # ── build (maybe‑batched) source iterator ────────────────────────────
     src_iter: Iterable[Any] = iter(inputs)
     if batch > 1:
         src_iter = _group_iter(src_iter, batch)
-    # Ensure src_iter is always an iterator
     src_iter = iter(src_iter)
+    collector: _ResultCollector[Any] = _ResultCollector(ordered, logical_total)
 
-    # total logical items (for bar & ordered pre‑allocation)
-    logical_total = n_inputs
-    if logical_total is not None and batch > 1:
-        logical_total = n_inputs  # still number of *items*, not batches
-
-    # ── progress bar ─────────────────────────────────────────────────────
     bar = None
     last_bar_update = 0
-    if progress and tqdm is not None and logical_total is not None:
+    if (
+        progress
+        and tqdm is not None
+        and logical_total is not None
+        and logical_total > 0
+    ):
         bar = tqdm(
             total=logical_total,
             ncols=128,
-            colour="green",
-            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt}"
-            " [{elapsed}<{remaining}, {rate_fmt}{postfix}]",
+            colour='green',
+            bar_format=(
+                '{l_bar}{bar}| {n_fmt}/{total_fmt}'
+                ' [{elapsed}<{remaining}, {rate_fmt}{postfix}]'
+            ),
         )
 
-    # ── prepare result container ─────────────────────────────────────────
-    if ordered and logical_total is not None:
-        results: list[Any] = [None] * logical_total
-    else:
-        results = []
-
-    # ── main execution loop ──────────────────────────────────────────────────
-    workers_val = workers if workers is not None else DEFAULT_WORKERS
-    max_inflight = workers_val * max(prefetch_factor, 1)
+    deadline = time.monotonic() + timeout if timeout is not None else None
+    max_inflight = max(workers_val * prefetch_factor, 1)
     completed_items = 0
-    next_logical_idx = 0  # index assigned to the next submission
+    next_logical_idx = 0
 
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        inflight = set()
+    def items_inflight() -> int:
+        return next_logical_idx - completed_items
 
-        # prime the pool
-        for _ in range(max_inflight):
-            try:
-                arg = next(src_iter)
-            except StopIteration:
-                break
+    inflight: set[Future[Any]] = set()
+    pool = ThreadPoolExecutor(
+        max_workers=workers_val,
+        thread_name_prefix='speedy-thread',
+    )
+    shutdown_kwargs: dict[str, Any] = {'wait': True}
+
+    try:
+        def submit_arg(arg: Any) -> None:
+            nonlocal next_logical_idx
             if batch > 1:
-                fut = pool.submit(
-                    lambda items: [_worker(item, func, fixed_kwargs) for item in items],
-                    arg,
-                )
-                fut.idx = next_logical_idx  # type: ignore[attr-defined]
-                inflight.add(fut)
-                next_logical_idx += len(arg)
-                _track_executor_threads(pool)
+                batch_items = list(arg)
+                if not batch_items:
+                    return
+                fut = pool.submit(_run_batch, batch_items, func, fixed_kwargs_map)
+                logical_size = len(batch_items)
             else:
-                fut = pool.submit(_worker, arg, func, fixed_kwargs)
-                fut.idx = next_logical_idx  # type: ignore[attr-defined]
-                inflight.add(fut)
-                next_logical_idx += 1
-                _track_executor_threads(pool)
+                fut = pool.submit(_worker, arg, func, fixed_kwargs_map)
+                logical_size = 1
+            _attach_metadata(fut, next_logical_idx, logical_size)
+            next_logical_idx += logical_size
+            inflight.add(fut)
+            _track_executor_threads(pool)
 
         try:
-            # Process futures as they complete and add new ones to keep the pool busy
-            while inflight:  # Continue until all in-flight tasks are processed
-                for fut in as_completed(inflight, timeout=timeout):
-                    inflight.remove(fut)
-                    idx = fut.idx  # type: ignore[attr-defined]
+            while items_inflight() < max_inflight:
+                submit_arg(next(src_iter))
+        except StopIteration:
+            pass
+
+        while inflight:
+            wait_timeout = None
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    _cancel_futures(inflight)
+                    raise TimeoutError(
+                        f'multi_thread timed out after {timeout} seconds',
+                    )
+                wait_timeout = max(remaining, 0.0)
+
+            done, _ = wait(
+                inflight,
+                timeout=wait_timeout,
+                return_when=FIRST_COMPLETED,
+            )
+
+            if not done:
+                _cancel_futures(inflight)
+                raise TimeoutError(
+                    f'multi_thread timed out after {timeout} seconds',
+                )
+
+            for fut in done:
+                inflight.remove(fut)
+                idx, logical_size = _future_meta(fut)
+                try:
+                    result = fut.result()
+                except Exception as exc:
+                    if stop_on_error:
+                        _cancel_futures(inflight)
+                        raise
+                    logger.exception('multi_thread task failed', exc_info=exc)
+                    out_items = [None] * logical_size
+                else:
                     try:
-                        res = fut.result()
-                    except Exception:
-                        if stop_on_error:
-                            raise
-                        res = None
+                        out_items = _normalize_batch_result(result, logical_size)
+                    except Exception as exc:
+                        _cancel_futures(inflight)
+                        raise RuntimeError(
+                            'batched callable returned an unexpected shape',
+                        ) from exc
 
-                    # flatten res to list of logical outputs
-                    out_items = res if batch > 1 else [res]
+                collector.add(idx, out_items)
+                completed_items += len(out_items)
 
-                    # Ensure out_items is a list (and thus Sized)
-                    if out_items is None:
-                        out_items = [None]
-                    elif not isinstance(out_items, list):
-                        out_items = (
-                            list(out_items)
-                            if isinstance(out_items, Iterable)
-                            else [out_items]
-                        )
-
-                    # store outputs
-                    if ordered and logical_total is not None:
-                        results[idx : idx + len(out_items)] = out_items
-                    else:
-                        results.extend(out_items)
-
-                    completed_items += len(out_items)
-
-                    # progress bar update
-                    if bar and completed_items - last_bar_update >= progress_update:
-                        bar.update(completed_items - last_bar_update)
+                if bar:
+                    delta = completed_items - last_bar_update
+                    if delta >= progress_update:
+                        bar.update(delta)
                         last_bar_update = completed_items
-                        # Show pending, submitted, processing in the bar postfix
                         submitted = next_logical_idx
-                        processing = min(len(inflight), workers_val)
                         pending = (
-                            (logical_total - submitted)
+                            max(logical_total - submitted, 0)
                             if logical_total is not None
-                            else None
+                            else '-'
                         )
                         postfix = {
-                            "pending": pending if pending is not None else "-",
-                            # 'submitted': submitted,
-                            "processing": processing,
+                            'processing': min(len(inflight), workers_val),
+                            'pending': pending,
                         }
                         bar.set_postfix(postfix)
 
-                    # keep queue full
-                    try:
-                        while next_logical_idx - completed_items < max_inflight:
-                            arg = next(src_iter)
-                            if batch > 1:
-                                fut2 = pool.submit(
-                                    lambda items: [
-                                        _worker(item, func, fixed_kwargs)
-                                        for item in items
-                                    ],
-                                    arg,
-                                )
-                                fut2.idx = next_logical_idx  # type: ignore[attr-defined]
-                                inflight.add(fut2)
-                                next_logical_idx += len(arg)
-                                _track_executor_threads(pool)
-                            else:
-                                fut2 = pool.submit(_worker, arg, func, fixed_kwargs)
-                                fut2.idx = next_logical_idx  # type: ignore[attr-defined]
-                                inflight.add(fut2)
-                                next_logical_idx += 1
-                                _track_executor_threads(pool)
-                    except StopIteration:
-                        pass
+            try:
+                while items_inflight() < max_inflight:
+                    submit_arg(next(src_iter))
+            except StopIteration:
+                pass
 
-                    # Break the inner loop as we've processed one future
-                    break
+        results = collector.finalize()
 
-                # If we've exhausted the inner loop without processing anything,
-                # and there are still in-flight tasks, we need to wait for them
-                if inflight and timeout is not None:
-                    # Use a small timeout to avoid hanging indefinitely
-                    time.sleep(min(0.01, timeout / 10))
+    except KeyboardInterrupt:
+        shutdown_kwargs = {'wait': False, 'cancel_futures': True}
+        _cancel_futures(inflight)
+        kill_all_thread(SystemExit)
+        raise KeyboardInterrupt() from None
+    finally:
+        try:
+            pool.shutdown(**shutdown_kwargs)
+        except TypeError:  # pragma: no cover - Python <3.9 fallback
+            pool.shutdown(shutdown_kwargs.get('wait', True))
+        if bar:
+            delta = completed_items - last_bar_update
+            if delta > 0:
+                bar.update(delta)
+            bar.close()
 
-        finally:
-            if bar:
-                bar.update(completed_items - last_bar_update)
-                bar.close()
+    results = collector.finalize() if 'results' not in locals() else results
     if store_output_pkl_file:
         dump_json_or_pickle(results, store_output_pkl_file)
     _prune_dead_threads()
@@ -417,32 +539,19 @@ def multi_thread(
 
 
 def multi_thread_standard(
-    fn: Callable[[Any], Any], items: Iterable[Any], workers: int = 4
-) -> list[Any]:
-    """Execute a function using standard ThreadPoolExecutor.
+    fn: Callable[[T], R], items: Iterable[T], workers: int = 4
+) -> list[R]:
+    """Execute ``fn`` across ``items`` while preserving submission order."""
 
-    A standard implementation of multi-threading using ThreadPoolExecutor.
-    Ensures the order of results matches the input order.
-
-    Parameters
-    ----------
-    fn : Callable
-        The function to execute for each item.
-    items : Iterable
-        The items to process.
-    workers : int, optional
-        Number of worker threads, by default 4.
-
-    Returns
-    -------
-    list
-        Results in same order as input items.
-    """
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = []
+    workers_val = _resolve_worker_count(workers)
+    with ThreadPoolExecutor(
+        max_workers=workers_val,
+        thread_name_prefix='speedy-thread',
+    ) as executor:
+        futures: list[Future[R]] = []
         for item in items:
             futures.append(executor.submit(fn, item))
-            _track_executor_threads(executor)
+        _track_executor_threads(executor)
         results = [fut.result() for fut in futures]
     _prune_dead_threads()
     return results
@@ -452,18 +561,24 @@ def _async_raise(thread_id: int, exc_type: type[BaseException]) -> bool:
     if thread_id <= 0:
         return False
     if not issubclass(exc_type, BaseException):
-        raise TypeError("exc_type must derive from BaseException")
+        raise TypeError('exc_type must derive from BaseException')
     res = _PY_SET_ASYNC_EXC(ctypes.c_ulong(thread_id), ctypes.py_object(exc_type))
     if res == 0:
         return False
     if res > 1:  # pragma: no cover - defensive branch
         _PY_SET_ASYNC_EXC(ctypes.c_ulong(thread_id), None)
-        raise SystemError("PyThreadState_SetAsyncExc failed")
+        raise SystemError('PyThreadState_SetAsyncExc failed')
     return True
 
 
 def kill_all_thread(exc_type: type[BaseException] = SystemExit, join_timeout: float = 0.1) -> int:
-    """Forcefully stop tracked worker threads. Returns number of threads signalled."""
+    """Forcefully stop tracked worker threads (dangerous; use sparingly).
+
+    Returns
+    -------
+    int
+        Count of threads signalled for termination.
+    """
     _prune_dead_threads()
     current = threading.current_thread()
     with _SPEEDY_THREADS_LOCK:
@@ -481,16 +596,16 @@ def kill_all_thread(exc_type: type[BaseException] = SystemExit, join_timeout: fl
                 terminated += 1
                 thread.join(timeout=join_timeout)
             else:
-                logger.warning("Unable to signal thread %s", thread.name)
+                logger.warning('Unable to signal thread %s', thread.name)
         except Exception as exc:  # pragma: no cover - defensive
-            logger.error("Failed to stop thread %s: %s", thread.name, exc)
+            logger.error('Failed to stop thread %s: %s', thread.name, exc)
     _prune_dead_threads()
     return terminated
 
 
 __all__ = [
-    "SPEEDY_RUNNING_THREADS",
-    "multi_thread",
-    "multi_thread_standard",
-    "kill_all_thread",
+    'SPEEDY_RUNNING_THREADS',
+    'multi_thread',
+    'multi_thread_standard',
+    'kill_all_thread',
 ]

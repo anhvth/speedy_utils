@@ -154,11 +154,6 @@ def multi_process(
     progress: bool = True,
     # backend: str = "ray",   # "seq", "ray", or "fastcore"
     backend: Literal["seq", "ray", "mp", "threadpool", "safe"] = "mp",
-    # Additional optional knobs (accepted for compatibility)
-    batch: int | None = None,
-    ordered: bool | None = None,
-    process_update_interval: int | None = None,
-    stop_on_error: bool | None = None,
     **func_kwargs: Any,
 ) -> list[Any]:
     """

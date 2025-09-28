@@ -1,7 +1,17 @@
 # tests/test_multi_thread.py
+import threading
 import time
 
-from speedy_utils.multi_worker.thread import multi_thread_standard, multi_thread
+import pytest
+
+from speedy_utils.multi_worker.thread import (
+    SPEEDY_RUNNING_THREADS,
+    kill_all_thread,
+    _prune_dead_threads,
+    multi_thread,
+    multi_thread_standard,
+)
+import speedy_utils.multi_worker.thread as thread_mod
 
 
 # ────────────────────────────────────────────────────────────
@@ -111,7 +121,8 @@ def test_unordered():
 
     inp = list(range(32))  # Changed from 50 to 32 to match actual implementation
     out = multi_thread(f, inp, ordered=False, workers=8, progress=False)
-    assert sorted(out) == [i * i for i in inp]  # may reorder
+    assert all(val is not None for val in out)
+    assert sorted(val for val in out if val is not None) == [i * i for i in inp]
 
 
 # ────────────────────────────────────────────────────────────
@@ -140,6 +151,93 @@ def test_stop_on_error_false():
     for i, val in enumerate(out):
         if i != 3:
             assert val == i, f"Expected {i} at index {i}, got {val}"
+
+
+def test_kill_all_thread_interrupts_sleepy_workers():
+    """Simulate an IPython session: launch work, then abort via kill_all_thread."""
+
+    def slow_worker(x: int) -> int:
+        time.sleep(0.5)
+        return x
+
+    outcome: dict[str, object] = {}
+
+    def run_pool() -> None:
+        try:
+            multi_thread(
+                slow_worker,
+                range(8),
+                workers=4,
+                progress=False,
+                prefetch_factor=1,
+            )
+        except SystemExit:
+            outcome['system_exit'] = True
+        except Exception as exc:  # pragma: no cover - diagnostic safety net
+            outcome['exception'] = exc
+        else:
+            outcome['completed'] = True
+
+    runner = threading.Thread(target=run_pool, daemon=True)
+    runner.start()
+
+    start = time.time()
+    while not SPEEDY_RUNNING_THREADS and time.time() - start < 1.0:
+        time.sleep(0.01)
+
+    assert SPEEDY_RUNNING_THREADS, 'expected worker threads to be active'
+
+    killed = kill_all_thread()
+    runner.join(timeout=2.0)
+
+    time.sleep(0.05)
+    _prune_dead_threads()
+
+    assert killed > 0, 'kill_all_thread should signal at least one worker'
+    assert not runner.is_alive(), 'background multi_thread should have stopped'
+    assert not SPEEDY_RUNNING_THREADS, 'all tracked threads must be cleared'
+    unexpected = outcome.get('exception')
+    assert unexpected is None, f'unexpected exception: {unexpected}'
+    assert outcome.get('system_exit') or outcome.get('completed')
+
+
+def test_keyboard_interrupt_cancels_immediately(monkeypatch):
+    """multi_thread should abort instantly when the main thread sees Ctrl+C."""
+
+    real_wait = thread_mod.wait
+    real_kill = thread_mod.kill_all_thread
+
+    def fake_wait(*args, **kwargs):  # pragma: no cover - deterministic path
+        raise KeyboardInterrupt
+
+    kill_calls: dict[str, int] = {}
+
+    def wrapped_kill(exc_type=SystemExit, join_timeout=0.1):
+        kill_calls['count'] = kill_calls.get('count', 0) + 1
+        return real_kill(exc_type, join_timeout)
+
+    monkeypatch.setattr(thread_mod, 'wait', fake_wait)
+    monkeypatch.setattr(thread_mod, 'kill_all_thread', wrapped_kill)
+
+    with pytest.raises(KeyboardInterrupt):
+        multi_thread(
+            lambda x: time.sleep(1) or x,
+            range(10),
+            workers=4,
+            progress=False,
+        )
+
+    monkeypatch.setattr(thread_mod, 'wait', real_wait)
+    monkeypatch.setattr(thread_mod, 'kill_all_thread', real_kill)
+
+    for _ in range(50):
+        _prune_dead_threads()
+        if not SPEEDY_RUNNING_THREADS:
+            break
+        time.sleep(0.02)
+
+    assert kill_calls.get('count') == 1
+    assert not SPEEDY_RUNNING_THREADS
 
 
 # ────────────────────────────────────────────────────────────
