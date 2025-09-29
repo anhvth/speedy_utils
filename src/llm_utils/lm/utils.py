@@ -262,7 +262,7 @@ def _is_server_running(port: int) -> bool:
         return False
 
 
-def get_base_client(
+def get_base_openai_client(
     client=None, 
     cache: bool = True, 
     api_key="abc",
