@@ -13,6 +13,7 @@ from loguru import logger
 from openai import OpenAI, AuthenticationError, BadRequestError, RateLimitError
 from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
+import pandas as pd
 
 from .utils import (
     _extract_port_from_vllm_cmd,
@@ -31,6 +32,7 @@ from .signature import Signature
 
 # Type aliases for better readability
 Messages = List[ChatCompletionMessageParam]
+InputData = Union[str, Dict[str, Any], BaseModel, List[Dict[str, Any]]]
 
 
 class LLM:
@@ -257,7 +259,7 @@ class LLM:
             logger.error(f"Error unloading LoRA adapter '{lora_name}': {str(e)[:100]}")
             raise
 
-    def _prepare_input(self, input_data: Union[str, BaseModel, List[Dict]]) -> Messages:
+    def _prepare_input(self, input_data: InputData) -> Messages:
         """Convert input to messages format."""
         if isinstance(input_data, list):
             assert isinstance(input_data[0], dict) and "role" in input_data[0], (
@@ -287,7 +289,7 @@ class LLM:
             messages.append({"role": "user", "content": user_content})
             return cast(Messages, messages)
 
-    def text_completion(self, input_data: Union[str, BaseModel, list[Dict]], **runtime_kwargs) -> List[Dict[str, Any]]:
+    def text_completion(self, input_data: InputData, **runtime_kwargs) -> List[Dict[str, Any]]:
         """Execute LLM task and return text responses."""
         # Prepare messages
         messages = self._prepare_input(input_data)
@@ -332,7 +334,7 @@ class LLM:
 
     def pydantic_parse(
         self,
-        input_data: Union[str, BaseModel, list[Dict]],
+        input_data: InputData,
         response_model: Optional[Type[BaseModel]] | Type[str] = None,
         **runtime_kwargs,
     ) -> List[Dict[str, Any]]:
@@ -400,9 +402,10 @@ class LLM:
 
     def __call__(
         self,
-        input_data: Union[str, BaseModel, list[Dict]],
+        input_data: InputData,
         response_model: Optional[Type[BaseModel] | Type[str]] = None,
         two_step_parse_pydantic=False,
+        return_messages=True,
         **runtime_kwargs,
     ) -> List[Dict[str, Any]]:
         """Execute LLM task. Delegates to text() or parse() based on output_model."""
@@ -434,7 +437,7 @@ class LLM:
 
     def __inner_call__(
         self,
-        input_data: Union[str, BaseModel, list[Dict]],
+        input_data: InputData,
         response_model: Optional[Type[BaseModel] | Type[str]] = None,
         two_step_parse_pydantic=False,
         **runtime_kwargs,
@@ -488,8 +491,8 @@ class LLM:
         return self.text_completion(*args, **kwargs)
 
     def parse(self, *args, **kwargs) -> List[Dict[str, Any]]:
-        """Alias for pydantic_parse() for backward compatibility."""
-        return self.pydantic_parse(*args, **kwargs)
+        choices = self(*args, **kwargs)
+        return choices[0]["parsed"] if choices else None
 
     @classmethod
     def from_signature(
@@ -542,6 +545,147 @@ class LLM:
             vllm_reuse=vllm_reuse,
             **model_kwargs,
         )
+
+    def batch_parse_dataframe(
+        self,
+        df: pd.DataFrame,
+        workers: int = 32,
+        progress: bool = True,
+        output_field_prefix: str = "",
+        mapping_columns={},
+    ) -> pd.DataFrame:
+        """
+        Parse multiple inputs from a DataFrame in parallel and add results as new columns.
+
+        This method processes each row of the DataFrame through the LLM's parse method
+        in parallel, then adds the parsed output fields as new columns to the DataFrame.
+
+        For signatures with input fields:
+            - DataFrame must contain all required input fields for the LLM model
+            - Input is structured as dictionaries with named fields
+
+        For signatures with no input fields (string-only input):
+            - DataFrame must have at least one text column
+            - The first string/object column is used as input text
+            - Input is passed directly as strings
+
+        Args:
+            df: Input DataFrame containing the required input fields or text data
+            workers: Number of parallel workers to use (default: 32)
+            progress: Whether to show progress bar during processing (default: True)
+            output_field_prefix: Prefix to add to output column names (default: "")
+
+        Returns:
+            DataFrame with original data plus new columns from the parsed outputs
+
+        Raises:
+            ValueError: If DataFrame is missing required fields or text columns
+
+        Examples:
+            >>> # Structured input signature (has input fields)
+            >>> df = pd.DataFrame({'text': ['Good movie', 'Bad film'], 'context': ['review', 'review']})
+            >>> result_df = llm.batch_parse_dataframe(df, output_field_prefix="llm_")
+            >>> # result_df has original columns plus 'llm_sentiment', 'llm_confidence', etc.
+
+            >>> # String-only input signature (no input fields)
+            >>> df = pd.DataFrame({'text': ['Translate this', 'Translate that']})
+            >>> result_df = llm.batch_parse_dataframe(df, output_field_prefix="llm_")
+            >>> # result_df has 'text' plus 'llm_translation' columns
+
+        Note:
+            - Original DataFrame is copied, so input remains unchanged
+            - Use output_field_prefix to avoid column name conflicts
+        """
+        from speedy_utils import multi_thread
+
+        # Copy DataFrame to avoid modifying original
+        result_df = df = df.copy()
+        # rename columns if mapping_columns is provided
+        if mapping_columns:
+            result_df = result_df.rename(columns=mapping_columns)
+            df = df.rename(columns=mapping_columns)
+
+        # Check if input_model is str type (no input fields)
+        if self.input_model is str:
+            # For string-only inputs, expect DataFrame to have a single text column
+            # or use the first string column as input
+            text_columns = df.select_dtypes(include=["object", "string"]).columns.tolist()
+            if not text_columns:
+                raise ValueError("DataFrame must have at least one text column for string-only input model")
+
+            input_column = text_columns[0]
+            input_data = df[input_column].tolist()
+            outputs = multi_thread(self.parse, input_data, workers=workers, progress=progress)
+        else:
+            # Traditional behavior for structured input models
+            # Get required input fields from the model
+            input_fields = []
+            if hasattr(self.input_model, "model_fields"):
+                input_fields = list(self.input_model.model_fields.keys())
+
+            # Validate input DataFrame has required fields
+            missing_fields = [f for f in input_fields if f not in df.columns]
+            if missing_fields:
+                raise ValueError(f"DataFrame missing required fields: {missing_fields}")
+
+            # Extract input data and process in parallel
+            input_records = df[input_fields].to_dict(orient="records") if input_fields else df.to_dict(orient="records")
+            outputs = multi_thread(self.parse, input_records, workers=workers, progress=progress)
+
+        # Add output columns to DataFrame with optional prefix
+        if outputs:
+            output_data = outputs[0].model_dump() if hasattr(outputs[0], "model_dump") else outputs[0]
+            for key in output_data.keys():
+                column_name = f"{output_field_prefix}{key}"
+                result_df[column_name] = [
+                    out.model_dump()[key] if hasattr(out, "model_dump") else out[key] for out in outputs
+                ]
+
+        return result_df
+
+    def batch_parse(self, inputs: List[Any], workers: int = 32, progress: bool = True) -> List[Any]:
+        """
+        Parse multiple inputs in parallel.
+
+        This method processes a list of inputs through the LLM's parse method
+        using multiple workers for improved performance.
+
+        For signatures with input fields:
+            - inputs should be List[Dict] with required input fields
+        For signatures with no input fields (string-only):
+            - inputs should be List[str] with text to process
+
+        Args:
+            inputs: List of input data to process (List[str] or List[Dict] depending on signature)
+            workers: Number of parallel workers to use (default: 32)
+            progress: Whether to show progress bar during processing (default: True)
+
+        Returns:
+            List of parsed outputs corresponding to each input
+
+        Examples:
+            >>> # For string-only input signatures
+            >>> inputs = ["Analyze this text", "Process this data", "Review this content"]
+            >>> results = llm.batch_parse(inputs)
+
+            >>> # For structured input signatures
+            >>> inputs = [{"text": "Hello", "context": "greeting"}, {"text": "Bye", "context": "farewell"}]
+            >>> results = llm.batch_parse(inputs)
+        """
+        from speedy_utils import multi_thread
+
+        return multi_thread(self.parse, inputs, workers=workers, progress=progress)
+
+    # Backward compatibility aliases
+    def parse_parallel(self, inputs: List[Any], workers: int = 32, progress: bool = True) -> List[Any]:
+        """Deprecated: Use batch_parse instead."""
+        return self.batch_parse(inputs, workers, progress)
+
+    def parse_parallel_df(
+        self, df: pd.DataFrame, workers: int = 32, progress: bool = True, output_field_prefix: str = ""
+    ) -> pd.DataFrame:
+        """Deprecated: Use batch_parse_dataframe instead."""
+        return self.batch_parse_dataframe(df, workers, progress, output_field_prefix)
 
     @staticmethod
     def list_models(client: Union[OpenAI, int, str, None] = None) -> List[str]:
