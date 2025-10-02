@@ -1,19 +1,22 @@
 from llm_utils.lm.openai_memoize import MOpenAI
-from llm_utils.lm import  LLM, AsyncLM, AsyncLLMTask, LLMJudgeBase, Signature, InputField, OutputField, Input, Output
+from llm_utils.lm import LLM, AsyncLM, AsyncLLMTask, LLMSignature, Signature, InputField, OutputField, Input, Output
 from llm_utils.vector_cache import VectorCache
 from llm_utils.lm.lm_base import get_model_name
 from llm_utils.lm.base_prompt_builder import BasePromptBuilder
 
 LLM_TASK = LLM
 
+
 # Convenience functions for killing VLLM servers
 def kill_all_vllm() -> int:
     """Kill all tracked VLLM server processes. Returns number of processes killed."""
     return LLM.kill_all_vllm()
 
+
 def kill_vllm_on_port(port: int) -> bool:
     """Kill VLLM server on specific port. Returns True if server was killed."""
     return LLM.kill_vllm_on_port(port)
+
 
 from llm_utils.chat_format import (
     build_chatml_input,
@@ -47,11 +50,11 @@ __all__ = [
     "LLM",
     "kill_all_vllm",
     "kill_vllm_on_port",
-    "LLMJudgeBase",
+    "LLMSignature",
     "Signature",
     "InputField",
     "OutputField",
     "Input",
     "Output",
-    "LLM_TASK", # Alias for LLM class
+    "LLM_TASK",  # Alias for LLM class
 ]

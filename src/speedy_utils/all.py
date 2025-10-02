@@ -115,6 +115,9 @@ from speedy_utils import (  # Clock module; Function decorators; Cache utilities
     timef,
 )
 
+
+choice = random.choice
+
 # Define __all__ explicitly with all exports
 __all__ = [
     # Standard library
@@ -199,4 +202,5 @@ __all__ = [
     # Multi-worker processing
     "multi_process",
     "multi_thread",
+    "choice",
 ]
