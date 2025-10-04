@@ -71,7 +71,24 @@ from glob import glob
 from multiprocessing import Pool
 from pathlib import Path
 from threading import Lock
-from typing import Any, Dict, Generic, List, Literal, Optional, TypeVar, Union
+from typing import (
+    Any,
+    Awaitable,
+    Callable as TypingCallable,
+    Dict,
+    Generic,
+    Iterable,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+    Type,
+    TypeVar,
+    Union,
+)
 
 # Third-party imports
 import numpy as np
@@ -149,12 +166,20 @@ __all__ = [
     "defaultdict",
     # Typing
     "Any",
+    "Awaitable",
     "Callable",
+    "TypingCallable",
     "Dict",
     "Generic",
+    "Iterable",
     "List",
     "Literal",
+    "Mapping",
     "Optional",
+    "Sequence",
+    "Set",
+    "Tuple",
+    "Type",
     "TypeVar",
     "Union",
     # Third-party

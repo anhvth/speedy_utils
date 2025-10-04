@@ -29,9 +29,7 @@ def dump_jsonl(list_dictionaries: list[dict], file_name: str = "output.jsonl") -
             file.write(json.dumps(dictionary, ensure_ascii=False) + "\n")
 
 
-def dump_json_or_pickle(
-    obj: Any, fname: str, ensure_ascii: bool = False, indent: int = 4
-) -> None:
+def dump_json_or_pickle(obj: Any, fname: str, ensure_ascii: bool = False, indent: int = 4) -> None:
     """
     Dump an object to a file, supporting both JSON and pickle formats.
     """
@@ -59,6 +57,7 @@ def dump_json_or_pickle(
             if isinstance(obj, BaseModel):
                 data = obj.model_dump()
                 from fastcore.all import dict2obj, obj2dict
+
                 obj2 = dict2obj(data)
                 with open(fname, "wb") as f:
                     pickle.dump(obj2, f)
@@ -84,14 +83,13 @@ def load_json_or_pickle(fname: str, counter=0) -> Any:
         except EOFError:
             time.sleep(1)
             if counter > 5:
-                print("Error: Ran out of input", fname)
+                # Keep message concise and actionable
+                print(f"Corrupted cache file {fname} removed; it will be regenerated on next access")
                 os.remove(fname)
                 raise
             return load_json_or_pickle(fname, counter + 1)
         except Exception as e:
             raise ValueError(f"Error {e} while loading {fname}") from e
-
-
 
 
 try:
@@ -113,11 +111,11 @@ def fast_load_jsonl(
     use_orjson: bool = True,
     encoding: str = "utf-8",
     errors: str = "strict",
-    on_error: str = "raise",   # 'raise' | 'warn' | 'skip'
+    on_error: str = "raise",  # 'raise' | 'warn' | 'skip'
     skip_empty: bool = True,
     max_lines: Optional[int] = None,
     use_multiworker: bool = True,
-    multiworker_threshold: int = 50000,
+    multiworker_threshold: int = 1000000,
     workers: Optional[int] = None,
 ) -> Iterable[Any]:
     """
@@ -127,7 +125,7 @@ def fast_load_jsonl(
     - Optional tqdm progress over bytes (compressed size if gz/bz2/xz/zst).
     - Auto-detects compression by extension: .gz, .bz2, .xz/.lzma, .zst/.zstd.
     - Uses orjson if available (use_orjson=True), falls back to json.
-    - Automatically uses multi-worker processing for large files (>50k lines).
+    - Automatically uses multi-worker processing for large files (>100k lines).
 
     Args:
         path_or_file: Path-like or file-like object. File-like can be binary or text.
@@ -140,11 +138,12 @@ def fast_load_jsonl(
         max_lines: Stop after reading this many lines (useful for sampling).
         use_multiworker: Enable multi-worker processing for large files.
         multiworker_threshold: Line count threshold to trigger multi-worker processing.
-        workers: Number of worker threads (defaults to CPU count).
+        workers: Number of worker threads (defaults to 80% of CPU count, max 8).
 
     Yields:
         Parsed Python objects per line.
     """
+
     def _open_auto(pth_or_f) -> IO[Any]:
         if hasattr(pth_or_f, "read"):
             # ensure binary buffer for consistent byte-length progress
@@ -206,39 +205,47 @@ def fast_load_jsonl(
 
     # Check if we should use multi-worker processing
     should_use_multiworker = (
-        use_multiworker 
+        use_multiworker
         and not hasattr(path_or_file, "read")  # Only for file paths, not file objects
         and max_lines is None  # Don't use multiworker if we're limiting lines
     )
-    
+
     if should_use_multiworker:
         line_count = _count_lines_fast(cast(Union[str, os.PathLike], path_or_file))
         if line_count > multiworker_threshold:
             # Use multi-worker processing
             from ..multi_worker.thread import multi_thread
 
+            # Calculate optimal worker count: 80% of CPU count, capped at 8
+            cpu_count = os.cpu_count() or 4
+            default_workers = min(int(cpu_count * 0.8), 8)
+            num_workers = workers if workers is not None else default_workers
+            num_workers = max(1, num_workers)  # At least 1 worker
+
             # Read all lines into chunks
             f = _open_auto(path_or_file)
             all_lines = list(f)
             f.close()
-            
-            # Split into chunks for workers
-            num_workers = workers or os.cpu_count() or 4
-            chunk_size = max(len(all_lines) // num_workers, 1000)
+
+            # Split into chunks - aim for ~10k-20k lines per chunk minimum
+            min_chunk_size = 10000
+            chunk_size = max(len(all_lines) // num_workers, min_chunk_size)
             chunks = []
             for i in range(0, len(all_lines), chunk_size):
-                chunks.append(all_lines[i:i + chunk_size])
-            
+                chunks.append(all_lines[i : i + chunk_size])
+
             # Process chunks in parallel
             if progress:
-                print(f"Processing {line_count} lines with {num_workers} workers...")
-            
+                print(f"Processing {line_count} lines with {num_workers} workers ({len(chunks)} chunks)...")
+
             chunk_results = multi_thread(_process_chunk, chunks, workers=num_workers, progress=progress)
-            
+
             # Flatten results and yield
-            for chunk_result in chunk_results:
-                for obj in chunk_result:
-                    yield obj
+            if chunk_results:
+                for chunk_result in chunk_results:
+                    if chunk_result:
+                        for obj in chunk_result:
+                            yield obj
             return
 
     # Single-threaded processing (original logic)
@@ -266,7 +273,11 @@ def fast_load_jsonl(
             line_no += 1
             if pbar is not None:
                 # raw_line is bytes here; if not, compute byte length
-                nbytes = len(raw_line) if isinstance(raw_line, (bytes, bytearray)) else len(str(raw_line).encode(encoding, errors))
+                nbytes = (
+                    len(raw_line)
+                    if isinstance(raw_line, (bytes, bytearray))
+                    else len(str(raw_line).encode(encoding, errors))
+                )
                 pbar.update(nbytes)
 
             # Normalize to bytes -> str only if needed
@@ -320,7 +331,6 @@ def fast_load_jsonl(
                 f.close()
             except Exception:
                 pass
-
 
 
 def load_by_ext(fname: Union[str, list[str]], do_memoize: bool = False) -> Any:

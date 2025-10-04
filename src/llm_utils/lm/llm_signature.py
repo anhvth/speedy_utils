@@ -9,7 +9,7 @@ import json
 from typing import Any, Dict, List, Optional, Type, Union
 from pydantic import BaseModel
 from ..chat_format import get_conversation_one_turn
-from .llm_task import LLM
+from .llm import LLM
 from .signature import Signature
 
 
