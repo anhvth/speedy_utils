@@ -124,6 +124,7 @@ from .common.utils_io import (
 # Misc utilities
 from .common.utils_misc import (
     convert_to_builtin_python,
+    dedup,
     flatten_list,
     get_arg_names,
     is_notebook,
@@ -214,6 +215,7 @@ __all__ = [
     "get_arg_names",
     "is_notebook",
     "convert_to_builtin_python",
+    "dedup",
     # Print utilities
     "display_pretty_table_html",
     "flatten_dict",

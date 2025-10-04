@@ -11,6 +11,7 @@ from .display import (
     show_string_diff,
     display_conversations,
     display_chat_messages_as_html,
+    show_chat_v2,
 )
 from .utils import (
     build_chatml_input,
@@ -31,4 +32,5 @@ __all__ = [
     "show_string_diff",
     "display_conversations",
     "display_chat_messages_as_html",
+    "show_chat_v2",
 ]

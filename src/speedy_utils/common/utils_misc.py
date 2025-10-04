@@ -3,9 +3,11 @@
 import inspect
 import os
 from collections.abc import Callable
-from typing import Any
+from typing import Any, TypeVar
 
 from pydantic import BaseModel
+
+T = TypeVar("T")
 
 
 def mkdir_or_exist(dir_name: str) -> None:
@@ -50,10 +52,32 @@ def convert_to_builtin_python(input_data: Any) -> Any:
         raise ValueError(f"Unsupported type {type(input_data)}")
 
 
+def dedup(items: list[T], key: Callable[[T], Any]) -> list[T]:
+    """
+    Deduplicate items in a list based on a key function.
+
+    Args:
+        items: The list of items.
+        key: A function that takes an item and returns a hashable key.
+
+    Returns:
+        A list with duplicates removed, preserving the first occurrence.
+    """
+    seen = set()
+    result = []
+    for item in items:
+        k = key(item)
+        if k not in seen:
+            seen.add(k)
+            result.append(item)
+    return result
+
+
 __all__ = [
     "mkdir_or_exist",
     "flatten_list",
     "get_arg_names",
     "is_notebook",
     "convert_to_builtin_python",
+    "dedup",
 ]

@@ -25,49 +25,49 @@ def _preprocess_as_markdown(content: str) -> str:
     Preprocess content as markdown with proper formatting.
     """
     # Basic markdown preprocessing - convert common patterns
-    lines = content.split('\n')
+    lines = content.split("\n")
     processed_lines = []
-    
+
     for line in lines:
         # Convert **bold** to span with bold styling
-        while '**' in line:
-            first_pos = line.find('**')
+        while "**" in line:
+            first_pos = line.find("**")
             if first_pos != -1:
-                second_pos = line.find('**', first_pos + 2)
+                second_pos = line.find("**", first_pos + 2)
                 if second_pos != -1:
                     before = line[:first_pos]
-                    bold_text = line[first_pos + 2:second_pos]
-                    after = line[second_pos + 2:]
+                    bold_text = line[first_pos + 2 : second_pos]
+                    after = line[second_pos + 2 :]
                     line = f'{before}<span style="font-weight: bold;">{bold_text}</span>{after}'
                 else:
                     break
             else:
                 break
-        
+
         # Convert *italic* to span with italic styling
-        while '*' in line and line.count('*') >= 2:
-            first_pos = line.find('*')
+        while "*" in line and line.count("*") >= 2:
+            first_pos = line.find("*")
             if first_pos != -1:
-                second_pos = line.find('*', first_pos + 1)
+                second_pos = line.find("*", first_pos + 1)
                 if second_pos != -1:
                     before = line[:first_pos]
-                    italic_text = line[first_pos + 1:second_pos]
-                    after = line[second_pos + 1:]
+                    italic_text = line[first_pos + 1 : second_pos]
+                    after = line[second_pos + 1 :]
                     line = f'{before}<span style="font-style: italic;">{italic_text}</span>{after}'
                 else:
                     break
             else:
                 break
-        
+
         # Convert # headers to bold headers
-        if line.strip().startswith('#'):
-            level = len(line) - len(line.lstrip('#'))
-            header_text = line.lstrip('# ').strip()
+        if line.strip().startswith("#"):
+            level = len(line) - len(line.lstrip("#"))
+            header_text = line.lstrip("# ").strip()
             line = f'<span style="font-weight: bold; font-size: 1.{min(4, level)}em;">{header_text}</span>'
-        
+
         processed_lines.append(line)
-    
-    return '\n'.join(processed_lines)
+
+    return "\n".join(processed_lines)
 
 
 def show_chat(
@@ -80,7 +80,7 @@ def show_chat(
 ) -> Optional[str]:
     """
     Display chat messages as HTML.
-    
+
     Args:
         msgs: Chat messages in various formats
         return_html: If True, return HTML string instead of displaying
@@ -148,13 +148,13 @@ def show_chat(
                 name = tool_call["name"]
                 args = tool_call["arguments"]
                 content += f"Tool: {name}\nArguments: {args}"
-        
+
         # Preprocess content based on format options
         if as_json:
             content = _preprocess_as_json(content)
         elif as_markdown:
             content = _preprocess_as_markdown(content)
-        
+
         # Handle HTML escaping differently for markdown vs regular content
         if as_markdown:
             # For markdown, preserve HTML tags but escape other characters carefully
@@ -168,10 +168,7 @@ def show_chat(
             content = content.replace("\t", "&nbsp;&nbsp;&nbsp;&nbsp;")
             content = content.replace("  ", "&nbsp;&nbsp;")
             content = (
-                content.replace("<br>", "TEMP_BR")
-                .replace("<", "&lt;")
-                .replace(">", "&gt;")
-                .replace("TEMP_BR", "<br>")
+                content.replace("<br>", "TEMP_BR").replace("<", "&lt;").replace(">", "&gt;").replace("TEMP_BR", "<br>")
             )
         if role in color_scheme:
             background_color = color_scheme[role]["background"]
@@ -179,11 +176,11 @@ def show_chat(
         else:
             background_color = color_scheme["default"]["background"]
             text_color = color_scheme["default"]["text"]
-        
+
         # Choose container based on whether we have markdown formatting
         content_container = "div" if as_markdown else "pre"
         container_style = 'style="white-space: pre-wrap;"' if as_markdown else ""
-        
+
         if role == "system":
             conversation_html += (
                 f'<div style="background-color: {background_color}; color: {text_color}; padding: 10px; margin-bottom: 10px;">'
@@ -264,9 +261,7 @@ def get_conversation_one_turn(
     if assistant_msg is not None:
         messages.append({"role": "assistant", "content": assistant_msg})
     if assistant_prefix is not None:
-        assert return_format != "chatml", (
-            'Change return_format to "text" if you want to use assistant_prefix'
-        )
+        assert return_format != "chatml", 'Change return_format to "text" if you want to use assistant_prefix'
         assert messages[-1]["role"] == "user"
         from .transform import transform_messages
 
@@ -291,21 +286,13 @@ def highlight_diff_chars(text1: str, text2: str) -> str:
             html.append(text1[i1:i2])
         elif tag == "replace":
             if i1 != i2:
-                html.append(
-                    f'<span style="background-color:#ffd6d6; color:#b20000;">{text1[i1:i2]}</span>'
-                )
+                html.append(f'<span style="background-color:#ffd6d6; color:#b20000;">{text1[i1:i2]}</span>')
             if j1 != j2:
-                html.append(
-                    f'<span style="background-color:#d6ffd6; color:#006600;">{text2[j1:j2]}</span>'
-                )
+                html.append(f'<span style="background-color:#d6ffd6; color:#006600;">{text2[j1:j2]}</span>')
         elif tag == "delete":
-            html.append(
-                f'<span style="background-color:#ffd6d6; color:#b20000;">{text1[i1:i2]}</span>'
-            )
+            html.append(f'<span style="background-color:#ffd6d6; color:#b20000;">{text1[i1:i2]}</span>')
         elif tag == "insert":
-            html.append(
-                f'<span style="background-color:#d6ffd6; color:#006600;">{text2[j1:j2]}</span>'
-            )
+            html.append(f'<span style="background-color:#d6ffd6; color:#006600;">{text2[j1:j2]}</span>')
     return "".join(html)
 
 
@@ -315,6 +302,90 @@ def show_string_diff(old: str, new: str) -> None:
     """
     html1 = highlight_diff_chars(old, new)
     display(HTML(html1))
+
+
+def show_chat_v2(messages: list[dict[str, str]]):
+    """
+    Print only content of messages in different colors:
+    system -> red, user -> orange, assistant -> green.
+    Automatically detects notebook environment and uses appropriate display.
+    """
+    # Detect if running in a notebook environment
+    try:
+        from IPython.core.getipython import get_ipython
+
+        ipython = get_ipython()
+        is_notebook = ipython is not None and "IPKernelApp" in ipython.config
+    except (ImportError, AttributeError):
+        is_notebook = False
+
+    if is_notebook:
+        # Use HTML display in notebook
+        from IPython.display import display, HTML
+
+        role_colors = {
+            "system": "red",
+            "user": "darkorange",
+            "assistant": "green",
+        }
+
+        role_labels = {
+            "system": "System Instruction:",
+            "user": "User:",
+            "assistant": "Assistant:",
+        }
+
+        html = "<div style='font-family:monospace; line-height:1.6em; white-space:pre-wrap;'>"
+        for i, msg in enumerate(messages):
+            role = msg.get("role", "unknown").lower()
+            content = msg.get("content", "")
+            # Escape HTML characters
+            content = (
+                content.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\n", "<br>")
+                .replace("\t", "&nbsp;&nbsp;&nbsp;&nbsp;")
+                .replace("  ", "&nbsp;&nbsp;")
+            )
+            color = role_colors.get(role, "black")
+            label = role_labels.get(role, f"{role.capitalize()}:")
+            html += f"<div style='color:{color}'><strong>{label}</strong><br>{content}</div>"
+            # Add separator except after last message
+            if i < len(messages) - 1:
+                html += (
+                    "<div style='color:#888; margin:0.5em 0;'>───────────────────────────────────────────────────</div>"
+                )
+        html += "</div>"
+
+        display(HTML(html))
+    else:
+        # Use normal terminal printing with ANSI colors
+        role_colors = {
+            "system": "\033[91m",  # Red
+            "user": "\033[38;5;208m",  # Orange
+            "assistant": "\033[92m",  # Green
+        }
+        reset = "\033[0m"
+        separator_color = "\033[90m"  # Gray
+        bold = "\033[1m"
+
+        role_labels = {
+            "system": "System Instruction:",
+            "user": "User:",
+            "assistant": "Assistant:",
+        }
+
+        for i, msg in enumerate(messages):
+            role = msg.get("role", "unknown").lower()
+            content = msg.get("content", "")
+            color = role_colors.get(role, "")
+            label = role_labels.get(role, f"{role.capitalize()}:")
+            print(f"{color}{bold}{label}{reset}")
+            print(f"{color}{content}{reset}")
+            # Add separator except after last message
+            if i < len(messages) - 1:
+                print(f"{separator_color}─────────────────────────────────────────────────────────{reset}")
 
 
 def display_conversations(data1: Any, data2: Any, theme: str = "light") -> None:
