@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+from time import sleep
 from typing import Any, Dict, List, Optional, Type, Union
 
 import requests
@@ -49,11 +50,14 @@ class TemperatureRangeMixin:
         for i in range(n):
             kwargs = dict(
                 temperature=min_temp + i * step,
+                i=i,
                 **runtime_kwargs,
             )
             list_kwargs.append(kwargs)
 
         def f(kwargs):
+            i = kwargs.pop("i")
+            sleep(i * 0.05)
             return self.__inner_call__(
                 input_data,
                 response_model=response_model,

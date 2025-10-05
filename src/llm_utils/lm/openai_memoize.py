@@ -42,13 +42,16 @@ class MOpenAI(OpenAI):
 
     def __init__(self, *args, cache=True, **kwargs):
         super().__init__(*args, **kwargs)
+        self._orig_post = self.post
         if cache:
-            # Create a memoized wrapper for the instance's post method.
-            # The memoize decorator now preserves exact type information,
-            # so no casting is needed.
-            orig_post = self.post
-            memoized = memoize(orig_post)
-            self.post = memoized
+            self.set_cache(cache)
+
+    def set_cache(self, cache: bool) -> None:
+        """Enable or disable caching of the post method."""
+        if cache and self.post == self._orig_post:
+            self.post = memoize(self._orig_post)  # type: ignore
+        elif not cache and self.post != self._orig_post:
+            self.post = self._orig_post
 
 
 class MAsyncOpenAI(AsyncOpenAI):
@@ -76,5 +79,13 @@ class MAsyncOpenAI(AsyncOpenAI):
 
     def __init__(self, *args, cache=True, **kwargs):
         super().__init__(*args, **kwargs)
+        self._orig_post = self.post
         if cache:
-            self.post = memoize(self.post) # type: ignore
+            self.set_cache(cache)
+
+    def set_cache(self, cache: bool) -> None:
+        """Enable or disable caching of the post method."""
+        if cache and self.post == self._orig_post:
+            self.post = memoize(self._orig_post)  # type: ignore
+        elif not cache and self.post != self._orig_post:
+            self.post = self._orig_post

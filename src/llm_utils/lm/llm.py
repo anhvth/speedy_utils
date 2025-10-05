@@ -77,6 +77,7 @@ class LLM(
         self.vllm_reuse = vllm_reuse
         self.vllm_process: Optional[subprocess.Popen] = None
         self.last_ai_response = None  # Store raw response from client
+        self.cache = cache
 
         # Handle VLLM server startup if vllm_cmd is provided
         if self.vllm_cmd:
@@ -258,7 +259,8 @@ class LLM(
         two_step_parse_pydantic: bool = False,
         temperature_ranges: Optional[tuple[float, float]] = None,
         n: int = 1,
-        **runtime_kwargs,
+        cache=None,
+        **openai_client_kwargs,
     ) -> List[Dict[str, Any]]:
         """
         Execute LLM task.
@@ -274,6 +276,11 @@ class LLM(
         Returns:
             List of response dictionaries
         """
+        if cache is not None:
+            if hasattr(self.client, "set_cache"):
+                self.client.set_cache(cache)
+            else:
+                logger.warning("Client does not support caching.")
         # Handle temperature range sampling
         if temperature_ranges is not None:
             if n < 2:
@@ -283,8 +290,9 @@ class LLM(
                 temperature_ranges=temperature_ranges,
                 n=n,
                 response_model=response_model,
-                **runtime_kwargs,
+                **openai_client_kwargs,
             )
+        openai_client_kwargs["n"] = n
 
         # Handle two-step Pydantic parsing
         pydantic_model = response_model or self.output_model
@@ -292,14 +300,14 @@ class LLM(
             choices = self.two_step_pydantic_parse(
                 input_data,
                 response_model=pydantic_model,
-                **runtime_kwargs,
+                **openai_client_kwargs,
             )
         else:
             choices = self.__inner_call__(
                 input_data,
                 response_model=response_model,
                 two_step_parse_pydantic=False,
-                **runtime_kwargs,
+                **openai_client_kwargs,
             )
 
         # Track conversation history
