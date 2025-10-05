@@ -1,6 +1,6 @@
 [project]
 name = "speedy-utils"
-version = "1.1.23"
+version = "1.1.24"
 description = "Fast and easy-to-use package for data science"
 authors = [{ name = "AnhVTH", email = "anhvth.226@gmail.com" }]
 readme = "README.md"
