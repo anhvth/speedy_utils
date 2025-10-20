@@ -1,7 +1,7 @@
 #!/bin/zsh
 # Bump patch version using poetry, commit, and push
 set -e
-
+uv pip install poetry
 echo 'Current version:'
 poetry version
 
