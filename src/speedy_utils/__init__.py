@@ -16,6 +16,7 @@
 # • timef(func) -> Callable - Function execution time decorator
 # • retry_runtime(sleep_seconds: int, max_retry: int, exceptions) -> Callable
 # • memoize(func) -> Callable - Function result caching decorator
+# • imemoize(func) -> Callable - In-memory caching decorator (global persistent)
 # • identify(obj: Any) -> str - Generate unique object identifier
 # • identify_uuid(obj: Any) -> str - Generate UUID-based object identifier
 # • load_by_ext(fname: Union[str, list[str]]) -> Any - Auto-detect file format loader
@@ -125,7 +126,7 @@ from .common.notebook_utils import (
 )
 
 # Cache utilities
-from .common.utils_cache import identify, identify_uuid, memoize
+from .common.utils_cache import identify, identify_uuid, imemoize, memoize
 
 # IO utilities
 from .common.utils_io import (
@@ -224,6 +225,7 @@ __all__ = [
     "retry_runtime",
     # Cache utilities
     "memoize",
+    "imemoize",
     "identify",
     "identify_uuid",
     # IO utilities

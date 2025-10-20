@@ -44,6 +44,9 @@ _MEM_CACHES: "weakref.WeakKeyDictionary[Callable[..., Any], cachetools.LRUCache]
     weakref.WeakKeyDictionary()
 )
 
+# Global memory cache for imemoize (persists across IPython reloads)
+_GLOBAL_MEMORY_CACHE: dict[str, Any] = {}
+
 # Backward-compat global symbol (internal only; not exported)
 LRU_MEM_CACHE = cachetools.LRUCache(maxsize=256)
 
@@ -680,4 +683,142 @@ def memoize(
         return decorator(_func)
 
 
-__all__ = ["memoize", "identify"]
+# --------------------------------------------------------------------------------------
+# In-memory memoize with global persistent cache
+# --------------------------------------------------------------------------------------
+
+
+@overload
+def imemoize(
+    _func: Callable[P, R],
+    *,
+    keys: Optional[list[str]] = ...,
+    key: Optional[Callable[..., Any]] = ...,
+    ignore_self: bool = ...,
+) -> Callable[P, R]: ...
+
+
+@overload
+def imemoize(
+    _func: Callable[P, Awaitable[R]],
+    *,
+    keys: Optional[list[str]] = ...,
+    key: Optional[Callable[..., Any]] = ...,
+    ignore_self: bool = ...,
+) -> Callable[P, Awaitable[R]]: ...
+
+
+@overload
+def imemoize(
+    _func: None = ...,
+    *,
+    keys: Optional[list[str]] = ...,
+    key: Optional[Callable[..., Any]] = ...,
+    ignore_self: bool = ...,
+) -> Callable[[Callable[P, R]], Callable[P, R]]: ...
+
+
+@overload
+def imemoize(  # type: ignore
+    _func: None = ...,
+    *,
+    keys: Optional[list[str]] = ...,
+    key: Optional[Callable[..., Any]] = ...,
+    ignore_self: bool = ...,
+) -> Callable[[Callable[P, Awaitable[R]]], Callable[P, Awaitable[R]]]: ...
+
+
+def imemoize(
+    _func: Optional[Callable[P, Any]] = None,
+    *,
+    keys: Optional[list[str]] = None,
+    key: Optional[Callable[..., Any]] = None,
+    ignore_self: bool = True,
+):
+    """
+    In-memory memoization decorator with global persistent cache.
+    
+    Unlike regular memoize, this uses a global memory cache that persists
+    across IPython %load executions. The cache key is based on the function's
+    source code combined with runtime arguments, making it suitable for
+    notebook environments where functions may be reloaded.
+    
+    Args:
+        keys: list of argument names to include in key (optional).
+        key: custom callable (*args, **kwargs) -> hashable for keying (optional).
+        ignore_self: ignore 'self' when building cache key for bound methods.
+    
+    Example:
+        @imemoize
+        def expensive_computation(x):
+            import time
+            time.sleep(2)
+            return x * x
+        
+        # First call computes and caches
+        result1 = expensive_computation(5)
+        
+        # Second call retrieves from memory cache
+        result2 = expensive_computation(5) 
+        
+        # Even after %load file.py in IPython, the cache persists
+    """
+    
+    def decorator(func: Callable[P, Any]) -> Callable[P, Any]:
+        is_async = inspect.iscoroutinefunction(func)
+        
+        if is_async:
+            @functools.wraps(func)
+            async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> Any:
+                # Compute cache key based on function source + args
+                func_source, sub_dir, key_id = _compute_cache_components(
+                    func, args, kwargs, ignore_self, keys, key
+                )
+                cache_key = identify((func_source, sub_dir, key_id))
+                
+                # Check global memory cache
+                with mem_lock:
+                    if cache_key in _GLOBAL_MEMORY_CACHE:
+                        return _GLOBAL_MEMORY_CACHE[cache_key]
+                
+                # Compute result and store in cache
+                result = await func(*args, **kwargs)
+                
+                with mem_lock:
+                    _GLOBAL_MEMORY_CACHE[cache_key] = result
+                
+                return result
+            
+            return async_wrapper
+        else:
+            @functools.wraps(func)
+            def sync_wrapper(*args: P.args, **kwargs: P.kwargs) -> Any:
+                # Compute cache key based on function source + args
+                func_source, sub_dir, key_id = _compute_cache_components(
+                    func, args, kwargs, ignore_self, keys, key
+                )
+                cache_key = identify((func_source, sub_dir, key_id))
+                
+                # Check global memory cache
+                with mem_lock:
+                    if cache_key in _GLOBAL_MEMORY_CACHE:
+                        return _GLOBAL_MEMORY_CACHE[cache_key]
+                
+                # Compute result and store in cache
+                result = func(*args, **kwargs)
+                
+                with mem_lock:
+                    _GLOBAL_MEMORY_CACHE[cache_key] = result
+                
+                return result
+            
+            return sync_wrapper
+    
+    # Support both @imemoize and @imemoize(...)
+    if _func is None:
+        return decorator
+    else:
+        return decorator(_func)
+
+
+__all__ = ["memoize", "imemoize", "identify"]
