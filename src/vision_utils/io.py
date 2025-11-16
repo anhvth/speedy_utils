@@ -13,7 +13,8 @@ except ImportError:  # pragma: no cover - tqdm is optional
 
 
 try:
-    from nvidia.dali import fn, pipeline_def, types as dali_types
+    from nvidia.dali import fn, pipeline_def
+    from nvidia.dali import types as dali_types
 
     _DALI_AVAILABLE = True
     _DALI_IMPORT_ERROR = None

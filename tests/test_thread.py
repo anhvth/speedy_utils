@@ -4,14 +4,14 @@ import time
 
 import pytest
 
+import speedy_utils.multi_worker.thread as thread_mod
 from speedy_utils.multi_worker.thread import (
     SPEEDY_RUNNING_THREADS,
-    kill_all_thread,
     _prune_dead_threads,
+    kill_all_thread,
     multi_thread,
     multi_thread_standard,
 )
-import speedy_utils.multi_worker.thread as thread_mod
 
 
 # ────────────────────────────────────────────────────────────
@@ -172,11 +172,11 @@ def test_kill_all_thread_interrupts_sleepy_workers():
                 prefetch_factor=1,
             )
         except SystemExit:
-            outcome['system_exit'] = True
+            outcome["system_exit"] = True
         except Exception as exc:  # pragma: no cover - diagnostic safety net
-            outcome['exception'] = exc
+            outcome["exception"] = exc
         else:
-            outcome['completed'] = True
+            outcome["completed"] = True
 
     runner = threading.Thread(target=run_pool, daemon=True)
     runner.start()
@@ -185,7 +185,7 @@ def test_kill_all_thread_interrupts_sleepy_workers():
     while not SPEEDY_RUNNING_THREADS and time.time() - start < 1.0:
         time.sleep(0.01)
 
-    assert SPEEDY_RUNNING_THREADS, 'expected worker threads to be active'
+    assert SPEEDY_RUNNING_THREADS, "expected worker threads to be active"
 
     killed = kill_all_thread()
     runner.join(timeout=2.0)
@@ -193,12 +193,12 @@ def test_kill_all_thread_interrupts_sleepy_workers():
     time.sleep(0.05)
     _prune_dead_threads()
 
-    assert killed > 0, 'kill_all_thread should signal at least one worker'
-    assert not runner.is_alive(), 'background multi_thread should have stopped'
-    assert not SPEEDY_RUNNING_THREADS, 'all tracked threads must be cleared'
-    unexpected = outcome.get('exception')
-    assert unexpected is None, f'unexpected exception: {unexpected}'
-    assert outcome.get('system_exit') or outcome.get('completed')
+    assert killed > 0, "kill_all_thread should signal at least one worker"
+    assert not runner.is_alive(), "background multi_thread should have stopped"
+    assert not SPEEDY_RUNNING_THREADS, "all tracked threads must be cleared"
+    unexpected = outcome.get("exception")
+    assert unexpected is None, f"unexpected exception: {unexpected}"
+    assert outcome.get("system_exit") or outcome.get("completed")
 
 
 def test_keyboard_interrupt_cancels_immediately(monkeypatch):
@@ -213,11 +213,11 @@ def test_keyboard_interrupt_cancels_immediately(monkeypatch):
     kill_calls: dict[str, int] = {}
 
     def wrapped_kill(exc_type=SystemExit, join_timeout=0.1):
-        kill_calls['count'] = kill_calls.get('count', 0) + 1
+        kill_calls["count"] = kill_calls.get("count", 0) + 1
         return real_kill(exc_type, join_timeout)
 
-    monkeypatch.setattr(thread_mod, 'wait', fake_wait)
-    monkeypatch.setattr(thread_mod, 'kill_all_thread', wrapped_kill)
+    monkeypatch.setattr(thread_mod, "wait", fake_wait)
+    monkeypatch.setattr(thread_mod, "kill_all_thread", wrapped_kill)
 
     with pytest.raises(KeyboardInterrupt):
         multi_thread(
@@ -227,8 +227,8 @@ def test_keyboard_interrupt_cancels_immediately(monkeypatch):
             progress=False,
         )
 
-    monkeypatch.setattr(thread_mod, 'wait', real_wait)
-    monkeypatch.setattr(thread_mod, 'kill_all_thread', real_kill)
+    monkeypatch.setattr(thread_mod, "wait", real_wait)
+    monkeypatch.setattr(thread_mod, "kill_all_thread", real_kill)
 
     for _ in range(50):
         _prune_dead_threads()
@@ -236,7 +236,7 @@ def test_keyboard_interrupt_cancels_immediately(monkeypatch):
             break
         time.sleep(0.02)
 
-    assert kill_calls.get('count') == 1
+    assert kill_calls.get("count") == 1
     assert not SPEEDY_RUNNING_THREADS
 
 

@@ -1,15 +1,14 @@
 import os
-import signal
-import time
-from typing import Any, List, Optional, cast
-
-from loguru import logger
-
 
 # Additional imports for VLLM utilities
 import re
+import signal
 import subprocess
+import time
+from typing import Any, List, Optional, cast
+
 import requests
+from loguru import logger
 from openai import OpenAI
 
 try:
@@ -19,7 +18,9 @@ try:
 except ImportError:
     HAS_PSUTIL = False
     psutil = cast(Any, None)
-    logger.warning("psutil not available. Some VLLM process management features may be limited.")
+    logger.warning(
+        "psutil not available. Some VLLM process management features may be limited."
+    )
 
 # Global tracking of VLLM processes
 _VLLM_PROCESSES: List[subprocess.Popen] = []
@@ -97,7 +98,12 @@ def _start_vllm_server(vllm_cmd: str, timeout: int = 120) -> subprocess.Popen:
 
     with open(f"/tmp/vllm_{port}.txt", "a") as log_file:
         process = subprocess.Popen(
-            cleaned_cmd.split(), stdout=log_file, stderr=subprocess.STDOUT, text=True, preexec_fn=os.setsid, env=env
+            cleaned_cmd.split(),
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            text=True,
+            preexec_fn=os.setsid,
+            env=env,
         )
 
     _VLLM_PROCESSES.append(process)
@@ -147,7 +153,9 @@ def _kill_vllm_on_port(port: int) -> bool:
                         proc = psutil.Process(process.pid)
                         cmdline = " ".join(proc.cmdline())
                         if f"--port {port}" in cmdline or f"--port={port}" in cmdline:
-                            logger.info(f"Killing tracked VLLM process {process.pid} on port {port}")
+                            logger.info(
+                                f"Killing tracked VLLM process {process.pid} on port {port}"
+                            )
                             os.killpg(os.getpgid(process.pid), signal.SIGTERM)
                             try:
                                 process.wait(timeout=5)
@@ -187,8 +195,12 @@ def _kill_vllm_on_port(port: int) -> bool:
             for proc in psutil.process_iter(["pid", "cmdline"]):
                 try:
                     cmdline = " ".join(proc.info["cmdline"] or [])
-                    if "vllm" in cmdline.lower() and (f"--port {port}" in cmdline or f"--port={port}" in cmdline):
-                        logger.info(f"Killing untracked VLLM process {proc.info['pid']} on port {port}")
+                    if "vllm" in cmdline.lower() and (
+                        f"--port {port}" in cmdline or f"--port={port}" in cmdline
+                    ):
+                        logger.info(
+                            f"Killing untracked VLLM process {proc.info['pid']} on port {port}"
+                        )
                         proc.terminate()
                         try:
                             proc.wait(timeout=5)
@@ -255,7 +267,9 @@ def _is_server_running(port: int) -> bool:
         return False
 
 
-def get_base_client(client=None, cache: bool = True, api_key="abc", vllm_cmd=None, vllm_process=None) -> OpenAI:
+def get_base_client(
+    client=None, cache: bool = True, api_key="abc", vllm_cmd=None, vllm_process=None
+) -> OpenAI:
     """Get OpenAI client from various inputs."""
     from llm_utils import MOpenAI
 
@@ -264,17 +278,23 @@ def get_base_client(client=None, cache: bool = True, api_key="abc", vllm_cmd=Non
             # Parse environment variables from command to get clean command for port extraction
             _, cleaned_cmd = _parse_env_vars_from_cmd(vllm_cmd)
             port = _extract_port_from_vllm_cmd(cleaned_cmd)
-            return MOpenAI(base_url=f"http://localhost:{port}/v1", api_key=api_key, cache=cache)
+            return MOpenAI(
+                base_url=f"http://localhost:{port}/v1", api_key=api_key, cache=cache
+            )
         else:
             raise ValueError("Either client or vllm_cmd must be provided.")
     elif isinstance(client, int):
-        return MOpenAI(base_url=f"http://localhost:{client}/v1", api_key=api_key, cache=cache)
+        return MOpenAI(
+            base_url=f"http://localhost:{client}/v1", api_key=api_key, cache=cache
+        )
     elif isinstance(client, str):
         return MOpenAI(base_url=client, api_key=api_key, cache=cache)
     elif isinstance(client, OpenAI):
         return MOpenAI(base_url=client.base_url, api_key=api_key, cache=cache)
     else:
-        raise ValueError("Invalid client type. Must be OpenAI, port (int), base_url (str), or None.")
+        raise ValueError(
+            "Invalid client type. Must be OpenAI, port (int), base_url (str), or None."
+        )
 
 
 def _is_lora_path(path: str) -> bool:

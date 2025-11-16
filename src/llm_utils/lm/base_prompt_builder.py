@@ -4,14 +4,12 @@
 Simplified LLM Task module for handling language model interactions with structured input/output.
 """
 
-from typing import Any, Dict, List, Optional, Type, Union, cast
+from abc import ABC, abstractmethod
+from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union, cast
 
 from openai import OpenAI
 from openai.types.chat import ChatCompletionMessageParam
-from pydantic import BaseModel
-from pydantic import create_model
-from typing import Callable, Tuple
-from abc import ABC, abstractmethod
+from pydantic import BaseModel, create_model
 
 # Type aliases for better readability
 Messages = List[ChatCompletionMessageParam]
@@ -54,7 +52,9 @@ class BasePromptBuilder(BaseModel, ABC):
     # ------------------------------------------------------------------ #
     # Auto-build models from keys
     # ------------------------------------------------------------------ #
-    def _build_model_from_keys(self, keys: Union[List[str], List[Union[str, Tuple[str, str]]]], name: str) -> Type[BaseModel]:
+    def _build_model_from_keys(
+        self, keys: Union[List[str], List[Union[str, Tuple[str, str]]]], name: str
+    ) -> Type[BaseModel]:
         fields: Dict[str, tuple[Any, Any]] = {}
         for key in keys:
             if isinstance(key, tuple):
@@ -63,7 +63,11 @@ class BasePromptBuilder(BaseModel, ABC):
                 if original_key not in self.model_fields:
                     raise ValueError(f"Key '{original_key}' not found in model fields")
                 field_info = self.model_fields[original_key]
-                field_type = field_info.annotation if field_info.annotation is not None else (Any,)
+                field_type = (
+                    field_info.annotation
+                    if field_info.annotation is not None
+                    else (Any,)
+                )
                 default = field_info.default if field_info.default is not None else ...
                 fields[renamed_key] = (field_type, default)
             else:
@@ -71,7 +75,11 @@ class BasePromptBuilder(BaseModel, ABC):
                 if key not in self.model_fields:
                     raise ValueError(f"Key '{key}' not found in model fields")
                 field_info = self.model_fields[key]
-                field_type = field_info.annotation if field_info.annotation is not None else (Any,)
+                field_type = (
+                    field_info.annotation
+                    if field_info.annotation is not None
+                    else (Any,)
+                )
                 default = field_info.default if field_info.default is not None else ...
                 fields[key] = (field_type, default)
         return create_model(name, **fields)  # type: ignore
@@ -87,12 +95,17 @@ class BasePromptBuilder(BaseModel, ABC):
     # ------------------------------------------------------------------ #
     # Dump methods (JSON)
     # ------------------------------------------------------------------ #
-    def _dump_json_unique(self, schema_model: Type[BaseModel], keys: Union[List[str], List[Union[str, Tuple[str, str]]]], **kwargs) -> str:
+    def _dump_json_unique(
+        self,
+        schema_model: Type[BaseModel],
+        keys: Union[List[str], List[Union[str, Tuple[str, str]]]],
+        **kwargs,
+    ) -> str:
         allowed = list(schema_model.model_fields.keys())
         seen = set()
         unique_keys = [k for k in allowed if not (k in seen or seen.add(k))]
         data = self.model_dump()
-        
+
         # Handle key mapping for renamed fields
         filtered = {}
         for key in keys:
@@ -103,7 +116,7 @@ class BasePromptBuilder(BaseModel, ABC):
             else:
                 if key in data and key in unique_keys:
                     filtered[key] = data[key]
-                    
+
         return schema_model(**filtered).model_dump_json(**kwargs)
 
     def model_dump_json_input(self, **kwargs) -> str:
@@ -117,20 +130,22 @@ class BasePromptBuilder(BaseModel, ABC):
     # ------------------------------------------------------------------ #
     # Markdown helpers
     # ------------------------------------------------------------------ #
-    def _to_markdown(self, obj: Any, level: int = 1, title: Optional[str] = None) -> str:
+    def _to_markdown(
+        self, obj: Any, level: int = 1, title: Optional[str] = None
+    ) -> str:
         """
         Recursively convert dict/list/primitive into clean, generic Markdown.
         """
         md: List[str] = []
-        
+
         # Format title if provided
         if title is not None:
-            formatted_title = title.replace('_', ' ').title()
+            formatted_title = title.replace("_", " ").title()
             if level <= 2:
                 md.append(f"{'#' * level} {formatted_title}")
             else:
                 md.append(f"**{formatted_title}:**")
-        
+
         if isinstance(obj, dict):
             if not obj:  # Empty dict
                 md.append("None")
@@ -138,7 +153,7 @@ class BasePromptBuilder(BaseModel, ABC):
                 for k, v in obj.items():
                     if isinstance(v, (str, int, float, bool)) and len(str(v)) < 100:
                         # Short values inline
-                        key_name = k.replace('_', ' ').title()
+                        key_name = k.replace("_", " ").title()
                         if level <= 2:
                             md.append(f"**{key_name}:** {v}")
                         else:
@@ -158,7 +173,7 @@ class BasePromptBuilder(BaseModel, ABC):
                         md.append(f"**{title or 'Item'} {i}:**")
                     # Process dict items inline for cleaner output
                     for k, v in item.items():
-                        key_name = k.replace('_', ' ').title()
+                        key_name = k.replace("_", " ").title()
                         md.append(f"- **{key_name}:** {v}")
                     if i < len(obj):  # Add spacing between items
                         md.append("")
@@ -176,7 +191,9 @@ class BasePromptBuilder(BaseModel, ABC):
 
         return "\n".join(md)
 
-    def _dump_markdown_unique(self, keys: Union[List[str], List[Union[str, Tuple[str, str]]]]) -> str:
+    def _dump_markdown_unique(
+        self, keys: Union[List[str], List[Union[str, Tuple[str, str]]]]
+    ) -> str:
         data = self.model_dump()
         filtered: Dict[str, Any] = {}
         for key in keys:
@@ -187,19 +204,19 @@ class BasePromptBuilder(BaseModel, ABC):
             else:
                 if key in data:
                     filtered[key] = data[key]
-        
+
         # Generate markdown without top-level headers to avoid duplication
         parts = []
         for key, value in filtered.items():
             if value is None:
                 continue
-            formatted_key = key.replace('_', ' ').title()
+            formatted_key = key.replace("_", " ").title()
             if isinstance(value, (str, int, float, bool)) and len(str(value)) < 200:
                 parts.append(f"**{formatted_key}:** {value}")
             else:
                 parts.append(self._to_markdown(value, level=2, title=key))
-        
-        return '\n'.join(parts)
+
+        return "\n".join(parts)
 
     def model_dump_markdown_input(self) -> str:
         input_keys, _ = self.get_io_keys()
@@ -221,15 +238,21 @@ class BasePromptBuilder(BaseModel, ABC):
             return {
                 "messages": [
                     {"role": "system", "content": self.get_instruction()},
-                    {"role": "user", "content": self.model_dump_json_input(indent=indent)},
-                    {"role": "assistant", "content": self.model_dump_json_output(indent=indent)},
+                    {
+                        "role": "user",
+                        "content": self.model_dump_json_input(indent=indent),
+                    },
+                    {
+                        "role": "assistant",
+                        "content": self.model_dump_json_output(indent=indent),
+                    },
                 ]
             }
         elif format == "markdown":
             system_content = self.get_instruction()
-            
+
             return {
-                'messages': [
+                "messages": [
                     {"role": "system", "content": system_content},
                     {"role": "user", "content": self.model_dump_markdown_input()},
                     {"role": "assistant", "content": self.model_dump_markdown_output()},
@@ -240,25 +263,25 @@ class BasePromptBuilder(BaseModel, ABC):
     def __str__(self) -> str:
         # Return clean format without explicit role prefixes
         training_data = self.build_training_data(format="markdown")
-        messages = training_data['messages']  # type: ignore[index]
-        
+        messages = training_data["messages"]  # type: ignore[index]
+
         parts = []
         for msg in messages:
-            content = msg['content']
-            if msg['role'] == 'system':
+            content = msg["content"]
+            if msg["role"] == "system":
                 parts.append(content)
-            elif msg['role'] == 'user':
+            elif msg["role"] == "user":
                 parts.append(content)
-            elif msg['role'] == 'assistant':
+            elif msg["role"] == "assistant":
                 # Get output keys to determine the main output field name
                 _, output_keys = self.get_io_keys()
-                main_output = output_keys[0] if output_keys else 'response'
+                main_output = output_keys[0] if output_keys else "response"
                 if isinstance(main_output, tuple):
                     main_output = main_output[1]  # Use renamed key
-                title = main_output.replace('_', ' ').title()
+                title = main_output.replace("_", " ").title()
                 parts.append(f"## {title}\n{content}")
-        
-        return '\n\n'.join(parts)
+
+        return "\n\n".join(parts)
 
     @classmethod
     def from_messages(cls: Type[B], messages: list[dict]) -> B:
@@ -266,7 +289,9 @@ class BasePromptBuilder(BaseModel, ABC):
         Reconstruct a prompt builder instance from OpenAI-style messages.
         """
         user_msg = next((m for m in messages if m.get("role") == "user"), None)
-        assistant_msg = next((m for m in messages if m.get("role") == "assistant"), None)
+        assistant_msg = next(
+            (m for m in messages if m.get("role") == "assistant"), None
+        )
 
         if user_msg is None:
             raise ValueError("No user message found")
@@ -285,4 +310,3 @@ class BasePromptBuilder(BaseModel, ABC):
 
         combined_data = {**user_data, **assistant_data}
         return cast(B, cls(**combined_data))
-

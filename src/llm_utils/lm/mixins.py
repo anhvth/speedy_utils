@@ -112,11 +112,15 @@ class TwoStepPydanticMixin:
                 _parsed_messages = [
                     {
                         "role": "system",
-                        "content": ("You are a helpful assistant that extracts JSON from text."),
+                        "content": (
+                            "You are a helpful assistant that extracts JSON from text."
+                        ),
                     },
                     {
                         "role": "user",
-                        "content": (f"Extract JSON from the following text:\n{response_text}"),
+                        "content": (
+                            f"Extract JSON from the following text:\n{response_text}"
+                        ),
                     },
                 ]
                 parsed_result = self.pydantic_parse(
@@ -169,7 +173,9 @@ class VLLMMixin:
                         f"VLLM server already running on port {port}, reusing existing server (vllm_reuse=True)"
                     )
                 else:
-                    logger.info(f"No models returned from VLLM server on port {port}; starting a new server")
+                    logger.info(
+                        f"No models returned from VLLM server on port {port}; starting a new server"
+                    )
             except Exception as exc:
                 logger.info(
                     f"Unable to reach VLLM server on port {port} (list_models failed): {exc}. Starting a new server."
@@ -177,7 +183,9 @@ class VLLMMixin:
 
         if not self.vllm_reuse:
             if _is_server_running(port):
-                logger.info(f"VLLM server already running on port {port}, killing it first (vllm_reuse=False)")
+                logger.info(
+                    f"VLLM server already running on port {port}, killing it first (vllm_reuse=False)"
+                )
                 _kill_vllm_on_port(port)
             logger.info(f"Starting new VLLM server on port {port}")
             self.vllm_process = _start_vllm_server(self.vllm_cmd, self.vllm_timeout)
@@ -195,8 +203,8 @@ class VLLMMixin:
         3. Loads the LoRA adapter and updates the model name
         """
         from .utils import (
-            _is_lora_path,
             _get_port_from_client,
+            _is_lora_path,
             _load_lora_adapter,
         )
 
@@ -204,7 +212,9 @@ class VLLMMixin:
             return
 
         if not _is_lora_path(self.lora_path):
-            raise ValueError(f"Invalid LoRA path '{self.lora_path}': Directory must contain 'adapter_config.json'")
+            raise ValueError(
+                f"Invalid LoRA path '{self.lora_path}': Directory must contain 'adapter_config.json'"
+            )
 
         logger.info(f"Loading LoRA adapter from: {self.lora_path}")
 
@@ -217,12 +227,16 @@ class VLLMMixin:
         try:
             available_models = [m.id for m in self.client.models.list().data]
         except Exception as e:
-            logger.warning(f"Failed to list models, proceeding with LoRA load: {str(e)[:100]}")
+            logger.warning(
+                f"Failed to list models, proceeding with LoRA load: {str(e)[:100]}"
+            )
             available_models = []
 
         # Check if LoRA is already loaded
         if lora_name in available_models and not self.force_lora_unload:
-            logger.info(f"LoRA adapter '{lora_name}' is already loaded, using existing model")
+            logger.info(
+                f"LoRA adapter '{lora_name}' is already loaded, using existing model"
+            )
             self.model_kwargs["model"] = lora_name
             return
 
@@ -258,18 +272,24 @@ class VLLMMixin:
             # Check if error is due to LoRA already being loaded
             error_msg = str(e)
             if "400" in error_msg or "Bad Request" in error_msg:
-                logger.info(f"LoRA adapter may already be loaded, attempting to use '{lora_name}'")
+                logger.info(
+                    f"LoRA adapter may already be loaded, attempting to use '{lora_name}'"
+                )
                 # Refresh the model list to check if it's now available
                 try:
                     updated_models = [m.id for m in self.client.models.list().data]
                     if lora_name in updated_models:
-                        logger.info(f"Found LoRA adapter '{lora_name}' in updated model list")
+                        logger.info(
+                            f"Found LoRA adapter '{lora_name}' in updated model list"
+                        )
                         self.model_kwargs["model"] = lora_name
                         return
                 except Exception:
                     pass  # Fall through to original error
 
-            raise ValueError(f"Failed to load LoRA adapter from '{self.lora_path}': {error_msg[:100]}")
+            raise ValueError(
+                f"Failed to load LoRA adapter from '{self.lora_path}': {error_msg[:100]}"
+            )
 
     def unload_lora_adapter(self, lora_path: str) -> None:
         """

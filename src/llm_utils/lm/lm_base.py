@@ -56,24 +56,24 @@ class LMBase:
         if self.ports and self.base_url:
             import random
             import re
-            
+
             port = random.choice(self.ports)
             # Replace port in base_url if it exists
-            base_url_pattern = r'(https?://[^:/]+):?\d*(/.*)?'
+            base_url_pattern = r"(https?://[^:/]+):?\d*(/.*)?"
             match = re.match(base_url_pattern, self.base_url)
             if match:
                 host_part = match.group(1)
-                path_part = match.group(2) or '/v1'
+                path_part = match.group(2) or "/v1"
                 api_base = f"{host_part}:{port}{path_part}"
             else:
                 api_base = self.base_url
             logger.debug(f"Using port: {port}")
         else:
             api_base = self.base_url
-            
+
         if api_base is None:
             raise ValueError("base_url must be provided")
-            
+
         client = MOpenAI(
             api_key=self.api_key,
             base_url=api_base,
@@ -246,18 +246,18 @@ class LMBase:
     def inspect_history(self):
         """Inspect the history of the LLM calls."""
         pass
-    
 
-def get_model_name(client: OpenAI|str|int) -> str:
+
+def get_model_name(client: OpenAI | str | int) -> str:
     """
     Get the first available model name from the client.
-    
+
     Args:
         client: OpenAI client, base_url string, or port number
-        
+
     Returns:
         Name of the first available model
-        
+
     Raises:
         ValueError: If no models are available or client is invalid
     """
@@ -266,20 +266,20 @@ def get_model_name(client: OpenAI|str|int) -> str:
             openai_client = client
         elif isinstance(client, str):
             # String base_url
-            openai_client = OpenAI(base_url=client, api_key='abc')
+            openai_client = OpenAI(base_url=client, api_key="abc")
         elif isinstance(client, int):
             # Port number
             base_url = f"http://localhost:{client}/v1"
-            openai_client = OpenAI(base_url=base_url, api_key='abc')
+            openai_client = OpenAI(base_url=base_url, api_key="abc")
         else:
             raise ValueError(f"Unsupported client type: {type(client)}")
-            
+
         models = openai_client.models.list()
         if not models.data:
             raise ValueError("No models available")
-            
+
         return models.data[0].id
-        
+
     except Exception as exc:
         logger.error(f"Failed to get model name: {exc}")
         raise ValueError(f"Could not retrieve model name: {exc}") from exc

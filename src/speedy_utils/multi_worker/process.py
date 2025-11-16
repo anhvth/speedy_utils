@@ -15,6 +15,7 @@ from tqdm import tqdm
 ray: Any
 try:
     import ray as ray  # type: ignore
+
     _HAS_RAY = True
 except Exception:  # pragma: no cover
     ray = None  # type: ignore
@@ -31,7 +32,9 @@ _SPEEDY_PROCESSES_LOCK = threading.Lock()
 def _prune_dead_processes() -> None:
     """Remove dead processes from tracking list."""
     with _SPEEDY_PROCESSES_LOCK:
-        SPEEDY_RUNNING_PROCESSES[:] = [p for p in SPEEDY_RUNNING_PROCESSES if p.is_running()]
+        SPEEDY_RUNNING_PROCESSES[:] = [
+            p for p in SPEEDY_RUNNING_PROCESSES if p.is_running()
+        ]
 
 
 def _track_processes(processes: list[psutil.Process]) -> None:
@@ -60,7 +63,7 @@ def _track_ray_processes() -> None:
         ray_processes = []
         for child in parent.children(recursive=True):
             try:
-                if 'ray' in child.name().lower() or 'worker' in child.name().lower():
+                if "ray" in child.name().lower() or "worker" in child.name().lower():
                     ray_processes.append(child)
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
@@ -80,7 +83,9 @@ def _track_multiprocessing_processes() -> None:
         for child in parent.children(recursive=False):  # Only direct children
             try:
                 # Basic heuristic: if it's a recent child process, it might be a worker
-                if time.time() - child.create_time() < 5:  # Created within last 5 seconds
+                if (
+                    time.time() - child.create_time() < 5
+                ):  # Created within last 5 seconds
                     new_processes.append(child)
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
@@ -244,21 +249,26 @@ def multi_process(
         if backend == "safe":
             # Completely safe backend for tests - no multiprocessing, no external progress bars
             import concurrent.futures
+
             # Import thread tracking from thread module
             try:
-                from .thread import _track_executor_threads, _prune_dead_threads
-                with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+                from .thread import _prune_dead_threads, _track_executor_threads
+
+                with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=workers
+                ) as executor:
                     _track_executor_threads(executor)  # Track threads
                     results = list(executor.map(f_wrapped, items))
                 _prune_dead_threads()  # Clean up dead threads
             except ImportError:
                 # Fallback if thread module not available
-                with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+                with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=workers
+                ) as executor:
                     results = list(executor.map(f_wrapped, items))
             return results
-        
-        raise ValueError(f"Unsupported backend: {backend!r}")
 
+        raise ValueError(f"Unsupported backend: {backend!r}")
 
 
 def cleanup_phantom_workers():
@@ -270,7 +280,9 @@ def cleanup_phantom_workers():
     _prune_dead_processes()
     killed_processes = 0
     with _SPEEDY_PROCESSES_LOCK:
-        for process in SPEEDY_RUNNING_PROCESSES[:]:  # Copy to avoid modification during iteration
+        for process in SPEEDY_RUNNING_PROCESSES[
+            :
+        ]:  # Copy to avoid modification during iteration
             try:
                 print(f"🔪 Killing tracked process {process.pid} ({process.name()})")
                 process.kill()
@@ -278,7 +290,7 @@ def cleanup_phantom_workers():
             except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
                 print(f"⚠️ Could not kill process {process.pid}: {e}")
         SPEEDY_RUNNING_PROCESSES.clear()
-    
+
     # Also kill any remaining child processes (fallback)
     parent = psutil.Process(os.getpid())
     for child in parent.children(recursive=True):
@@ -287,10 +299,11 @@ def cleanup_phantom_workers():
             child.kill()
         except psutil.NoSuchProcess:
             pass
-    
+
     # Try to clean up threads using thread module functions if available
     try:
-        from .thread import SPEEDY_RUNNING_THREADS, kill_all_thread, _prune_dead_threads
+        from .thread import SPEEDY_RUNNING_THREADS, _prune_dead_threads, kill_all_thread
+
         _prune_dead_threads()
         killed_threads = kill_all_thread()
         if killed_threads > 0:
@@ -302,8 +315,11 @@ def cleanup_phantom_workers():
                 continue
             if not t.daemon:
                 print(f"⚠️ Thread {t.name} is still running (cannot be force-killed).")
-    
-    print(f"✅ Cleaned up {killed_processes} tracked processes and child processes (kernel untouched).")
+
+    print(
+        f"✅ Cleaned up {killed_processes} tracked processes and child processes (kernel untouched)."
+    )
+
 
 # Usage: run this anytime after cancelling a cell
 
@@ -313,4 +329,3 @@ __all__ = [
     "multi_process",
     "cleanup_phantom_workers",
 ]
-

@@ -1,5 +1,6 @@
-from openai import OpenAI, AsyncOpenAI
 from typing import Any, Callable
+
+from openai import AsyncOpenAI, OpenAI
 
 from speedy_utils.common.utils_cache import memoize
 

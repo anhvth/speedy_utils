@@ -49,16 +49,16 @@ def test_process_update_interval():
 
 def test_worker_error_handling():
     """Test error handling in the worker process."""
-    # Since stop_on_error is not implemented for safe backend, 
+    # Since stop_on_error is not implemented for safe backend,
     # we test that errors are properly raised
-    
+
     # Test with a smaller set that should fail
     try:
         result = multi_process(failing_function, [5], backend="safe")
         assert False, "Expected ValueError to be raised"
     except ValueError as e:
         assert "Test error" in str(e)
-    
+
     # Test with a set that should succeed
     result = multi_process(failing_function, [1, 2, 3, 4], backend="safe")
     assert result == [1, 2, 3, 4]

@@ -1,6 +1,7 @@
 """Type definitions for the embed_cache package."""
 
-from typing import List, Dict, Any, Union, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
+
 import numpy as np
 from numpy.typing import NDArray
 

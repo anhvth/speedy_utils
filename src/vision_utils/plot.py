@@ -1,8 +1,10 @@
-from typing import Union, List, Optional, Tuple, Any
+from typing import Any, List, Optional, Tuple, Union
+
 import numpy as np
 
 try:
     import torch
+
     TORCH_AVAILABLE = True
 except ImportError:
     torch = None  # type: ignore
@@ -10,6 +12,7 @@ except ImportError:
 
 try:
     import matplotlib.pyplot as plt
+
     MATPLOTLIB_AVAILABLE = True
 except ImportError:
     plt = None  # type: ignore
@@ -24,15 +27,15 @@ def _to_numpy(img: Any) -> np.ndarray:
         return img
     else:
         raise TypeError(
-            f'Unsupported image type: {type(img)}. '
-            'Expected numpy.ndarray or torch.Tensor'
+            f"Unsupported image type: {type(img)}. "
+            "Expected numpy.ndarray or torch.Tensor"
         )
 
 
 def _normalize_image_format(img: np.ndarray) -> np.ndarray:
     """
     Normalize image to (H, W, C) format.
-    
+
     Detects and converts from:
     - (C, H, W) where C is 1 or 3
     - (H, W) grayscale
@@ -51,17 +54,16 @@ def _normalize_image_format(img: np.ndarray) -> np.ndarray:
             return img
     else:
         raise ValueError(
-            f'Invalid image shape: {img.shape}. '
-            'Expected 2D or 3D array'
+            f"Invalid image shape: {img.shape}. " "Expected 2D or 3D array"
         )
 
 
 def _normalize_batch(
-    images: Union[np.ndarray, List[np.ndarray], List[Any], Any]
+    images: Union[np.ndarray, List[np.ndarray], List[Any], Any],
 ) -> List[np.ndarray]:
     """
     Normalize batch of images to list of (H, W, C) numpy arrays.
-    
+
     Handles:
     - List of numpy arrays or torch tensors
     - Single numpy array of shape (B, H, W, C) or (B, C, H, W)
@@ -70,15 +72,13 @@ def _normalize_batch(
     # Convert to numpy if torch tensor
     if TORCH_AVAILABLE and torch is not None and isinstance(images, torch.Tensor):
         images = images.detach().cpu().numpy()
-    
+
     # Handle single numpy array with batch dimension
     if isinstance(images, np.ndarray):
         if images.ndim == 4:
             # (B, H, W, C) or (B, C, H, W)
             # Check if it's (B, C, H, W) format
-            if images.shape[1] in [1, 3] and images.shape[1] < min(
-                images.shape[2:]
-            ):
+            if images.shape[1] in [1, 3] and images.shape[1] < min(images.shape[2:]):
                 # (B, C, H, W) -> transpose to (B, H, W, C)
                 images = np.transpose(images, (0, 2, 3, 1))
             # Convert to list of images
@@ -91,10 +91,9 @@ def _normalize_batch(
             images = [images[:, :, np.newaxis]]
         else:
             raise ValueError(
-                f'Invalid array shape: {images.shape}. '
-                'Expected 2D, 3D, or 4D array'
+                f"Invalid array shape: {images.shape}. " "Expected 2D, 3D, or 4D array"
             )
-    
+
     # Handle list of images
     if isinstance(images, list):
         normalized = []
@@ -103,10 +102,10 @@ def _normalize_batch(
             img_normalized = _normalize_image_format(img_np)
             normalized.append(img_normalized)
         return normalized
-    
+
     raise TypeError(
-        f'Unsupported images type: {type(images)}. '
-        'Expected list, numpy.ndarray, or torch.Tensor'
+        f"Unsupported images type: {type(images)}. "
+        "Expected list, numpy.ndarray, or torch.Tensor"
     )
 
 
@@ -123,7 +122,7 @@ def plot_images_notebook(
 ):
     """
     Plot a batch of images in a notebook with smart grid layout.
-    
+
     Args:
         images: Images to plot. Can be:
             - List of numpy arrays or torch tensors
@@ -138,22 +137,22 @@ def plot_images_notebook(
         dpi: Dots per inch for the figure (default: 72)
         max_figure_width: Maximum figure width in inches (default: 15)
         max_figure_height: Maximum figure height in inches (default: 20)
-    
+
     Example:
         >>> import numpy as np
         >>> # Auto grid layout with sqrt
         >>> images = np.random.rand(9, 64, 64, 3)
         >>> plot_images_notebook(images)  # 3x3 grid
-        
+
         >>> # Custom grid
         >>> images = np.random.rand(8, 64, 64, 3)
         >>> plot_images_notebook(images, nrows=2, ncols=4)
-        
+
         >>> # PyTorch tensor in (B, C, H, W) format
         >>> import torch
         >>> images = torch.rand(8, 3, 64, 64)
         >>> plot_images_notebook(images)
-        
+
         >>> # List of images with different formats
         >>> images = [
         ...     np.random.rand(64, 64, 3),  # (H, W, C)
@@ -164,15 +163,15 @@ def plot_images_notebook(
     """
     if not MATPLOTLIB_AVAILABLE or plt is None:
         raise ImportError(
-            'matplotlib is required for plot_images_notebook. '
-            'Install it with: pip install matplotlib'
+            "matplotlib is required for plot_images_notebook. "
+            "Install it with: pip install matplotlib"
         )
-    
+
     # Normalize all images to list of (H, W, C) numpy arrays
     images_list = _normalize_batch(images)
-    
+
     n_images = len(images_list)
-    
+
     # Smart grid layout calculation
     if nrows is None and ncols is None:
         # Use sqrt to get roughly square grid
@@ -188,17 +187,17 @@ def plot_images_notebook(
         # Calculate columns from rows
         assert nrows is not None
         ncols = int(np.ceil(n_images / nrows))
-    
+
     # At this point, both nrows and ncols are guaranteed to be int
     assert nrows is not None and ncols is not None
-    
+
     # Auto-calculate figure size if not provided
     if figsize is None:
         # Calculate based on image aspect ratio
         sample_img = images_list[0]
         img_height, img_width = sample_img.shape[:2]
         aspect_ratio = img_width / img_height
-        
+
         # Target cell size in inches (smaller for many images)
         if n_images <= 4:
             cell_width = 4.0
@@ -208,38 +207,36 @@ def plot_images_notebook(
             cell_width = 2.5
         else:
             cell_width = 2.0
-        
+
         cell_height = cell_width / aspect_ratio
-        
+
         fig_width = ncols * cell_width
         fig_height = nrows * cell_height
-        
+
         # Constrain to max sizes to prevent notebook breaking
         if fig_width > max_figure_width:
             scale = max_figure_width / fig_width
             fig_width = max_figure_width
             fig_height *= scale
-        
+
         if fig_height > max_figure_height:
             scale = max_figure_height / fig_height
             fig_height = max_figure_height
             fig_width *= scale
-        
+
         figsize = (fig_width, fig_height)
-    
-    fig, axes = plt.subplots(
-        nrows, ncols, figsize=figsize, dpi=dpi, squeeze=False
-    )
-    
+
+    fig, axes = plt.subplots(nrows, ncols, figsize=figsize, dpi=dpi, squeeze=False)
+
     # Flatten axes for easier iteration
     axes_flat = axes.flatten()
-    
+
     for idx, (ax, img) in enumerate(zip(axes_flat, images_list)):
         # Determine if grayscale
         is_grayscale = img.shape[-1] == 1
-        
+
         if is_grayscale:
-            ax.imshow(img[:, :, 0], cmap=cmap or 'gray')
+            ax.imshow(img[:, :, 0], cmap=cmap or "gray")
         else:
             # Clip values to [0, 1] if they look like normalized images
             if img.max() <= 1.0:
@@ -248,15 +245,15 @@ def plot_images_notebook(
                 # Assume [0, 255] range
                 img_display = np.clip(img / 255.0, 0, 1)
             ax.imshow(img_display)
-        
-        ax.axis('off')
-        
+
+        ax.axis("off")
+
         if titles and idx < len(titles):
             ax.set_title(titles[idx], fontsize=8 if n_images > 9 else 10)
-    
+
     # Hide unused subplots
     for idx in range(n_images, len(axes_flat)):
-        axes_flat[idx].axis('off')
-    
+        axes_flat[idx].axis("off")
+
     plt.tight_layout()
     plt.show()

@@ -12,11 +12,11 @@ from venv import logger
 
 from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
-from speedy_utils.all import dump_json_or_pickle, identify
 
 from llm_utils.chat_format.display import get_conversation_one_turn
 from llm_utils.lm.async_lm._utils import InputModelType, OutputModelType, ParsedOutput
 from llm_utils.lm.async_lm.async_lm import AsyncLM
+from speedy_utils.all import dump_json_or_pickle, identify
 
 # Type aliases for better readability
 TModel = TypeVar("TModel", bound=BaseModel)
@@ -126,29 +126,35 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
         """
         self._config = LMConfiguration(
             model=model if model is not None else self.DEFAULT_MODEL,
-            temperature=temperature
-            if temperature is not None
-            else self.DEFAULT_TEMPERATURE,
-            max_tokens=max_tokens
-            if max_tokens is not None
-            else self.DEFAULT_MAX_TOKENS,
+            temperature=(
+                temperature if temperature is not None else self.DEFAULT_TEMPERATURE
+            ),
+            max_tokens=(
+                max_tokens if max_tokens is not None else self.DEFAULT_MAX_TOKENS
+            ),
             base_url=base_url if base_url is not None else self.DEFAULT_BASE_URL,
             api_key=api_key if api_key is not None else self.DEFAULT_API_KEY,
             cache=cache if cache is not None else self.DEFAULT_CACHE,
             think=think if think is not None else self.DEFAULT_THINK,
-            add_json_schema_to_instruction=add_json_schema_to_instruction
-            if add_json_schema_to_instruction is not None
-            else self.DEFAULT_ADD_JSON_SCHEMA_TO_INSTRUCTION,
+            add_json_schema_to_instruction=(
+                add_json_schema_to_instruction
+                if add_json_schema_to_instruction is not None
+                else self.DEFAULT_ADD_JSON_SCHEMA_TO_INSTRUCTION
+            ),
             use_beta=use_beta if use_beta is not None else self.DEFAULT_USE_BETA,
             ports=ports if ports is not None else self.DEFAULT_PORTS,
             top_p=top_p if top_p is not None else self.DEFAULT_TOP_P,
-            presence_penalty=presence_penalty
-            if presence_penalty is not None
-            else self.DEFAULT_PRESENCE_PENALTY,
+            presence_penalty=(
+                presence_penalty
+                if presence_penalty is not None
+                else self.DEFAULT_PRESENCE_PENALTY
+            ),
             top_k=top_k if top_k is not None else self.DEFAULT_TOP_K,
-            repetition_penalty=repetition_penalty
-            if repetition_penalty is not None
-            else self.DEFAULT_REPETITION_PENALTY,
+            repetition_penalty=(
+                repetition_penalty
+                if repetition_penalty is not None
+                else self.DEFAULT_REPETITION_PENALTY
+            ),
         )
         self._lm: Optional[AsyncLM] = None
 
@@ -324,9 +330,9 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
             if isinstance(assistant_content, str) and "</think>" in assistant_content:
                 # Extract content after thinking block
                 post_think_content = assistant_content.split("</think>", 1)[1].strip()
-                no_think_messages[-1]["content"] = (
-                    f"<think>\n\n</think>\n\n{post_think_content}"
-                )
+                no_think_messages[-1][
+                    "content"
+                ] = f"<think>\n\n</think>\n\n{post_think_content}"
 
         return no_think_messages
 
@@ -507,7 +513,7 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if hasattr(self._lm, "_last_client"):
-            last_client = self._lm._last_client   # type: ignore
+            last_client = self._lm._last_client  # type: ignore
             await last_client._client.aclose()
         else:
             logger.warning("No last client to close")

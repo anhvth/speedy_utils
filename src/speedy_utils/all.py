@@ -74,7 +74,9 @@ from threading import Lock
 from typing import (
     Any,
     Awaitable,
-    Callable as TypingCallable,
+)
+from typing import Callable as TypingCallable
+from typing import (
     Dict,
     Generic,
     Iterable,
@@ -131,7 +133,6 @@ from speedy_utils import (  # Clock module; Function decorators; Cache utilities
     speedy_timer,
     timef,
 )
-
 
 choice = random.choice
 

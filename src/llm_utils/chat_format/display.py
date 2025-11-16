@@ -168,7 +168,10 @@ def show_chat(
             content = content.replace("\t", "&nbsp;&nbsp;&nbsp;&nbsp;")
             content = content.replace("  ", "&nbsp;&nbsp;")
             content = (
-                content.replace("<br>", "TEMP_BR").replace("<", "&lt;").replace(">", "&gt;").replace("TEMP_BR", "<br>")
+                content.replace("<br>", "TEMP_BR")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("TEMP_BR", "<br>")
             )
         if role in color_scheme:
             background_color = color_scheme[role]["background"]
@@ -261,7 +264,9 @@ def get_conversation_one_turn(
     if assistant_msg is not None:
         messages.append({"role": "assistant", "content": assistant_msg})
     if assistant_prefix is not None:
-        assert return_format != "chatml", 'Change return_format to "text" if you want to use assistant_prefix'
+        assert (
+            return_format != "chatml"
+        ), 'Change return_format to "text" if you want to use assistant_prefix'
         assert messages[-1]["role"] == "user"
         from .transform import transform_messages
 
@@ -286,13 +291,21 @@ def highlight_diff_chars(text1: str, text2: str) -> str:
             html.append(text1[i1:i2])
         elif tag == "replace":
             if i1 != i2:
-                html.append(f'<span style="background-color:#ffd6d6; color:#b20000;">{text1[i1:i2]}</span>')
+                html.append(
+                    f'<span style="background-color:#ffd6d6; color:#b20000;">{text1[i1:i2]}</span>'
+                )
             if j1 != j2:
-                html.append(f'<span style="background-color:#d6ffd6; color:#006600;">{text2[j1:j2]}</span>')
+                html.append(
+                    f'<span style="background-color:#d6ffd6; color:#006600;">{text2[j1:j2]}</span>'
+                )
         elif tag == "delete":
-            html.append(f'<span style="background-color:#ffd6d6; color:#b20000;">{text1[i1:i2]}</span>')
+            html.append(
+                f'<span style="background-color:#ffd6d6; color:#b20000;">{text1[i1:i2]}</span>'
+            )
         elif tag == "insert":
-            html.append(f'<span style="background-color:#d6ffd6; color:#006600;">{text2[j1:j2]}</span>')
+            html.append(
+                f'<span style="background-color:#d6ffd6; color:#006600;">{text2[j1:j2]}</span>'
+            )
     return "".join(html)
 
 
@@ -321,7 +334,7 @@ def show_chat_v2(messages: list[dict[str, str]]):
 
     if is_notebook:
         # Use HTML display in notebook
-        from IPython.display import display, HTML
+        from IPython.display import HTML, display
 
         role_colors = {
             "system": "red",
@@ -353,9 +366,7 @@ def show_chat_v2(messages: list[dict[str, str]]):
             html += f"<div style='color:{color}'><strong>{label}</strong><br>{content}</div>"
             # Add separator except after last message
             if i < len(messages) - 1:
-                html += (
-                    "<div style='color:#888; margin:0.5em 0;'>───────────────────────────────────────────────────</div>"
-                )
+                html += "<div style='color:#888; margin:0.5em 0;'>───────────────────────────────────────────────────</div>"
         html += "</div>"
 
         display(HTML(html))
@@ -385,7 +396,9 @@ def show_chat_v2(messages: list[dict[str, str]]):
             print(f"{color}{content}{reset}")
             # Add separator except after last message
             if i < len(messages) - 1:
-                print(f"{separator_color}─────────────────────────────────────────────────────────{reset}")
+                print(
+                    f"{separator_color}─────────────────────────────────────────────────────────{reset}"
+                )
 
 
 def display_conversations(data1: Any, data2: Any, theme: str = "light") -> None:

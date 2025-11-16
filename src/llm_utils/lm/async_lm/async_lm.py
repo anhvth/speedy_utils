@@ -12,10 +12,10 @@ from typing import (
 from loguru import logger
 from openai import AuthenticationError, BadRequestError, OpenAI, RateLimitError
 from pydantic import BaseModel
-from speedy_utils import jloads
 
 # from llm_utils.lm.async_lm.async_llm_task import OutputModelType
 from llm_utils.lm.async_lm.async_lm_base import AsyncLMBase
+from speedy_utils import jloads
 
 from ._utils import (
     LegacyMsgs,
@@ -65,7 +65,11 @@ class AsyncLM(AsyncLMBase):
     ) -> None:
 
         if model is None:
-            models = OpenAI(base_url=f'http://{host}:{port}/v1', api_key='abc').models.list().data
+            models = (
+                OpenAI(base_url=f"http://{host}:{port}/v1", api_key="abc")
+                .models.list()
+                .data
+            )
             assert len(models) == 1, f"Found {len(models)} models, please specify one."
             model = models[0].id
             print(f"Using model: {model}")
@@ -268,9 +272,9 @@ class AsyncLM(AsyncLMBase):
             else cast(Messages, messages)
         )
 
-        assert self.model_kwargs["model"] is not None, (
-            "Model must be set before making a call."
-        )
+        assert (
+            self.model_kwargs["model"] is not None
+        ), "Model must be set before making a call."
 
         # Use unified client call
         raw_response = await self._unified_client_call(
@@ -293,7 +297,6 @@ class AsyncLM(AsyncLMBase):
             msg_dump = dict(assistant_msg)
         return msg_dump, full_messages
 
-    
     def call_sync(
         self,
         prompt: Optional[str] = None,
@@ -302,8 +305,11 @@ class AsyncLM(AsyncLMBase):
     ):
         """Synchronous wrapper around the async __call__ method."""
         import asyncio
-        return asyncio.run(self.__call__(prompt=prompt, messages=messages, max_tokens=max_tokens))
-    
+
+        return asyncio.run(
+            self.__call__(prompt=prompt, messages=messages, max_tokens=max_tokens)
+        )
+
     async def parse(
         self,
         instruction,
@@ -311,9 +317,9 @@ class AsyncLM(AsyncLMBase):
     ) -> ParsedOutput[BaseModel]:
         """Parse response using guided JSON generation. Returns (parsed.model_dump(), messages)."""
         if not self._use_beta:
-            assert self.add_json_schema_to_instruction, (
-                "add_json_schema_to_instruction must be True when use_beta is False. otherwise model will not be able to parse the response."
-            )
+            assert (
+                self.add_json_schema_to_instruction
+            ), "add_json_schema_to_instruction must be True when use_beta is False. otherwise model will not be able to parse the response."
 
         assert self.response_model is not None, "response_model must be set at init."
         json_schema = self.response_model.model_json_schema()

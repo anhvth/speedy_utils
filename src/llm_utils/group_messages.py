@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import random
-from typing import Sequence, Optional
+from typing import Optional, Sequence
 
 import numpy as np
 import pandas as pd

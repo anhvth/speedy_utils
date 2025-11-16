@@ -70,7 +70,11 @@ def fibonacci(n):
 # ────────────────────────────────────────────────────────────
 def test_scalar_single_param():
     inp = [1, 2, 3]
-    assert multi_process(double, inp, workers=2, progress=False, backend="safe") == [2, 4, 6]
+    assert multi_process(double, inp, workers=2, progress=False, backend="safe") == [
+        2,
+        4,
+        6,
+    ]
 
 
 def test_string_scalar():
@@ -95,7 +99,14 @@ def test_stop_on_error_false():
     # Note: stop_on_error is not implemented for safe backend, so this test
     # will raise an exception instead of returning None for failed items
     try:
-        out = multi_process(maybe_fail, inp, stop_on_error=False, workers=2, progress=False, backend="safe")
+        out = multi_process(
+            maybe_fail,
+            inp,
+            stop_on_error=False,
+            workers=2,
+            progress=False,
+            backend="safe",
+        )
         assert False, "Expected ValueError to be raised"
     except ValueError as e:
         assert "boom" in str(e)

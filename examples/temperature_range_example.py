@@ -1,7 +1,8 @@
 """Example demonstrating temperature range sampling with LLM."""
 
-from llm_utils import LLM
 from pydantic import BaseModel
+
+from llm_utils import LLM
 
 
 class CreativeStory(BaseModel):
@@ -76,7 +77,9 @@ def example_two_step_parsing():
     print("=" * 60)
 
     llm = LLM(
-        instruction=("Analyze the given text and extract structured information. Think through your analysis first."),
+        instruction=(
+            "Analyze the given text and extract structured information. Think through your analysis first."
+        ),
         output_model=CreativeStory,
     )
 

@@ -398,7 +398,9 @@ def multi_thread(
         results: list[R | None] = []
 
         for proc_idx, chunk in enumerate(chunks):
-            with tempfile.NamedTemporaryFile(delete=False, suffix="multi_thread.pkl") as fh:
+            with tempfile.NamedTemporaryFile(
+                delete=False, suffix="multi_thread.pkl"
+            ) as fh:
                 file_pkl = fh.name
             assert isinstance(in_process_multi_thread, Callable)
             proc = in_process_multi_thread(
@@ -463,12 +465,19 @@ def multi_thread(
 
     bar = None
     last_bar_update = 0
-    if progress and tqdm is not None and logical_total is not None and logical_total > 0:
+    if (
+        progress
+        and tqdm is not None
+        and logical_total is not None
+        and logical_total > 0
+    ):
         bar = tqdm(
             total=logical_total,
             ncols=128,
             colour="green",
-            bar_format=("{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}{postfix}]"),
+            bar_format=(
+                "{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}{postfix}]"
+            ),
         )
 
     deadline = time.monotonic() + timeout if timeout is not None else None
@@ -588,7 +597,11 @@ def multi_thread(
                         bar.update(delta)
                         last_bar_update = completed_items
                         submitted = next_logical_idx
-                        pending = max(logical_total - submitted, 0) if logical_total is not None else "-"
+                        pending = (
+                            max(logical_total - submitted, 0)
+                            if logical_total is not None
+                            else "-"
+                        )
                         postfix = {
                             "processing": min(len(inflight), workers_val),
                             "pending": pending,
@@ -626,7 +639,9 @@ def multi_thread(
     return results
 
 
-def multi_thread_standard(fn: Callable[[T], R], items: Iterable[T], workers: int = 4) -> list[R]:
+def multi_thread_standard(
+    fn: Callable[[T], R], items: Iterable[T], workers: int = 4
+) -> list[R]:
     """Execute ``fn`` across ``items`` while preserving submission order."""
 
     workers_val = _resolve_worker_count(workers)
@@ -657,7 +672,9 @@ def _async_raise(thread_id: int, exc_type: type[BaseException]) -> bool:
     return True
 
 
-def kill_all_thread(exc_type: type[BaseException] = SystemExit, join_timeout: float = 0.1) -> int:
+def kill_all_thread(
+    exc_type: type[BaseException] = SystemExit, join_timeout: float = 0.1
+) -> int:
     """Forcefully stop tracked worker threads (dangerous; use sparingly).
 
     Returns

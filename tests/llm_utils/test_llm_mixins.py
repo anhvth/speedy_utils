@@ -1,7 +1,8 @@
 """Unit tests for LLM mixins."""
 
 import unittest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import MagicMock, Mock, patch
+
 from pydantic import BaseModel
 
 from llm_utils.lm.llm import LLM
@@ -22,7 +23,9 @@ class TestTemperatureRangeMixin(unittest.TestCase):
     def test_temperature_range_sampling(self, mock_multi_thread):
         """Test temperature range sampling generates correct params."""
         # Setup mock
-        mock_multi_thread.return_value = [{"parsed": f"response_{i}", "messages": []} for i in range(5)]
+        mock_multi_thread.return_value = [
+            {"parsed": f"response_{i}", "messages": []} for i in range(5)
+        ]
 
         # Create LLM instance
         llm = LLM()
@@ -49,7 +52,9 @@ class TestTemperatureRangeMixin(unittest.TestCase):
     def test_temperature_range_via_call(self):
         """Test temperature_ranges parameter in __call__ method."""
         with patch("llm_utils.lm.mixins.multi_thread") as mock_multi_thread:
-            mock_multi_thread.return_value = [{"parsed": f"response_{i}", "messages": []} for i in range(3)]
+            mock_multi_thread.return_value = [
+                {"parsed": f"response_{i}", "messages": []} for i in range(3)
+            ]
 
             llm = LLM()
             result = llm("test input", temperature_ranges=3, max_temperature=2.0)
@@ -68,10 +73,15 @@ class TestTwoStepPydanticMixin(unittest.TestCase):
         # Mock text_completion to return JSON string
         with patch.object(llm, "text_completion") as mock_text:
             mock_text.return_value = [
-                {"parsed": '{"text": "hello", "score": 42}', "messages": [{"role": "user", "content": "test"}]}
+                {
+                    "parsed": '{"text": "hello", "score": 42}',
+                    "messages": [{"role": "user", "content": "test"}],
+                }
             ]
 
-            result = llm.two_step_pydantic_parse("test input", response_model=TestOutput)
+            result = llm.two_step_pydantic_parse(
+                "test input", response_model=TestOutput
+            )
 
             self.assertEqual(len(result), 1)
             self.assertIsInstance(result[0]["parsed"], TestOutput)
@@ -91,7 +101,9 @@ class TestTwoStepPydanticMixin(unittest.TestCase):
                 }
             ]
 
-            result = llm.two_step_pydantic_parse("test input", response_model=TestOutput)
+            result = llm.two_step_pydantic_parse(
+                "test input", response_model=TestOutput
+            )
 
             # Should strip <think> and parse successfully
             self.assertEqual(result[0]["parsed"].text, "world")
@@ -104,14 +116,21 @@ class TestTwoStepPydanticMixin(unittest.TestCase):
         # Mock text_completion with invalid JSON
         with patch.object(llm, "text_completion") as mock_text:
             mock_text.return_value = [
-                {"parsed": "This is not JSON at all", "messages": [{"role": "user", "content": "test"}]}
+                {
+                    "parsed": "This is not JSON at all",
+                    "messages": [{"role": "user", "content": "test"}],
+                }
             ]
 
             # Mock pydantic_parse for fallback
             with patch.object(llm, "pydantic_parse") as mock_parse:
-                mock_parse.return_value = [{"parsed": TestOutput(text="extracted", score=1), "messages": []}]
+                mock_parse.return_value = [
+                    {"parsed": TestOutput(text="extracted", score=1), "messages": []}
+                ]
 
-                result = llm.two_step_pydantic_parse("test input", response_model=TestOutput)
+                result = llm.two_step_pydantic_parse(
+                    "test input", response_model=TestOutput
+                )
 
                 # Should have called fallback
                 self.assertTrue(mock_parse.called)
@@ -123,7 +142,10 @@ class TestTwoStepPydanticMixin(unittest.TestCase):
 
         with patch.object(llm, "text_completion") as mock_text:
             mock_text.return_value = [
-                {"parsed": '{"text": "test", "score": 5}', "messages": [{"role": "user", "content": "test"}]}
+                {
+                    "parsed": '{"text": "test", "score": 5}',
+                    "messages": [{"role": "user", "content": "test"}],
+                }
             ]
 
             result = llm("test input", two_step_parse_pydantic=True)

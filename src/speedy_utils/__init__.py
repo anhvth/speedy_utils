@@ -83,7 +83,9 @@ from threading import Lock
 from typing import (
     Any,
     Awaitable,
-    Callable as TypingCallable,
+)
+from typing import Callable as TypingCallable
+from typing import (
     Dict,
     Generic,
     Iterable,
@@ -257,4 +259,3 @@ __all__ = [
     # Notebook utilities
     "change_dir",
 ]
-

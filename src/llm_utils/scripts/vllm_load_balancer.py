@@ -10,8 +10,9 @@ from datetime import datetime
 
 import aiohttp
 from loguru import logger
-from speedy_utils import setup_logger
 from tabulate import tabulate
+
+from speedy_utils import setup_logger
 
 setup_logger(min_interval=5)
 
@@ -375,7 +376,9 @@ async def handle_client(client_reader, client_writer):
 
             min_connections = float("inf")
             least_used_available_servers = []
-            for server in (
+            for (
+                server
+            ) in (
                 available_servers
             ):  # Iterate only over servers that passed health check
                 count = connection_counts.get(server, 0)
@@ -705,9 +708,9 @@ async def stats_json(request):
                 {
                     "host": BACKEND_HOST,
                     "port": port,
-                    "active_connections": connection_counts.get(server, 0)
-                    if is_online
-                    else 0,
+                    "active_connections": (
+                        connection_counts.get(server, 0) if is_online else 0
+                    ),
                     "status": "ONLINE" if is_online else "OFFLINE",
                 }
             )
@@ -938,14 +941,7 @@ async def main():
 
 
 def run_load_balancer():
-    global \
-        LOAD_BALANCER_PORT, \
-        BACKEND_PORTS, \
-        BACKEND_HOST, \
-        STATUS_PRINT_INTERVAL, \
-        HEALTH_CHECK_TIMEOUT, \
-        THROTTLE_MS, \
-        STATS_PORT
+    global LOAD_BALANCER_PORT, BACKEND_PORTS, BACKEND_HOST, STATUS_PRINT_INTERVAL, HEALTH_CHECK_TIMEOUT, THROTTLE_MS, STATS_PORT
     args = parse_args()
     LOAD_BALANCER_PORT = args.port
     BACKEND_HOST = args.host

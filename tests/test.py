@@ -7,7 +7,6 @@ that properly handles the multiprocessing context
 import multiprocessing as mp
 import time
 
-
 from speedy_utils.multi_worker.process import multi_process
 
 

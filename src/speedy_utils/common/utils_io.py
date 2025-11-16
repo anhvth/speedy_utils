@@ -29,7 +29,9 @@ def dump_jsonl(list_dictionaries: list[dict], file_name: str = "output.jsonl") -
             file.write(json.dumps(dictionary, ensure_ascii=False) + "\n")
 
 
-def dump_json_or_pickle(obj: Any, fname: str, ensure_ascii: bool = False, indent: int = 4) -> None:
+def dump_json_or_pickle(
+    obj: Any, fname: str, ensure_ascii: bool = False, indent: int = 4
+) -> None:
     """
     Dump an object to a file, supporting both JSON and pickle formats.
     """
@@ -84,7 +86,9 @@ def load_json_or_pickle(fname: str, counter=0) -> Any:
             time.sleep(1)
             if counter > 5:
                 # Keep message concise and actionable
-                print(f"Corrupted cache file {fname} removed; it will be regenerated on next access")
+                print(
+                    f"Corrupted cache file {fname} removed; it will be regenerated on next access"
+                )
                 os.remove(fname)
                 raise
             return load_json_or_pickle(fname, counter + 1)
@@ -151,7 +155,9 @@ def fast_load_jsonl(
             # If it's text, wrap it to binary via encoding; else just return
             if isinstance(fobj, io.TextIOBase):
                 # TextIO -> re-encode to bytes on the fly
-                return io.BufferedReader(io.BytesIO(fobj.read().encode(encoding, errors)))
+                return io.BufferedReader(
+                    io.BytesIO(fobj.read().encode(encoding, errors))
+                )
             return pth_or_f  # assume binary
         s = str(pth_or_f).lower()
         if s.endswith(".gz"):
@@ -236,9 +242,13 @@ def fast_load_jsonl(
 
             # Process chunks in parallel
             if progress:
-                print(f"Processing {line_count} lines with {num_workers} workers ({len(chunks)} chunks)...")
+                print(
+                    f"Processing {line_count} lines with {num_workers} workers ({len(chunks)} chunks)..."
+                )
 
-            chunk_results = multi_thread(_process_chunk, chunks, workers=num_workers, progress=progress)
+            chunk_results = multi_thread(
+                _process_chunk, chunks, workers=num_workers, progress=progress
+            )
 
             # Flatten results and yield
             if chunk_results:

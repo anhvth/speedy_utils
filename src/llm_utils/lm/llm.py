@@ -10,31 +10,31 @@ from typing import Any, Dict, List, Optional, Type, Union, cast
 
 import requests
 from loguru import logger
-from openai import OpenAI, AuthenticationError, BadRequestError, RateLimitError
+from openai import AuthenticationError, BadRequestError, OpenAI, RateLimitError
 from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
 
 from speedy_utils.common.utils_io import jdumps
 
-from .utils import (
-    _extract_port_from_vllm_cmd,
-    _start_vllm_server,
-    _kill_vllm_on_port,
-    _is_server_running,
-    get_base_client,
-    _is_lora_path,
-    _get_port_from_client,
-    _load_lora_adapter,
-    _unload_lora_adapter,
-    kill_all_vllm_processes,
-    stop_vllm_process,
-)
 from .base_prompt_builder import BasePromptBuilder
 from .mixins import (
+    ModelUtilsMixin,
     TemperatureRangeMixin,
     TwoStepPydanticMixin,
     VLLMMixin,
-    ModelUtilsMixin,
+)
+from .utils import (
+    _extract_port_from_vllm_cmd,
+    _get_port_from_client,
+    _is_lora_path,
+    _is_server_running,
+    _kill_vllm_on_port,
+    _load_lora_adapter,
+    _start_vllm_server,
+    _unload_lora_adapter,
+    get_base_client,
+    kill_all_vllm_processes,
+    stop_vllm_process,
 )
 
 # Type aliases for better readability
@@ -88,12 +88,16 @@ class LLM(
             if client is None:
                 client = port
 
-        self.client = get_base_client(client, cache=cache, vllm_cmd=self.vllm_cmd, vllm_process=self.vllm_process)
+        self.client = get_base_client(
+            client, cache=cache, vllm_cmd=self.vllm_cmd, vllm_process=self.vllm_process
+        )
         # check connection of client
         try:
             self.client.models.list()
         except Exception as e:
-            logger.error(f"Failed to connect to OpenAI client: {str(e)}, base_url={self.client.base_url}")
+            logger.error(
+                f"Failed to connect to OpenAI client: {str(e)}, base_url={self.client.base_url}"
+            )
             raise e
 
         if not self.model_kwargs.get("model", ""):
@@ -114,9 +118,9 @@ class LLM(
     def _prepare_input(self, input_data: Union[str, BaseModel, List[Dict]]) -> Messages:
         """Convert input to messages format."""
         if isinstance(input_data, list):
-            assert isinstance(input_data[0], dict) and "role" in input_data[0], (
-                "If input_data is a list, it must be a list of messages with 'role' and 'content' keys."
-            )
+            assert (
+                isinstance(input_data[0], dict) and "role" in input_data[0]
+            ), "If input_data is a list, it must be a list of messages with 'role' and 'content' keys."
             return cast(Messages, input_data)
         else:
             # Convert input to string format
@@ -141,7 +145,9 @@ class LLM(
             messages.append({"role": "user", "content": user_content})
             return cast(Messages, messages)
 
-    def text_completion(self, input_data: Union[str, BaseModel, list[Dict]], **runtime_kwargs) -> List[Dict[str, Any]]:
+    def text_completion(
+        self, input_data: Union[str, BaseModel, list[Dict]], **runtime_kwargs
+    ) -> List[Dict[str, Any]]:
         """Execute LLM task and return text responses."""
         # Prepare messages
         messages = self._prepare_input(input_data)
@@ -154,7 +160,9 @@ class LLM(
         api_kwargs = {k: v for k, v in effective_kwargs.items() if k != "model"}
 
         try:
-            completion = self.client.chat.completions.create(model=model_name, messages=messages, **api_kwargs)
+            completion = self.client.chat.completions.create(
+                model=model_name, messages=messages, **api_kwargs
+            )
             # Store raw response from client
             self.last_ai_response = completion
         except (AuthenticationError, RateLimitError, BadRequestError) as exc:
@@ -164,7 +172,9 @@ class LLM(
         except Exception as e:
             is_length_error = "Length" in str(e) or "maximum context length" in str(e)
             if is_length_error:
-                raise ValueError(f"Input too long for model {model_name}. Error: {str(e)[:100]}...")
+                raise ValueError(
+                    f"Input too long for model {model_name}. Error: {str(e)[:100]}..."
+                )
             # Re-raise all other exceptions
             raise
         # print(completion)
@@ -175,7 +185,10 @@ class LLM(
                 Messages,
                 messages + [{"role": "assistant", "content": choice.message.content}],
             )
-            result_dict = {"parsed": choice.message.content, "messages": choice_messages}
+            result_dict = {
+                "parsed": choice.message.content,
+                "messages": choice_messages,
+            }
 
             # Add reasoning content if this is a reasoning model
             if self.is_reasoning_model and hasattr(choice.message, "reasoning_content"):
@@ -206,7 +219,9 @@ class LLM(
             raise ValueError(
                 "No response model specified. Either set output_model in constructor or pass response_model parameter."
             )
-        pydantic_model_to_use: Type[BaseModel] = cast(Type[BaseModel], pydantic_model_to_use_opt)
+        pydantic_model_to_use: Type[BaseModel] = cast(
+            Type[BaseModel], pydantic_model_to_use_opt
+        )
         try:
             completion = self.client.chat.completions.parse(
                 model=model_name,
@@ -223,7 +238,9 @@ class LLM(
         except Exception as e:
             is_length_error = "Length" in str(e) or "maximum context length" in str(e)
             if is_length_error:
-                raise ValueError(f"Input too long for model {model_name}. Error: {str(e)[:100]}...")
+                raise ValueError(
+                    f"Input too long for model {model_name}. Error: {str(e)[:100]}..."
+                )
             # Re-raise all other exceptions
             raise
 
@@ -284,7 +301,9 @@ class LLM(
         # Handle temperature range sampling
         if temperature_ranges is not None:
             if n < 2:
-                raise ValueError(f"n must be >= 2 when using temperature_ranges, got {n}")
+                raise ValueError(
+                    f"n must be >= 2 when using temperature_ranges, got {n}"
+                )
             return self.temperature_range_sampling(
                 input_data,
                 temperature_ranges=temperature_ranges,
@@ -319,7 +338,9 @@ class LLM(
         self._last_conversations.append(_last_conv)
         return choices
 
-    def inspect_history(self, idx: int = -1, k_last_messages: int = 2) -> List[Dict[str, Any]]:
+    def inspect_history(
+        self, idx: int = -1, k_last_messages: int = 2
+    ) -> List[Dict[str, Any]]:
         """Inspect the message history of a specific response choice."""
         if hasattr(self, "_last_conversations"):
             from llm_utils import show_chat_v2

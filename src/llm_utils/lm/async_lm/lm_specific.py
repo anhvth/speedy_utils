@@ -107,7 +107,7 @@ class AsyncLMQwenThink(AsyncLM):
             top_k=top_k,
             presence_penalty=presence_penalty,
             **other_kwargs,
-            think=True
+            think=True,
         )
 
 
@@ -132,5 +132,5 @@ class AsyncLMQwenNoThink(AsyncLM):
             top_k=top_k,
             presence_penalty=presence_penalty,
             **other_kwargs,
-            think=False
+            think=False,
         )

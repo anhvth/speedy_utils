@@ -56,24 +56,24 @@ class AsyncLMBase:
         if self.ports and self.base_url:
             import random
             import re
-            
+
             port = random.choice(self.ports)
             # Replace port in base_url if it exists
-            base_url_pattern = r'(https?://[^:/]+):?\d*(/.*)?'
+            base_url_pattern = r"(https?://[^:/]+):?\d*(/.*)?"
             match = re.match(base_url_pattern, self.base_url)
             if match:
                 host_part = match.group(1)
-                path_part = match.group(2) or '/v1'
+                path_part = match.group(2) or "/v1"
                 api_base = f"{host_part}:{port}{path_part}"
             else:
                 api_base = self.base_url
             logger.debug(f"Using port: {port}")
         else:
             api_base = self.base_url
-            
+
         if api_base is None:
             raise ValueError("base_url must be provided")
-            
+
         client = MAsyncOpenAI(
             api_key=self.api_key,
             base_url=api_base,

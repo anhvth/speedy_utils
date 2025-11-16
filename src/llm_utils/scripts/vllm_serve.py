@@ -232,9 +232,9 @@ def get_vllm() -> str:
     vllm_binary = subprocess.check_output("which vllm", shell=True, text=True).strip()
     vllm_binary = os.getenv("VLLM_BINARY", vllm_binary)
     logger.info(f"vLLM binary: {vllm_binary}")
-    assert os.path.exists(vllm_binary), (
-        f"vLLM binary not found at {vllm_binary}, please set VLLM_BINARY env variable"
-    )
+    assert os.path.exists(
+        vllm_binary
+    ), f"vLLM binary not found at {vllm_binary}, please set VLLM_BINARY env variable"
     return vllm_binary
 
 

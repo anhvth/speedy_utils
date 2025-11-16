@@ -1,5 +1,6 @@
 from __future__ import annotations
-from typing import List, Dict, Callable
+
+from typing import Callable, Dict, List
 
 
 def build_chatml_input(template: str, params: List[str]) -> Callable:

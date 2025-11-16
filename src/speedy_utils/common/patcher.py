@@ -1,15 +1,16 @@
 # utils/patching.py
 import inspect
-import types
 import re
+import types
 from typing import Annotated, Union
+
 
 def patch_method(
     cls: Annotated[type, "Class containing the method"],
     method_name: Annotated[str, "Name of the method to patch"],
     replacements: Annotated[
         dict[Union[str, re.Pattern], str],
-        "Mapping of {old_substring_or_regex: new_string} replacements"
+        "Mapping of {old_substring_or_regex: new_string} replacements",
     ],
     tag: Annotated[str, "Optional logging tag"] = "",
 ) -> bool:
@@ -29,13 +30,17 @@ def patch_method(
     try:
         method = getattr(cls, method_name)
     except AttributeError:
-        print(f"[patcher{':' + tag if tag else ''}] No method {method_name} in {cls.__name__}")
+        print(
+            f"[patcher{':' + tag if tag else ''}] No method {method_name} in {cls.__name__}"
+        )
         return False
 
     try:
         src = inspect.getsource(method)
     except (OSError, TypeError):
-        print(f"[patcher{':' + tag if tag else ''}] Could not get source for {cls.__name__}.{method_name}")
+        print(
+            f"[patcher{':' + tag if tag else ''}] Could not get source for {cls.__name__}.{method_name}"
+        )
         return False
 
     new_src = src
@@ -54,15 +59,17 @@ def patch_method(
             raise TypeError("Replacement keys must be str or re.Pattern")
 
     if not did_patch:
-        print(f"[patcher{':' + tag if tag else ''}] No matching patterns found in {cls.__name__}.{method_name}")
+        print(
+            f"[patcher{':' + tag if tag else ''}] No matching patterns found in {cls.__name__}.{method_name}"
+        )
         return False
 
     # Recompile the patched function
     code_obj = compile(new_src, filename=f"<patched_{method_name}>", mode="exec")
     ns = {}
-    exec(code_obj, cls.__dict__, ns) # type: ignore
+    exec(code_obj, cls.__dict__, ns)  # type: ignore
 
     # Attach patched method back
-    setattr(cls, method_name, types.MethodType(ns[method_name], None, cls)) # type: ignore
+    setattr(cls, method_name, types.MethodType(ns[method_name], None, cls))  # type: ignore
     print(f"[patcher{':' + tag if tag else ''}] Patched {cls.__name__}.{method_name}")
     return True
