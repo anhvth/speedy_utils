@@ -20,6 +20,7 @@ Example:
 from .core import VectorCache
 from .utils import estimate_cache_size, get_default_cache_path, validate_model_name
 
+
 __version__ = "0.1.0"
 __author__ = "AnhVTH <anhvth.226@gmail.com>"
 __all__ = [

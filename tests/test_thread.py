@@ -275,7 +275,7 @@ def test_speedy_vs_normal():
     # Check if all values match
     is_equal = True
     differences = []
-    for i, (v1, v2) in enumerate(zip(out1, out2)):
+    for i, (v1, v2) in enumerate(zip(out1, out2, strict=False)):
         if v1 != v2:
             is_equal = False
             differences.append(f"Index {i}: {v1} != {v2}")
@@ -299,8 +299,7 @@ def test_speedy_vs_normal():
 def fibonacci(n, x):
     if n <= 1:
         return n + x
-    else:
-        return fibonacci(n - 1, x) + fibonacci(n - 2, x)
+    return fibonacci(n - 1, x) + fibonacci(n - 2, x)
 
 
 def test_multi_thread_vs_standard():
@@ -308,7 +307,7 @@ def test_multi_thread_vs_standard():
         return fibonacci(x, 0)
 
     # Create a longer input list for more substantial testing
-    inp = [i for i in range(10, 35)]  # Fibonacci numbers from 10 to 34
+    inp = list(range(10, 35))  # Fibonacci numbers from 10 to 34
 
     # Use multi_thread
     start_mt = time.time()

@@ -44,24 +44,24 @@ class AsyncLM(AsyncLMBase):
     def __init__(
         self,
         *,
-        model: Optional[str] = None,
-        response_model: Optional[type[BaseModel]] = None,
+        model: str | None = None,
+        response_model: type[BaseModel] | None = None,
         temperature: float = 0.0,
         max_tokens: int = 2_000,
         host: str = "localhost",
-        port: Optional[Union[int, str]] = None,
-        base_url: Optional[str] = None,
-        api_key: Optional[str] = None,
+        port: int | str | None = None,
+        base_url: str | None = None,
+        api_key: str | None = None,
         cache: bool = True,
         think: Literal[True, False, None] = None,
-        add_json_schema_to_instruction: Optional[bool] = None,
+        add_json_schema_to_instruction: bool | None = None,
         use_beta: bool = False,
-        ports: Optional[List[int]] = None,
+        ports: list[int] | None = None,
         top_p: float = 1.0,
         presence_penalty: float = 0.0,
         top_k: int = 1,
         repetition_penalty: float = 1.0,
-        frequency_penalty: Optional[float] = None,
+        frequency_penalty: float | None = None,
     ) -> None:
 
         if model is None:
@@ -90,24 +90,24 @@ class AsyncLM(AsyncLMBase):
             self.add_json_schema_to_instruction = True
 
         # Store all model-related parameters in model_kwargs
-        self.model_kwargs = dict(
-            model=model,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            top_p=top_p,
-            presence_penalty=presence_penalty,
-        )
-        self.extra_body = dict(
-            top_k=top_k,
-            repetition_penalty=repetition_penalty,
-            frequency_penalty=frequency_penalty,
-        )
+        self.model_kwargs = {
+            "model": model,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "top_p": top_p,
+            "presence_penalty": presence_penalty,
+        }
+        self.extra_body = {
+            "top_k": top_k,
+            "repetition_penalty": repetition_penalty,
+            "frequency_penalty": frequency_penalty,
+        }
 
     async def _unified_client_call(
         self,
         messages: RawMsgs,
-        extra_body: Optional[dict] = None,
-        max_tokens: Optional[int] = None,
+        extra_body: dict | None = None,
+        max_tokens: int | None = None,
     ) -> dict:
         """Unified method for all client interactions (caching handled by MAsyncOpenAI)."""
         converted_messages: Messages = (
@@ -143,7 +143,7 @@ class AsyncLM(AsyncLMBase):
     async def _call_and_parse(
         self,
         messages: list[dict],
-        response_model: Type[OutputModelType],
+        response_model: type[OutputModelType],
         json_schema: dict,
     ) -> tuple[dict, list[dict], OutputModelType]:
         """Unified call and parse with cache and error handling."""
@@ -202,7 +202,7 @@ class AsyncLM(AsyncLMBase):
     async def _call_and_parse_with_beta(
         self,
         messages: list[dict],
-        response_model: Type[OutputModelType],
+        response_model: type[OutputModelType],
         json_schema: dict,
     ) -> tuple[dict, list[dict], OutputModelType]:
         """Call and parse for beta mode with guided JSON."""
@@ -253,9 +253,9 @@ class AsyncLM(AsyncLMBase):
 
     async def call_with_messages(
         self,
-        prompt: Optional[str] = None,
-        messages: Optional[RawMsgs] = None,
-        max_tokens: Optional[int] = None,
+        prompt: str | None = None,
+        messages: RawMsgs | None = None,
+        max_tokens: int | None = None,
     ):  # -> tuple[Any | dict[Any, Any], list[ChatCompletionMessagePar...:# -> tuple[Any | dict[Any, Any], list[ChatCompletionMessagePar...:
         """Unified async call for language model, returns (assistant_message.model_dump(), messages)."""
         if (prompt is None) == (messages is None):
@@ -299,9 +299,9 @@ class AsyncLM(AsyncLMBase):
 
     def call_sync(
         self,
-        prompt: Optional[str] = None,
-        messages: Optional[RawMsgs] = None,
-        max_tokens: Optional[int] = None,
+        prompt: str | None = None,
+        messages: RawMsgs | None = None,
+        max_tokens: int | None = None,
     ):
         """Synchronous wrapper around the async __call__ method."""
         import asyncio
@@ -357,7 +357,7 @@ class AsyncLM(AsyncLMBase):
         )
 
     def _parse_complete_output(
-        self, completion: Any, response_model: Type[BaseModel]
+        self, completion: Any, response_model: type[BaseModel]
     ) -> BaseModel:
         """Parse completion output to response model."""
         if hasattr(completion, "model_dump"):

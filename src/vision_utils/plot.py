@@ -1,6 +1,7 @@
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, Optional
 
 import numpy as np
+
 
 try:
     import torch
@@ -23,13 +24,11 @@ def _to_numpy(img: Any) -> np.ndarray:
     """Convert image to numpy array."""
     if TORCH_AVAILABLE and torch is not None and isinstance(img, torch.Tensor):
         return img.detach().cpu().numpy()
-    elif isinstance(img, np.ndarray):
+    if isinstance(img, np.ndarray):
         return img
-    else:
-        raise TypeError(
-            f"Unsupported image type: {type(img)}. "
-            "Expected numpy.ndarray or torch.Tensor"
-        )
+    raise TypeError(
+        f'Unsupported image type: {type(img)}. Expected numpy.ndarray or torch.Tensor'
+    )
 
 
 def _normalize_image_format(img: np.ndarray) -> np.ndarray:
@@ -44,23 +43,19 @@ def _normalize_image_format(img: np.ndarray) -> np.ndarray:
     if img.ndim == 2:
         # Grayscale (H, W) -> (H, W, 1)
         return img[:, :, np.newaxis]
-    elif img.ndim == 3:
+    if img.ndim == 3:
         # Check if it's (C, H, W) format
         if img.shape[0] in [1, 3] and img.shape[0] < min(img.shape[1:]):
             # Likely (C, H, W) -> transpose to (H, W, C)
             return np.transpose(img, (1, 2, 0))
-        else:
-            # Already (H, W, C)
-            return img
-    else:
-        raise ValueError(
-            f"Invalid image shape: {img.shape}. " "Expected 2D or 3D array"
-        )
+        # Already (H, W, C)
+        return img
+    raise ValueError(f'Invalid image shape: {img.shape}. Expected 2D or 3D array')
 
 
 def _normalize_batch(
-    images: Union[np.ndarray, List[np.ndarray], List[Any], Any],
-) -> List[np.ndarray]:
+    images: np.ndarray | list[np.ndarray] | list[Any] | Any,
+) -> list[np.ndarray]:
     """
     Normalize batch of images to list of (H, W, C) numpy arrays.
 
@@ -91,7 +86,7 @@ def _normalize_batch(
             images = [images[:, :, np.newaxis]]
         else:
             raise ValueError(
-                f"Invalid array shape: {images.shape}. " "Expected 2D, 3D, or 4D array"
+                f'Invalid array shape: {images.shape}. Expected 2D, 3D, or 4D array'
             )
 
     # Handle list of images
@@ -104,18 +99,18 @@ def _normalize_batch(
         return normalized
 
     raise TypeError(
-        f"Unsupported images type: {type(images)}. "
-        "Expected list, numpy.ndarray, or torch.Tensor"
+        f'Unsupported images type: {type(images)}. '
+        'Expected list, numpy.ndarray, or torch.Tensor'
     )
 
 
 def plot_images_notebook(
-    images: Union[np.ndarray, List[np.ndarray], List[Any], Any],
-    nrows: Optional[int] = None,
-    ncols: Optional[int] = None,
-    figsize: Optional[Tuple[float, float]] = None,
-    titles: Optional[List[str]] = None,
-    cmap: Optional[str] = None,
+    images: np.ndarray | list[np.ndarray] | list[Any] | Any,
+    nrows: int | None = None,
+    ncols: int | None = None,
+    figsize: tuple[float, float] | None = None,
+    titles: list[str] | None = None,
+    cmap: str | None = None,
     dpi: int = 72,
     max_figure_width: float = 15.0,
     max_figure_height: float = 20.0,
@@ -163,8 +158,8 @@ def plot_images_notebook(
     """
     if not MATPLOTLIB_AVAILABLE or plt is None:
         raise ImportError(
-            "matplotlib is required for plot_images_notebook. "
-            "Install it with: pip install matplotlib"
+            'matplotlib is required for plot_images_notebook. '
+            'Install it with: pip install matplotlib'
         )
 
     # Normalize all images to list of (H, W, C) numpy arrays
@@ -231,12 +226,12 @@ def plot_images_notebook(
     # Flatten axes for easier iteration
     axes_flat = axes.flatten()
 
-    for idx, (ax, img) in enumerate(zip(axes_flat, images_list)):
+    for idx, (ax, img) in enumerate(zip(axes_flat, images_list, strict=False)):
         # Determine if grayscale
         is_grayscale = img.shape[-1] == 1
 
         if is_grayscale:
-            ax.imshow(img[:, :, 0], cmap=cmap or "gray")
+            ax.imshow(img[:, :, 0], cmap=cmap or 'gray')
         else:
             # Clip values to [0, 1] if they look like normalized images
             if img.max() <= 1.0:
@@ -246,14 +241,14 @@ def plot_images_notebook(
                 img_display = np.clip(img / 255.0, 0, 1)
             ax.imshow(img_display)
 
-        ax.axis("off")
+        ax.axis('off')
 
         if titles and idx < len(titles):
             ax.set_title(titles[idx], fontsize=8 if n_images > 9 else 10)
 
     # Hide unused subplots
     for idx in range(n_images, len(axes_flat)):
-        axes_flat[idx].axis("off")
+        axes_flat[idx].axis('off')
 
     plt.tight_layout()
     plt.show()

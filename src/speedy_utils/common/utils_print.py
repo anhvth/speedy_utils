@@ -24,22 +24,22 @@ def flatten_dict(d, parent_key="", sep="."):
 
 def fprint(
     input_data: Any,
-    key_ignore: Union[list[str], None] = None,
-    key_keep: Union[list[str], None] = None,
+    key_ignore: list[str] | None = None,
+    key_keep: list[str] | None = None,
     max_width: int = 100,
     indent: int = 2,
-    depth: Union[int, None] = None,
+    depth: int | None = None,
     table_format: str = "grid",
     str_wrap_width: int = 80,
     grep=None,
     is_notebook=None,
     f=print,
-) -> Union[None, str]:
+) -> None | str:
     """
     Pretty print structured data.
     """
     if isinstance(input_data, list):
-        for i, item in enumerate(input_data):
+        for _i, item in enumerate(input_data):
             fprint(
                 item,
                 key_ignore,

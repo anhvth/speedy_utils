@@ -1,4 +1,81 @@
-ignore = ["F401", "F403", "F405", "E501", "E731", "E402"]
-line-length = 120
-target-version = "py312"                                  # adjust to your Python version
+# Ruff configuration for speedy_utils
+# See: https://docs.astral.sh/ruff/
+
+line-length = 88
+target-version = "py310"
 respect-gitignore = true
+
+[lint]
+# Enable specific rule sets
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    "N",      # pep8-naming
+    "UP",     # pyupgrade
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "SIM",    # flake8-simplify
+    "PIE",    # flake8-pie
+    "RET",    # flake8-return
+    "PTH",    # flake8-use-pathlib
+]
+
+# Ignore specific rules
+ignore = [
+    "E501",   # Line too long (handled by formatter)
+    "E731",   # Lambda assignment
+    "E402",   # Module level import not at top
+    "F401",   # Unused imports (common in __init__.py)
+    "F403",   # Star imports
+    "F405",   # Name may be undefined from star imports
+    "N802",   # Function name should be lowercase
+    "N803",   # Argument name should be lowercase
+    "N806",   # Variable in function should be lowercase
+    "B008",   # Do not perform function calls in argument defaults
+    "SIM108", # Use ternary operator (sometimes less readable)
+    "RET504", # Unnecessary variable assignment before return
+    "PTH123", # open() should be replaced by Path.open()
+    "UP035", # f-string support for str.format()
+    "PTH",    # Pathlib usage warnings (handled by code review)
+    "UP",     # pyupgrade warnings (handled by code review)
+    "N",      # pep8-naming warnings (handled by code review)
+]
+
+# Allow autofix for all enabled rules
+fixable = ["ALL"]
+unfixable = []
+
+# Exclude patterns
+exclude = [
+    ".git",
+    ".ruff_cache",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "*.egg-info",
+    ".pytest_cache",
+    ".mypy_cache",
+    "notebooks",
+]
+
+[lint.per-file-ignores]
+"__init__.py" = ["F401", "F403", "E402"]
+"tests/*" = ["S101"]  # Allow assert statements in tests
+"examples/*" = ["T201"]  # Allow print statements in examples
+
+[lint.isort]
+known-first-party = ["speedy_utils", "llm_utils", "vision_utils"]
+force-single-line = false
+lines-after-imports = 2
+
+[lint.mccabe]
+max-complexity = 15
+
+[format]
+quote-style = "single"
+indent-style = "space"
+line-ending = "auto"
+skip-magic-trailing-comma = false

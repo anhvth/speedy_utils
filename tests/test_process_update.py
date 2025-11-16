@@ -55,7 +55,7 @@ def test_worker_error_handling():
     # Test with a smaller set that should fail
     try:
         result = multi_process(failing_function, [5], backend="safe")
-        assert False, "Expected ValueError to be raised"
+        raise AssertionError("Expected ValueError to be raised")
     except ValueError as e:
         assert "Test error" in str(e)
 

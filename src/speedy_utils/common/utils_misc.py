@@ -7,6 +7,7 @@ from typing import Any, TypeVar
 
 from pydantic import BaseModel
 
+
 T = TypeVar("T")
 
 
@@ -27,7 +28,7 @@ def get_arg_names(func: Callable) -> list[str]:
 
 def is_notebook() -> bool:
     try:
-        if "get_ipython" in globals().keys():
+        if "get_ipython" in globals():
             get_ipython = globals()["get_ipython"]
             shell = get_ipython().__class__.__name__
             if shell == "ZMQInteractiveShell":
@@ -41,15 +42,14 @@ def convert_to_builtin_python(input_data: Any) -> Any:
     """Convert input data to built-in Python types."""
     if isinstance(input_data, dict):
         return {k: convert_to_builtin_python(v) for k, v in input_data.items()}
-    elif isinstance(input_data, list):
+    if isinstance(input_data, list):
         return [convert_to_builtin_python(v) for v in input_data]
-    elif isinstance(input_data, (int, float, str, bool, type(None))):
+    if isinstance(input_data, (int, float, str, bool, type(None))):
         return input_data
-    elif isinstance(input_data, BaseModel):
+    if isinstance(input_data, BaseModel):
         data = input_data.model_dump_json()
         return convert_to_builtin_python(data)
-    else:
-        raise ValueError(f"Unsupported type {type(input_data)}")
+    raise ValueError(f"Unsupported type {type(input_data)}")
 
 
 def dedup(items: list[T], key: Callable[[T], Any]) -> list[T]:

@@ -15,12 +15,13 @@ from openai.types.chat import (
 from pydantic import BaseModel
 from typing_extensions import TypedDict
 
+
 # --------------------------------------------------------------------------- #
 # type helpers
 # --------------------------------------------------------------------------- #
 TModel = TypeVar("TModel", bound=BaseModel)
-Messages = List[ChatCompletionMessageParam]
-LegacyMsgs = List[Dict[str, str]]
+Messages = list[ChatCompletionMessageParam]
+LegacyMsgs = list[dict[str, str]]
 RawMsgs = Union[Messages, LegacyMsgs]
 
 # --------------------------------------------------------------------------- #
@@ -55,10 +56,10 @@ OutputModelType = TypeVar("OutputModelType", bound=BaseModel)
 
 
 class ParsedOutput(TypedDict, Generic[OutputModelType]):
-    messages: List
+    messages: list
     completion: Any
     parsed: OutputModelType
-    model_kwargs: Dict[str, Any]
+    model_kwargs: dict[str, Any]
 
 
 # --------------------------------------------------------------------------- #
@@ -83,7 +84,7 @@ async def inspect_word_probs_async(lm, tokenizer, messages):
     async def compute_word_log_probs(
         tokenizer: Any,
         lm_client: Any,
-    ) -> tuple[List[Dict[str, Any]], Any]:
+    ) -> tuple[list[dict[str, Any]], Any]:
         # Build a prompt that preserves literal newlines
         prompt = tokenizer.apply_chat_template(
             messages,
@@ -112,7 +113,7 @@ async def inspect_word_probs_async(lm, tokenizer, messages):
         }
 
         # Flatten tokens
-        tokens: List[Dict[str, Any]] = [
+        tokens: list[dict[str, Any]] = [
             {"id": int(tid), **tdata}
             for td in token_logprob_dicts
             for tid, tdata in td.items()
@@ -133,7 +134,7 @@ async def inspect_word_probs_async(lm, tokenizer, messages):
         split_prompt = prompt.replace("\n", " <NL> ")
         words = split_prompt.split()
 
-        word_log_probs: List[Dict[str, Any]] = []
+        word_log_probs: list[dict[str, Any]] = []
         token_idx = 0
 
         for word in words:
@@ -152,7 +153,7 @@ async def inspect_word_probs_async(lm, tokenizer, messages):
 
         return word_log_probs, token_logprob_dicts  # type: ignore
 
-    def render_by_logprob(word_log_probs: List[Dict[str, Any]]) -> str:
+    def render_by_logprob(word_log_probs: list[dict[str, Any]]) -> str:
         """
         Return an ANSI-colored string for word probabilities (red → green).
         """
@@ -161,7 +162,7 @@ async def inspect_word_probs_async(lm, tokenizer, messages):
 
         probs = [entry["probability"] for entry in word_log_probs]
         min_p, max_p = min(probs), max(probs)
-        parts: List[str] = []
+        parts: list[str] = []
 
         for entry in word_log_probs:
             word = entry["word"]

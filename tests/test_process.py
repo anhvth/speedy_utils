@@ -1,11 +1,11 @@
+import contextlib
 import multiprocessing
 import time
 
+
 if hasattr(multiprocessing, "set_start_method"):
-    try:
+    with contextlib.suppress(RuntimeError):
         multiprocessing.set_start_method("spawn", force=True)
-    except RuntimeError:
-        pass
 
 from speedy_utils import multi_thread
 from speedy_utils.multi_worker.process import multi_process, tqdm
@@ -99,7 +99,7 @@ def test_stop_on_error_false():
     # Note: stop_on_error is not implemented for safe backend, so this test
     # will raise an exception instead of returning None for failed items
     try:
-        out = multi_process(
+        multi_process(
             maybe_fail,
             inp,
             stop_on_error=False,
@@ -107,7 +107,7 @@ def test_stop_on_error_false():
             progress=False,
             backend="safe",
         )
-        assert False, "Expected ValueError to be raised"
+        raise AssertionError("Expected ValueError to be raised")
     except ValueError as e:
         assert "boom" in str(e)
 

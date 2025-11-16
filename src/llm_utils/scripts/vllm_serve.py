@@ -75,6 +75,7 @@ from loguru import logger
 from llm_utils.lm.openai_memoize import MOpenAI
 from speedy_utils.common.utils_io import load_by_ext
 
+
 LORA_DIR: str = os.environ.get("LORA_DIR", "/loras")
 LORA_DIR = os.path.abspath(LORA_DIR)
 HF_HOME: str = os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
@@ -93,8 +94,8 @@ def add_lora(
     lora_name_or_path: str,
     host_port: str,
     url: str = "http://HOST:PORT/v1/load_lora_adapter",
-    served_model_name: Optional[str] = None,
-    lora_module: Optional[str] = None,
+    served_model_name: str | None = None,
+    lora_module: str | None = None,
 ) -> dict:
     """Add a LoRA adapter to a running vLLM server."""
     url = url.replace("HOST:PORT", host_port)
@@ -126,7 +127,7 @@ def add_lora(
         return {"error": f"Request failed: {str(e)}"}
 
 
-def unload_lora(lora_name: str, host_port: str) -> Optional[dict]:
+def unload_lora(lora_name: str, host_port: str) -> dict | None:
     """Unload a LoRA adapter from a running vLLM server."""
     try:
         url = f"http://{host_port}/v1/unload_lora_adapter"
@@ -144,7 +145,7 @@ def unload_lora(lora_name: str, host_port: str) -> Optional[dict]:
 def serve(args) -> None:
     """Start vLLM containers with dynamic args."""
     print("Starting vLLM containers...,")
-    gpu_groups_arr: List[str] = args.gpu_groups.split(",")
+    gpu_groups_arr: list[str] = args.gpu_groups.split(",")
     vllm_binary: str = get_vllm()
     if args.enable_lora:
         vllm_binary = "VLLM_ALLOW_RUNTIME_LORA_UPDATING=True " + vllm_binary

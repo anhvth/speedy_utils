@@ -61,18 +61,18 @@ class VectorCache:
     def __init__(
         self,
         url_or_model: str,
-        backend: Optional[Literal["vllm", "transformers", "openai"]] = None,
-        embed_size: Optional[int] = None,
-        db_path: Optional[str] = None,
+        backend: Literal["vllm", "transformers", "openai"] | None = None,
+        embed_size: int | None = None,
+        db_path: str | None = None,
         # OpenAI API parameters
-        api_key: Optional[str] = "abc",
-        model_name: Optional[str] = None,
+        api_key: str | None = "abc",
+        model_name: str | None = None,
         # vLLM parameters
         vllm_gpu_memory_utilization: float = 0.5,
         vllm_tensor_parallel_size: int = 1,
         vllm_dtype: str = "auto",
         vllm_trust_remote_code: bool = False,
-        vllm_max_model_len: Optional[int] = None,
+        vllm_max_model_len: int | None = None,
         # Transformers parameters
         transformers_device: str = "auto",
         transformers_batch_size: int = 32,
@@ -149,7 +149,6 @@ class VectorCache:
                 if self.verbose:
                     print(f"Model auto-detection failed: {e}, using default model")
                 # Fallback to default if auto-detection fails
-                pass
 
         # Set default db_path if not provided
         if db_path is None:
@@ -185,7 +184,7 @@ class VectorCache:
                 print(f"✓ {self.backend.upper()} model/client loaded successfully")
 
     def _determine_backend(
-        self, backend: Optional[Literal["vllm", "transformers", "openai"]]
+        self, backend: Literal["vllm", "transformers", "openai"] | None
     ) -> str:
         """Determine the appropriate backend based on url_or_model and user preference."""
         if backend is not None:
@@ -202,7 +201,7 @@ class VectorCache:
         # Default to vllm for local models
         return "vllm"
 
-    def _try_infer_model_name(self, model_name: Optional[str]) -> Optional[str]:
+    def _try_infer_model_name(self, model_name: str | None) -> str | None:
         """Infer model name for OpenAI backend if not explicitly provided."""
         if model_name:
             return model_name
@@ -279,7 +278,7 @@ class VectorCache:
             tensor_parallel_size = cast(int, self.config["vllm_tensor_parallel_size"])
             dtype = cast(str, self.config["vllm_dtype"])
             trust_remote_code = cast(bool, self.config["vllm_trust_remote_code"])
-            max_model_len = cast(Optional[int], self.config["vllm_max_model_len"])
+            max_model_len = cast(int | None, self.config["vllm_max_model_len"])
 
             vllm_kwargs = {
                 "model": self.url_or_model,
@@ -316,8 +315,7 @@ class VectorCache:
                         f"4. Ensure no other processes are using GPU memory during initialization\n"
                         f"Original error: {e}"
                     ) from e
-                else:
-                    raise
+                raise
         elif self.backend == "transformers":
             import torch  # type: ignore[import-not-found] # noqa: F401
             from transformers import (  # type: ignore[import-not-found]
@@ -354,12 +352,11 @@ class VectorCache:
         ), "all elements in texts must be strings"
         if self.backend == "openai":
             return self._get_openai_embeddings(texts)
-        elif self.backend == "vllm":
+        if self.backend == "vllm":
             return self._get_vllm_embeddings(texts)
-        elif self.backend == "transformers":
+        if self.backend == "transformers":
             return self._get_transformers_embeddings(texts)
-        else:
-            raise ValueError(f"Unsupported backend: {self.backend}")
+        raise ValueError(f"Unsupported backend: {self.backend}")
 
     def _get_openai_embeddings(self, texts: list[str]) -> list[list[float]]:
         """Get embeddings using OpenAI API."""
@@ -468,13 +465,12 @@ class VectorCache:
         left_padding = attention_mask[:, -1].sum() == attention_mask.shape[0]
         if left_padding:
             return last_hidden_states[:, -1]
-        else:
-            sequence_lengths = attention_mask.sum(dim=1) - 1
-            batch_size = last_hidden_states.shape[0]
-            return last_hidden_states[
-                torch.arange(batch_size, device=last_hidden_states.device),
-                sequence_lengths,
-            ]
+        sequence_lengths = attention_mask.sum(dim=1) - 1
+        batch_size = last_hidden_states.shape[0]
+        return last_hidden_states[
+            torch.arange(batch_size, device=last_hidden_states.device),
+            sequence_lengths,
+        ]
 
     def _hash_text(self, text: str) -> str:
         return hashlib.sha1(text.encode("utf-8")).hexdigest()
@@ -490,8 +486,7 @@ class VectorCache:
             try:
                 if params is None:
                     return self.conn.execute(query)
-                else:
-                    return self.conn.execute(query, params)
+                return self.conn.execute(query, params)
 
             except sqlite3.OperationalError as e:
                 last_exception = e
@@ -506,9 +501,8 @@ class VectorCache:
 
                     time.sleep(delay)
                     continue
-                else:
-                    # Re-raise if not a lock error or max retries exceeded
-                    raise
+                # Re-raise if not a lock error or max retries exceeded
+                raise
             except Exception:
                 # Re-raise any other exceptions
                 raise
@@ -558,11 +552,11 @@ class VectorCache:
         # Determine which texts are missing
         if cache:
             missing_items: list[tuple[str, str]] = [
-                (t, h) for t, h in zip(texts, hashes) if h not in hit_map
+                (t, h) for t, h in zip(texts, hashes, strict=False) if h not in hit_map
             ]
         else:
             missing_items: list[tuple[str, str]] = [
-                (t, h) for t, h in zip(texts, hashes)
+                (t, h) for t, h in zip(texts, hashes, strict=False)
             ]
 
         if missing_items:
@@ -612,7 +606,7 @@ class VectorCache:
 
             # Prepare batch data for immediate insert
             batch_data: list[tuple[str, str, bytes]] = []
-            for (text, h), vec in zip(batch_items, batch_embeds):
+            for (text, h), vec in zip(batch_items, batch_embeds, strict=False):
                 arr = np.asarray(vec, dtype=np.float32)
                 batch_data.append((h, text, arr.tobytes()))
                 hit_map[h] = arr
@@ -666,7 +660,7 @@ class VectorCache:
 
         for attempt in range(max_retries + 1):
             try:
-                cursor = self.conn.executemany(
+                self.conn.executemany(
                     "INSERT OR IGNORE INTO cache (hash, text, embedding) VALUES (?, ?, ?)",
                     data,
                 )
@@ -692,9 +686,8 @@ class VectorCache:
 
                     time.sleep(delay)
                     continue
-                else:
-                    # Re-raise if not a lock error or max retries exceeded
-                    raise
+                # Re-raise if not a lock error or max retries exceeded
+                raise
             except Exception:
                 # Re-raise any other exceptions
                 raise
@@ -727,12 +720,11 @@ class VectorCache:
 
                     time.sleep(delay)
                     continue
-                else:
-                    raise
+                raise
             except Exception:
                 raise
 
-    def get_config(self) -> Dict[str, Any]:
+    def get_config(self) -> dict[str, Any]:
         """Get current configuration."""
         return {
             "url_or_model": self.url_or_model,

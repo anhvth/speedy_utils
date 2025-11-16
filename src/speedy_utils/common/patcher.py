@@ -9,7 +9,7 @@ def patch_method(
     cls: Annotated[type, "Class containing the method"],
     method_name: Annotated[str, "Name of the method to patch"],
     replacements: Annotated[
-        dict[Union[str, re.Pattern], str],
+        dict[str | re.Pattern, str],
         "Mapping of {old_substring_or_regex: new_string} replacements",
     ],
     tag: Annotated[str, "Optional logging tag"] = "",

@@ -42,8 +42,7 @@ def print_table(data: Any, use_html: bool = True) -> None:
                 return tabulate(
                     rows, headers=headers, tablefmt="html" if use_html else "grid"
                 )
-            else:
-                raise ValueError("List must contain dictionaries")
+            raise ValueError("List must contain dictionaries")
 
         if isinstance(data, dict):
             headers = ["Key", "Value"]

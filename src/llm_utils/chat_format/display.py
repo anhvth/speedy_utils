@@ -77,7 +77,7 @@ def show_chat(
     theme: str = "default",
     as_markdown: bool = False,
     as_json: bool = False,
-) -> Optional[str]:
+) -> str | None:
     """
     Display chat messages as HTML.
 
@@ -242,15 +242,15 @@ def show_chat(
             f.write(html)
     if return_html:
         return html
-    else:
-        display(HTML(html))
+    display(HTML(html))
+    return None
 
 
 def get_conversation_one_turn(
-    system_msg: Optional[str] = None,
-    user_msg: Optional[str] = None,
-    assistant_msg: Optional[str] = None,
-    assistant_prefix: Optional[str] = None,
+    system_msg: str | None = None,
+    user_msg: str | None = None,
+    assistant_msg: str | None = None,
+    assistant_prefix: str | None = None,
     return_format: str = "chatml",
 ) -> Any:
     """
@@ -275,9 +275,8 @@ def get_conversation_one_turn(
             msg = str(msg)
         msg += assistant_prefix
         return msg
-    else:
-        assert return_format in ["chatml"]
-        return messages
+    assert return_format in ["chatml"]
+    return messages
 
 
 def highlight_diff_chars(text1: str, text2: str) -> str:

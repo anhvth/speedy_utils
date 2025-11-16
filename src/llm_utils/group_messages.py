@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import random
-from typing import Optional, Sequence
+from collections.abc import Sequence
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -16,7 +17,7 @@ def split_indices_by_length(
     random_seed: int,
     verbose: bool,
     shuffle: bool,
-    mean_length: Optional[int] = None,
+    mean_length: int | None = None,
 ) -> list[list[int]]:
     """
     Split indices into batches so that the sum of lengths in each batch does not exceed max_batch_length.

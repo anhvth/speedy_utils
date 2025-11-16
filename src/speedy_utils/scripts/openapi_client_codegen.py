@@ -33,7 +33,7 @@ def snake_case(s: str) -> str:
     return "".join(out)
 
 
-def map_openapi_type(prop: Dict[str, Any]) -> str:
+def map_openapi_type(prop: dict[str, Any]) -> str:
     t = prop.get("type")
     if t == "string":
         fmt = prop.get("format")
@@ -50,8 +50,8 @@ def map_openapi_type(prop: Dict[str, Any]) -> str:
     return "Any"
 
 
-def generate_models(components: Dict[str, Any]) -> List[str]:
-    lines: List[str] = []
+def generate_models(components: dict[str, Any]) -> list[str]:
+    lines: list[str] = []
     schemas = components.get("schemas", {})
     for name, schema in schemas.items():
         if "enum" in schema:
@@ -77,10 +77,10 @@ def generate_models(components: Dict[str, Any]) -> List[str]:
     return lines
 
 
-def generate_client(spec: Dict[str, Any]) -> List[str]:
+def generate_client(spec: dict[str, Any]) -> list[str]:
     paths = spec.get("paths", {})
     models = spec.get("components", {}).get("schemas", {})
-    lines: List[str] = []
+    lines: list[str] = []
     lines.append("class GeneratedClient:")
     lines.append('    """Client generated from OpenAPI spec."""')
     lines.append("")
@@ -115,8 +115,8 @@ def generate_client(spec: Dict[str, Any]) -> List[str]:
             func_name = snake_case(op_id)
             summary = op.get("summary", "").strip()
             # collect parameters
-            req_params: List[str] = ["self"]
-            opt_params: List[str] = []
+            req_params: list[str] = ["self"]
+            opt_params: list[str] = []
             # path params (required)
             path_params = [p for p in op.get("parameters", []) if p.get("in") == "path"]
             for p in path_params:
@@ -219,15 +219,15 @@ def main() -> None:
 
     try:
         spec_src = args.spec
-        if spec_src.startswith("http://") or spec_src.startswith("https://"):
+        if spec_src.startswith(("http://", "https://")):
             import httpx
 
             response = httpx.get(spec_src)
             spec = response.json()
         else:
-            with open(spec_src, "r", encoding="utf-8") as f:
+            with open(spec_src, encoding="utf-8") as f:
                 spec = json.load(f)
-        out: List[str] = []
+        out: list[str] = []
         # imports
         out.append("from typing import Any, Dict, List, Optional")
         out.append("from datetime import datetime")

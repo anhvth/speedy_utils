@@ -106,7 +106,7 @@ def handle_embed(args):
         if not file_path.exists():
             raise FileNotFoundError(f"File not found: {args.file}")
 
-        with open(file_path, "r", encoding="utf-8") as f:
+        with open(file_path, encoding="utf-8") as f:
             texts.extend([line.strip() for line in f if line.strip()])
 
     if not texts:

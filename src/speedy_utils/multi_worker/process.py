@@ -5,12 +5,14 @@ import pickle
 import threading
 import time
 import uuid
+from collections.abc import Callable, Iterable
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any
 
 import psutil
 from fastcore.parallel import parallel
 from tqdm import tqdm
+
 
 ray: Any
 try:
@@ -132,7 +134,7 @@ RAY_WORKER = None
 def ensure_ray(workers: int, pbar: tqdm | None = None):
     """Initialize or reinitialize Ray with a given worker count, log to bar postfix."""
     global RAY_WORKER
-    if not ray.is_initialized() or RAY_WORKER != workers:
+    if not ray.is_initialized() or workers != RAY_WORKER:
         if ray.is_initialized() and pbar:
             pbar.set_postfix_str(f"Restarting Ray {workers} workers")
             ray.shutdown()

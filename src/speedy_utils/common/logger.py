@@ -166,7 +166,7 @@ def log(
     *,
     level: Literal["info", "warning", "error", "critical", "success"] = "info",
     once: bool = False,
-    interval: Union[float, None] = None,
+    interval: float | None = None,
 ) -> None:
     """
     Log a message using loguru with optional `once` and `interval` control.

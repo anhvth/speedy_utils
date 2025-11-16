@@ -11,6 +11,7 @@ import requests
 from loguru import logger
 from openai import OpenAI
 
+
 try:
     import psutil
 
@@ -23,7 +24,7 @@ except ImportError:
     )
 
 # Global tracking of VLLM processes
-_VLLM_PROCESSES: List[subprocess.Popen] = []
+_VLLM_PROCESSES: list[subprocess.Popen] = []
 
 
 def _extract_port_from_vllm_cmd(vllm_cmd: str) -> int:
@@ -281,20 +282,18 @@ def get_base_client(
             return MOpenAI(
                 base_url=f"http://localhost:{port}/v1", api_key=api_key, cache=cache
             )
-        else:
-            raise ValueError("Either client or vllm_cmd must be provided.")
-    elif isinstance(client, int):
+        raise ValueError("Either client or vllm_cmd must be provided.")
+    if isinstance(client, int):
         return MOpenAI(
             base_url=f"http://localhost:{client}/v1", api_key=api_key, cache=cache
         )
-    elif isinstance(client, str):
+    if isinstance(client, str):
         return MOpenAI(base_url=client, api_key=api_key, cache=cache)
-    elif isinstance(client, OpenAI):
+    if isinstance(client, OpenAI):
         return MOpenAI(base_url=client.base_url, api_key=api_key, cache=cache)
-    else:
-        raise ValueError(
-            "Invalid client type. Must be OpenAI, port (int), base_url (str), or None."
-        )
+    raise ValueError(
+        "Invalid client type. Must be OpenAI, port (int), base_url (str), or None."
+    )
 
 
 def _is_lora_path(path: str) -> bool:
@@ -305,7 +304,7 @@ def _is_lora_path(path: str) -> bool:
     return os.path.isfile(adapter_config_path)
 
 
-def _get_port_from_client(client: OpenAI) -> Optional[int]:
+def _get_port_from_client(client: OpenAI) -> int | None:
     """Extract port from OpenAI client base_url."""
     if hasattr(client, "base_url") and client.base_url:
         base_url = str(client.base_url)

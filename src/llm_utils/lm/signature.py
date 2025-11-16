@@ -107,8 +107,8 @@ class SignatureMeta(type):
 class Signature(metaclass=SignatureMeta):
     """Base class for defining LLM signatures with input and output fields."""
 
-    _input_fields: Dict[str, Dict[str, Any]] = {}
-    _output_fields: Dict[str, Dict[str, Any]] = {}
+    _input_fields: dict[str, dict[str, Any]] = {}
+    _output_fields: dict[str, dict[str, Any]] = {}
 
     def __init__(self, **kwargs):
         """Initialize signature with field values."""
@@ -142,7 +142,7 @@ class Signature(metaclass=SignatureMeta):
         return instruction
 
     @classmethod
-    def get_input_model(cls) -> Type[BaseModel]:
+    def get_input_model(cls) -> type[BaseModel]:
         """Generate Pydantic input model from input fields."""
         if not cls._input_fields:
             raise ValueError(
@@ -176,7 +176,7 @@ class Signature(metaclass=SignatureMeta):
         return input_model
 
     @classmethod
-    def get_output_model(cls) -> Type[BaseModel]:
+    def get_output_model(cls) -> type[BaseModel]:
         """Generate Pydantic output model from output fields."""
         if not cls._output_fields:
             raise ValueError(

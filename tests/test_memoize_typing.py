@@ -1,9 +1,10 @@
 """Test that memoize preserves type information properly."""
 
-import os
 import sys
+from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 
 from typing import Any, Protocol
 
@@ -47,13 +48,13 @@ def test_openai_memoize_no_cast():
     # Note: We can't actually test with real API calls in tests
     # but we can at least verify the class initializes correctly
     try:
-        client = MOpenAI(api_key="dummy-key", cache=True)
+        client = MOpenAI(api_key='dummy-key', cache=True)
         # The post method should be properly typed
-        assert hasattr(client, "post")
+        assert hasattr(client, 'post')
         assert callable(client.post)
-        print("✅ MOpenAI initialization with memoization successful")
+        print('✅ MOpenAI initialization with memoization successful')
     except Exception as e:
-        print(f"❌ MOpenAI initialization failed: {e}")
+        print(f'❌ MOpenAI initialization failed: {e}')
         raise
 
 
@@ -61,19 +62,19 @@ def test_async_openai_memoize_no_cast():
     """Test that MAsyncOpenAI works without needing cast."""
 
     try:
-        client = MAsyncOpenAI(api_key="dummy-key", cache=True)
+        client = MAsyncOpenAI(api_key='dummy-key', cache=True)
         # The post method should be properly typed
-        assert hasattr(client, "post")
+        assert hasattr(client, 'post')
         assert callable(client.post)
-        print("✅ MAsyncOpenAI initialization with memoization successful")
+        print('✅ MAsyncOpenAI initialization with memoization successful')
     except Exception as e:
-        print(f"❌ MAsyncOpenAI initialization failed: {e}")
+        print(f'❌ MAsyncOpenAI initialization failed: {e}')
         raise
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     test_basic_memoize_typing()
     test_method_memoize_typing()
     test_openai_memoize_no_cast()
     test_async_openai_memoize_no_cast()
-    print("🎉 All tests passed!")
+    print('🎉 All tests passed!')

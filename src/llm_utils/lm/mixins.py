@@ -1,5 +1,7 @@
 """Mixin classes for LLM functionality extensions."""
 
+# type: ignore
+
 import os
 import subprocess
 from time import sleep
@@ -16,12 +18,12 @@ class TemperatureRangeMixin:
 
     def temperature_range_sampling(
         self,
-        input_data: Union[str, BaseModel, List[Dict]],
+        input_data: str | BaseModel | list[dict],
         temperature_ranges: tuple[float, float],
         n: int = 32,
-        response_model: Optional[Type[BaseModel] | Type[str]] = None,
+        response_model: type[BaseModel] | type[str] | None = None,
         **runtime_kwargs,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Sample LLM responses with a range of temperatures.
 
@@ -42,7 +44,7 @@ class TemperatureRangeMixin:
 
         min_temp, max_temp = temperature_ranges
         if n < 2:
-            raise ValueError(f"n must be >= 2, got {n}")
+            raise ValueError(f'n must be >= 2, got {n}')
 
         step = (max_temp - min_temp) / (n - 1)
         list_kwargs = []
@@ -56,7 +58,7 @@ class TemperatureRangeMixin:
             list_kwargs.append(kwargs)
 
         def f(kwargs):
-            i = kwargs.pop("i")
+            i = kwargs.pop('i')
             sleep(i * 0.05)
             return self.__inner_call__(
                 input_data,
@@ -73,10 +75,10 @@ class TwoStepPydanticMixin:
 
     def two_step_pydantic_parse(
         self,
-        input_data: Union[str, BaseModel, List[Dict]],
-        response_model: Type[BaseModel],
+        input_data: str | BaseModel | list[dict],
+        response_model: type[BaseModel],
         **runtime_kwargs,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Parse responses in two steps: text completion then Pydantic parsing.
 
@@ -96,30 +98,30 @@ class TwoStepPydanticMixin:
         parsed_results = []
 
         for result in results:
-            response_text = result["parsed"]
-            messages = result["messages"]
+            response_text = result['parsed']
+            messages = result['messages']
 
             # Handle reasoning models that use <think> tags
-            if "</think>" in response_text:
-                response_text = response_text.split("</think>")[1]
+            if '</think>' in response_text:
+                response_text = response_text.split('</think>')[1]
 
             try:
                 # Try direct parsing
                 parsed = response_model.model_validate_json(response_text)
             except Exception:
                 # Fallback: use LLM to extract JSON
-                logger.warning("Failed to parse JSON directly, using LLM to extract")
+                logger.warning('Failed to parse JSON directly, using LLM to extract')
                 _parsed_messages = [
                     {
-                        "role": "system",
-                        "content": (
-                            "You are a helpful assistant that extracts JSON from text."
+                        'role': 'system',
+                        'content': (
+                            'You are a helpful assistant that extracts JSON from text.'
                         ),
                     },
                     {
-                        "role": "user",
-                        "content": (
-                            f"Extract JSON from the following text:\n{response_text}"
+                        'role': 'user',
+                        'content': (
+                            f'Extract JSON from the following text:\n{response_text}'
                         ),
                     },
                 ]
@@ -128,9 +130,9 @@ class TwoStepPydanticMixin:
                     response_model=response_model,
                     **runtime_kwargs,
                 )[0]
-                parsed = parsed_result["parsed"]
+                parsed = parsed_result['parsed']
 
-            parsed_results.append({"parsed": parsed, "messages": messages})
+            parsed_results.append({'parsed': parsed, 'messages': messages})
 
         return parsed_results
 
@@ -157,7 +159,7 @@ class VLLMMixin:
             get_base_client,
         )
 
-        if not hasattr(self, "vllm_cmd") or not self.vllm_cmd:
+        if not hasattr(self, 'vllm_cmd') or not self.vllm_cmd:
             return
 
         port = _extract_port_from_vllm_cmd(self.vllm_cmd)
@@ -167,30 +169,30 @@ class VLLMMixin:
             try:
                 reuse_client = get_base_client(port, cache=False)
                 models_response = reuse_client.models.list()
-                if getattr(models_response, "data", None):
+                if getattr(models_response, 'data', None):
                     reuse_existing = True
                     logger.info(
-                        f"VLLM server already running on port {port}, reusing existing server (vllm_reuse=True)"
+                        f'VLLM server already running on port {port}, reusing existing server (vllm_reuse=True)'
                     )
                 else:
                     logger.info(
-                        f"No models returned from VLLM server on port {port}; starting a new server"
+                        f'No models returned from VLLM server on port {port}; starting a new server'
                     )
             except Exception as exc:
                 logger.info(
-                    f"Unable to reach VLLM server on port {port} (list_models failed): {exc}. Starting a new server."
+                    f'Unable to reach VLLM server on port {port} (list_models failed): {exc}. Starting a new server.'
                 )
 
         if not self.vllm_reuse:
             if _is_server_running(port):
                 logger.info(
-                    f"VLLM server already running on port {port}, killing it first (vllm_reuse=False)"
+                    f'VLLM server already running on port {port}, killing it first (vllm_reuse=False)'
                 )
                 _kill_vllm_on_port(port)
-            logger.info(f"Starting new VLLM server on port {port}")
+            logger.info(f'Starting new VLLM server on port {port}')
             self.vllm_process = _start_vllm_server(self.vllm_cmd, self.vllm_timeout)
         elif not reuse_existing:
-            logger.info(f"Starting VLLM server on port {port}")
+            logger.info(f'Starting VLLM server on port {port}')
             self.vllm_process = _start_vllm_server(self.vllm_cmd, self.vllm_timeout)
 
     def _load_lora_adapter(self) -> None:
@@ -216,10 +218,10 @@ class VLLMMixin:
                 f"Invalid LoRA path '{self.lora_path}': Directory must contain 'adapter_config.json'"
             )
 
-        logger.info(f"Loading LoRA adapter from: {self.lora_path}")
+        logger.info(f'Loading LoRA adapter from: {self.lora_path}')
 
         # Get the expected LoRA name (basename of the path)
-        lora_name = os.path.basename(self.lora_path.rstrip("/\\"))
+        lora_name = os.path.basename(self.lora_path.rstrip('/\\'))
         if not lora_name:  # Handle edge case of empty basename
             lora_name = os.path.basename(os.path.dirname(self.lora_path))
 
@@ -228,7 +230,7 @@ class VLLMMixin:
             available_models = [m.id for m in self.client.models.list().data]
         except Exception as e:
             logger.warning(
-                f"Failed to list models, proceeding with LoRA load: {str(e)[:100]}"
+                f'Failed to list models, proceeding with LoRA load: {str(e)[:100]}'
             )
             available_models = []
 
@@ -237,7 +239,7 @@ class VLLMMixin:
             logger.info(
                 f"LoRA adapter '{lora_name}' is already loaded, using existing model"
             )
-            self.model_kwargs["model"] = lora_name
+            self.model_kwargs['model'] = lora_name
             return
 
         # Force unload if requested
@@ -247,31 +249,31 @@ class VLLMMixin:
             if port is not None:
                 try:
                     VLLMMixin.unload_lora(port, lora_name)
-                    logger.info(f"Successfully unloaded LoRA adapter: {lora_name}")
+                    logger.info(f'Successfully unloaded LoRA adapter: {lora_name}')
                 except Exception as e:
-                    logger.warning(f"Failed to unload LoRA adapter: {str(e)[:100]}")
+                    logger.warning(f'Failed to unload LoRA adapter: {str(e)[:100]}')
 
         # Get port from client for API calls
         port = _get_port_from_client(self.client)
         if port is None:
             raise ValueError(
                 f"Cannot load LoRA adapter '{self.lora_path}': "
-                f"Unable to determine port from client base_url. "
-                f"LoRA loading requires a client initialized with port."
+                f'Unable to determine port from client base_url. '
+                f'LoRA loading requires a client initialized with port.'
             )
 
         try:
             # Load the LoRA adapter
             loaded_lora_name = _load_lora_adapter(self.lora_path, port)
-            logger.info(f"Successfully loaded LoRA adapter: {loaded_lora_name}")
+            logger.info(f'Successfully loaded LoRA adapter: {loaded_lora_name}')
 
             # Update model name to the loaded LoRA name
-            self.model_kwargs["model"] = loaded_lora_name
+            self.model_kwargs['model'] = loaded_lora_name
 
         except requests.RequestException as e:
             # Check if error is due to LoRA already being loaded
             error_msg = str(e)
-            if "400" in error_msg or "Bad Request" in error_msg:
+            if '400' in error_msg or 'Bad Request' in error_msg:
                 logger.info(
                     f"LoRA adapter may already be loaded, attempting to use '{lora_name}'"
                 )
@@ -282,14 +284,14 @@ class VLLMMixin:
                         logger.info(
                             f"Found LoRA adapter '{lora_name}' in updated model list"
                         )
-                        self.model_kwargs["model"] = lora_name
+                        self.model_kwargs['model'] = lora_name
                         return
                 except Exception:
                     pass  # Fall through to original error
 
             raise ValueError(
                 f"Failed to load LoRA adapter from '{self.lora_path}': {error_msg[:100]}"
-            )
+            ) from e
 
     def unload_lora_adapter(self, lora_path: str) -> None:
         """
@@ -306,14 +308,14 @@ class VLLMMixin:
         port = _get_port_from_client(self.client)
         if port is None:
             raise ValueError(
-                "Cannot unload LoRA adapter: "
-                "Unable to determine port from client base_url. "
-                "LoRA operations require a client initialized with port."
+                'Cannot unload LoRA adapter: '
+                'Unable to determine port from client base_url. '
+                'LoRA operations require a client initialized with port.'
             )
 
         _unload_lora_adapter(lora_path, port)
-        lora_name = os.path.basename(lora_path.rstrip("/\\"))
-        logger.info(f"Unloaded LoRA adapter: {lora_name}")
+        lora_name = os.path.basename(lora_path.rstrip('/\\'))
+        logger.info(f'Unloaded LoRA adapter: {lora_name}')
 
     @staticmethod
     def unload_lora(port: int, lora_name: str) -> None:
@@ -329,15 +331,15 @@ class VLLMMixin:
         """
         try:
             response = requests.post(
-                f"http://localhost:{port}/v1/unload_lora_adapter",
+                f'http://localhost:{port}/v1/unload_lora_adapter',
                 headers={
-                    "accept": "application/json",
-                    "Content-Type": "application/json",
+                    'accept': 'application/json',
+                    'Content-Type': 'application/json',
                 },
-                json={"lora_name": lora_name, "lora_int_id": 0},
+                json={'lora_name': lora_name, 'lora_int_id': 0},
             )
             response.raise_for_status()
-            logger.info(f"Successfully unloaded LoRA adapter: {lora_name}")
+            logger.info(f'Successfully unloaded LoRA adapter: {lora_name}')
         except requests.RequestException as e:
             logger.error(f"Error unloading LoRA adapter '{lora_name}': {str(e)[:100]}")
             raise
@@ -346,7 +348,7 @@ class VLLMMixin:
         """Stop the VLLM server process if started by this instance."""
         from .utils import stop_vllm_process
 
-        if hasattr(self, "vllm_process") and self.vllm_process is not None:
+        if hasattr(self, 'vllm_process') and self.vllm_process is not None:
             stop_vllm_process(self.vllm_process)
             self.vllm_process = None
 
@@ -382,7 +384,7 @@ class ModelUtilsMixin:
     """Mixin for model utility methods."""
 
     @staticmethod
-    def list_models(client: Union[OpenAI, int, str, None] = None) -> List[str]:
+    def list_models(client: OpenAI | int | str | None = None) -> list[str]:
         """
         List available models from the OpenAI client.
 

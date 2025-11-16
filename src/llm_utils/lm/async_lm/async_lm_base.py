@@ -40,10 +40,10 @@ class AsyncLMBase:
     def __init__(
         self,
         *,
-        base_url: Optional[str] = None,
-        api_key: Optional[str] = None,
+        base_url: str | None = None,
+        api_key: str | None = None,
         cache: bool = True,
-        ports: Optional[List[int]] = None,
+        ports: list[int] | None = None,
     ) -> None:
         self.base_url = base_url
         self.api_key = api_key or os.getenv("OPENAI_API_KEY", "abc")
@@ -89,8 +89,8 @@ class AsyncLMBase:
     async def __call__(  # type: ignore
         self,
         *,
-        prompt: Optional[str] = ...,
-        messages: Optional[RawMsgs] = ...,
+        prompt: str | None = ...,
+        messages: RawMsgs | None = ...,
         response_format: type[str] = str,
         return_openai_response: bool = ...,
         **kwargs: Any,
@@ -100,9 +100,9 @@ class AsyncLMBase:
     async def __call__(
         self,
         *,
-        prompt: Optional[str] = ...,
-        messages: Optional[RawMsgs] = ...,
-        response_format: Type[TModel],
+        prompt: str | None = ...,
+        messages: RawMsgs | None = ...,
+        response_format: type[TModel],
         return_openai_response: bool = ...,
         **kwargs: Any,
     ) -> TModel: ...
@@ -144,8 +144,8 @@ class AsyncLMBase:
 
     @staticmethod
     def _parse_output(
-        raw_response: Any, response_format: Union[type[str], Type[BaseModel]]
-    ) -> Union[str, BaseModel]:
+        raw_response: Any, response_format: type[str] | type[BaseModel]
+    ) -> str | BaseModel:
         if hasattr(raw_response, "model_dump"):
             raw_response = raw_response.model_dump()
 
@@ -155,7 +155,7 @@ class AsyncLMBase:
                 return message.get("content", "") or ""
             return cast(str, raw_response)
 
-        model_cls = cast(Type[BaseModel], response_format)
+        model_cls = cast(type[BaseModel], response_format)
 
         if isinstance(raw_response, dict) and "choices" in raw_response:
             message = raw_response["choices"][0]["message"]
@@ -190,7 +190,7 @@ class AsyncLMBase:
     # ------------------------------------------------------------------ #
 
     @staticmethod
-    async def list_models(base_url: Optional[str] = None) -> List[str]:
+    async def list_models(base_url: str | None = None) -> list[str]:
         try:
             if base_url is None:
                 raise ValueError("base_url must be provided")
@@ -245,4 +245,3 @@ class AsyncLMBase:
 
     async def inspect_history(self):
         """Inspect the history of the LLM calls."""
-        pass

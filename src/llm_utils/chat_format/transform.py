@@ -6,9 +6,8 @@ from copy import deepcopy
 def identify_format(item):
     if isinstance(item, list) and "role" in item[0]:
         return "chatml"
-    if isinstance(item, dict):
-        if "conversations" in item:
-            return "sharegpt"
+    if isinstance(item, dict) and "conversations" in item:
+        return "sharegpt"
     raise ValueError(
         f"The format of the item is not recognized. \n{type(item)=}, \n{item=}"
     )
@@ -83,16 +82,16 @@ def transform_messages(
                         {"from": message["role"], "value": message["content"]}
                     )
             return ret
-        elif to == "chatml":
+        if to == "chatml":
             return _transform_sharegpt_to_chatml(item)
-        elif to == "text":
+        if to == "text":
             text = ""
             for turn in chatml_messages:
                 text += f"<|im_start|>{turn['role']}\n{turn['content']}<|im_end|>\n"
             if add_generation_prompt:
                 text += "<|im_start|>assistant\n"
             return text
-        elif to == "simulated_chat":
+        if to == "simulated_chat":
             text = "<role> Given the simulated chat, you are the assistant. Lets continue the conversation. \n\n"
             for turn in chatml_messages:
                 prefix = {
@@ -105,11 +104,9 @@ def transform_messages(
             if add_generation_prompt:
                 text += "AI: [continue the conversation here]"
             return text
-        else:
-            raise ValueError(f"{to} is not supported.")
+        raise ValueError(f"{to} is not supported.")
 
-    else:
-        return item
+    return item
 
 
 def transform_messages_to_chatml(input_data, input_format="auto"):

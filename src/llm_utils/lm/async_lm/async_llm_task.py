@@ -18,10 +18,11 @@ from llm_utils.lm.async_lm._utils import InputModelType, OutputModelType, Parsed
 from llm_utils.lm.async_lm.async_lm import AsyncLM
 from speedy_utils.all import dump_json_or_pickle, identify
 
+
 # Type aliases for better readability
 TModel = TypeVar("TModel", bound=BaseModel)
-Messages = List[ChatCompletionMessageParam]
-LegacyMsgs = List[Dict[str, str]]
+Messages = list[ChatCompletionMessageParam]
+LegacyMsgs = list[dict[str, str]]
 RawMsgs = Union[Messages, LegacyMsgs]
 
 # Default configuration constants
@@ -31,22 +32,22 @@ RawMsgs = Union[Messages, LegacyMsgs]
 class LMConfiguration:
     """Configuration class for language model parameters."""
 
-    model: Optional[str] = None
-    temperature: Optional[float] = None
-    max_tokens: Optional[int] = None
-    base_url: Optional[str] = None
-    api_key: Optional[str] = None
-    cache: Optional[bool] = True
-    think: Optional[Literal[True, False]] = None
-    add_json_schema_to_instruction: Optional[bool] = None
-    use_beta: Optional[bool] = False
-    ports: Optional[List[int]] = None
-    top_p: Optional[float] = None
-    presence_penalty: Optional[float] = None
-    top_k: Optional[int] = None
-    repetition_penalty: Optional[float] = None
+    model: str | None = None
+    temperature: float | None = None
+    max_tokens: int | None = None
+    base_url: str | None = None
+    api_key: str | None = None
+    cache: bool | None = True
+    think: Literal[True, False] | None = None
+    add_json_schema_to_instruction: bool | None = None
+    use_beta: bool | None = False
+    ports: list[int] | None = None
+    top_p: float | None = None
+    presence_penalty: float | None = None
+    top_k: int | None = None
+    repetition_penalty: float | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert configuration to dictionary format."""
         return {
             "model": self.model,
@@ -83,41 +84,41 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
     OutputModel: OutputModelType
 
     # default class attributes for configuration
-    DEFAULT_MODEL: Optional[str] = None
-    DEFAULT_CACHE_DIR: Optional[pathlib.Path] = None
-    DEFAULT_TEMPERATURE: Optional[float] = None
-    DEFAULT_MAX_TOKENS: Optional[int] = None
-    DEFAULT_TOP_P: Optional[float] = None
-    DEFAULT_PRESENCE_PENALTY: Optional[float] = None
-    DEFAULT_TOP_K: Optional[int] = None
-    DEFAULT_REPETITION_PENALTY: Optional[float] = None
-    DEFAULT_CACHE: Optional[bool] = True
-    DEFAULT_THINK: Optional[Literal[True, False]] = None
-    DEFAULT_PORTS: Optional[List[int]] = None
-    DEFAULT_USE_BETA: Optional[bool] = False
-    DEFAULT_ADD_JSON_SCHEMA_TO_INSTRUCTION: Optional[bool] = True
-    DEFAULT_COLLECT_DATA: Optional[bool] = None
-    DEFAULT_BASE_URL: Optional[str] = None
-    DEFAULT_API_KEY: Optional[str] = None
+    DEFAULT_MODEL: str | None = None
+    DEFAULT_CACHE_DIR: pathlib.Path | None = None
+    DEFAULT_TEMPERATURE: float | None = None
+    DEFAULT_MAX_TOKENS: int | None = None
+    DEFAULT_TOP_P: float | None = None
+    DEFAULT_PRESENCE_PENALTY: float | None = None
+    DEFAULT_TOP_K: int | None = None
+    DEFAULT_REPETITION_PENALTY: float | None = None
+    DEFAULT_CACHE: bool | None = True
+    DEFAULT_THINK: Literal[True, False] | None = None
+    DEFAULT_PORTS: list[int] | None = None
+    DEFAULT_USE_BETA: bool | None = False
+    DEFAULT_ADD_JSON_SCHEMA_TO_INSTRUCTION: bool | None = True
+    DEFAULT_COLLECT_DATA: bool | None = None
+    DEFAULT_BASE_URL: str | None = None
+    DEFAULT_API_KEY: str | None = None
 
     IS_DATA_COLLECTION: bool = False
 
     def __init__(
         self,
-        model: Optional[str] = None,
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
-        base_url: Optional[str] = None,
-        api_key: Optional[str] = None,
-        cache: Optional[bool] = None,
-        think: Optional[Literal[True, False]] = None,
-        add_json_schema_to_instruction: Optional[bool] = None,
-        use_beta: Optional[bool] = None,
-        ports: Optional[List[int]] = None,
-        top_p: Optional[float] = None,
-        presence_penalty: Optional[float] = None,
-        top_k: Optional[int] = None,
-        repetition_penalty: Optional[float] = None,
+        model: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        cache: bool | None = None,
+        think: Literal[True, False] | None = None,
+        add_json_schema_to_instruction: bool | None = None,
+        use_beta: bool | None = None,
+        ports: list[int] | None = None,
+        top_p: float | None = None,
+        presence_penalty: float | None = None,
+        top_k: int | None = None,
+        repetition_penalty: float | None = None,
     ) -> None:
         """
         Initialize the AsyncLLMTask with language model configuration.
@@ -156,7 +157,7 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
                 else self.DEFAULT_REPETITION_PENALTY
             ),
         )
-        self._lm: Optional[AsyncLM] = None
+        self._lm: AsyncLM | None = None
 
     @property
     def lm(self) -> AsyncLM:
@@ -225,7 +226,7 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
             "or use proper generic typing with AsyncLLMTask[InputModel, OutputModel]"
         )
 
-    def _validate_and_convert_input(self, data: Union[BaseModel, dict]) -> BaseModel:
+    def _validate_and_convert_input(self, data: BaseModel | dict) -> BaseModel:
         """
         Validate and convert input data to the expected input model type.
 
@@ -273,7 +274,7 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
         return output_model_type
 
     async def _base_call(
-        self, data: Union[BaseModel, dict]
+        self, data: BaseModel | dict
     ) -> ParsedOutput[OutputModelType]:
         """
         Core method that handles language model interaction with type safety.
@@ -341,10 +342,10 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
         input_data: InputModelType,
         think_messages: Messages,
         no_think_messages: Messages,
-        model_kwargs: Dict[str, Any],
+        model_kwargs: dict[str, Any],
         cache_dir: pathlib.Path,
-        expected_response: Optional[OutputModelType] = None,
-        label: Optional[str] = None,
+        expected_response: OutputModelType | None = None,
+        label: str | None = None,
     ) -> None:
         """
         Save training data to cache directory.
@@ -382,9 +383,9 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
     async def _generate_training_data_with_thinking_mode(
         self,
         input_data: InputModelType,
-        expected_response: Optional[OutputModelType] = None,
-        label: Optional[str] = None,
-        cache_dir: Optional[pathlib.Path] = None,
+        expected_response: OutputModelType | None = None,
+        label: str | None = None,
+        cache_dir: pathlib.Path | None = None,
     ) -> OutputModelType:
         """
         Generate training data for both thinking and non-thinking modes.
@@ -439,8 +440,8 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
     async def __call__(
         self,
         input_data: InputModelType,
-        expected_response: Optional[OutputModelType] = None,
-        label: Optional[str] = None,
+        expected_response: OutputModelType | None = None,
+        label: str | None = None,
         **kwargs: Any,
     ) -> OutputModelType:
         """
@@ -465,13 +466,12 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
                 expected_response=expected_response,
                 label=label,
             )
-        else:
-            output = await self._base_call(input_data)
-            return output["parsed"]
+        output = await self._base_call(input_data)
+        return output["parsed"]
 
     def generate_training_data(
         self, input_json: str, output_json: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Generate training data in ShareGPT format for the given input/output pair.
 

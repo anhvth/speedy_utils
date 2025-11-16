@@ -5,6 +5,7 @@ import time
 from loguru import logger
 from tabulate import tabulate
 
+
 __all__ = ["Clock", "timef"]
 
 
@@ -16,9 +17,7 @@ def timef(func):
         result = func(*args, **kwargs)
         end_time = time.time()
         execution_time = end_time - start_time
-        logger.opt(depth=2).info(
-            f"{func.__name__} took {execution_time:0.2f} seconds to execute."
-        )
+        logger.opt(depth=2).info(f"{func.__name__} took {execution_time:0.2f} seconds to execute.")
         return result
 
     return wrapper
@@ -91,16 +90,12 @@ class Clock:
         """Return the time elapsed since the last checkpoint and update the last checkpoint."""
         # assert self.start_time is not None, f"Timer has not been started. {id(self)=}"
         if not self.start_time:
-            logger.opt(depth=2).warning(
-                "Timer has not been started. Please call start() before using this method."
-            )
-            return
+            logger.opt(depth=2).warning("Timer has not been started. Please call start() before using this method.")
+            return None
         current_time = time.time()
         if self.last_checkpoint is None:
-            logger.opt(depth=2).warning(
-                "Last checkpoint is not set. Please call start() before using this method."
-            )
-            return
+            logger.opt(depth=2).warning("Last checkpoint is not set. Please call start() before using this method.")
+            return None
         elapsed = current_time - self.last_checkpoint
         self.last_checkpoint = current_time
         return elapsed
@@ -112,15 +107,11 @@ class Clock:
         """Return the time elapsed since the last checkpoint."""
         if self.start_time is None:
             # raise ValueError("Timer has not been started.")
-            logger.opt(depth=2).warning(
-                "Timer has not been started. Please call start() before using this method."
-            )
-            return
+            logger.opt(depth=2).warning("Timer has not been started. Please call start() before using this method.")
+            return None
         if self.last_checkpoint is None:
-            logger.opt(depth=2).warning(
-                "Last checkpoint is not set. Please call start() before using this method."
-            )
-            return
+            logger.opt(depth=2).warning("Last checkpoint is not set. Please call start() before using this method.")
+            return None
         return time.time() - self.last_checkpoint
 
     def update_task(self, task_name):
@@ -134,9 +125,7 @@ class Clock:
         file_lineno = f"{os.path.basename(caller_frame.filename)}:{caller_frame.lineno}"
 
         # Calculate the depth of the current call (i.e., how far it is in the stack)
-        call_depth = (
-            len(stack) - 1
-        )  # Subtract 1 to exclude the current frame from the depth count
+        call_depth = len(stack) - 1  # Subtract 1 to exclude the current frame from the depth count
         if call_depth < self.min_depth:
             self.min_depth = call_depth
 
@@ -153,12 +142,11 @@ class Clock:
         """Return ANSI color code based on percentage."""
         if percentage >= 75:
             return "\033[91m"  # Red
-        elif percentage >= 50:
+        if percentage >= 50:
             return "\033[93m"  # Yellow
-        elif percentage >= 25:
+        if percentage >= 25:
             return "\033[92m"  # Green
-        else:
-            return "\033[94m"  # Blue
+        return "\033[94m"  # Blue
 
     def print_task_table(self, interval=1, max_depth=None):
         """Print the task time table at regular intervals."""
@@ -166,9 +154,7 @@ class Clock:
 
         if current_time - self.last_print_time > interval:
             self.print_counter += 1
-            total_time = (
-                sum(data["time"] for data in self.task_times.values()) or 1
-            )  # Avoid division by zero
+            total_time = sum(data["time"] for data in self.task_times.values()) or 1  # Avoid division by zero
 
             # Prepare data for the table
             table_data = []

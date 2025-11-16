@@ -14,6 +14,7 @@ from tabulate import tabulate
 
 from speedy_utils import setup_logger
 
+
 setup_logger(min_interval=5)
 
 
@@ -133,10 +134,9 @@ def format_uptime(start_time):
 
     if hours > 0:
         return f"{hours}h {minutes}m {seconds}s"
-    elif minutes > 0:
+    if minutes > 0:
         return f"{minutes}m {seconds}s"
-    else:
-        return f"{seconds}s"
+    return f"{seconds}s"
 
 
 def print_banner():
@@ -248,13 +248,12 @@ async def check_server_health(session, host, port):
                 )
                 await response.release()
                 return True
-            else:
-                logger.debug(
-                    f"[{LOAD_BALANCER_PORT=}] Health check failed for {url} (Status: {response.status})"
-                )
-                await response.release()
-                return False
-    except asyncio.TimeoutError:
+            logger.debug(
+                f"[{LOAD_BALANCER_PORT=}] Health check failed for {url} (Status: {response.status})"
+            )
+            await response.release()
+            return False
+    except TimeoutError:
         logger.debug(f"Health check HTTP request timeout for {url}")
         return False
     except aiohttp.ClientConnectorError as e:
@@ -312,11 +311,11 @@ async def scan_and_update_servers():
 
                 if added:
                     logger.info(
-                        f"Servers added (passed /health check): {sorted(list(added))}"
+                        f"Servers added (passed /health check): {sorted(added)}"
                     )
                 if removed:
                     logger.info(
-                        f"Servers removed (failed /health check or stopped): {sorted(list(removed))}"
+                        f"Servers removed (failed /health check or stopped): {sorted(removed)}"
                     )
                     for server in removed:
                         if server in connection_counts:
@@ -330,7 +329,7 @@ async def scan_and_update_servers():
                                 f"Removed throttling timestamp for unavailable server {server}"
                             )
 
-                available_servers = sorted(list(current_set))
+                available_servers = sorted(current_set)
                 for server in available_servers:
                     if server not in connection_counts:
                         connection_counts[server] = 0
@@ -932,10 +931,8 @@ async def main():
             logger.info("Cancelling background tasks...")
             scan_task.cancel()
             status_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await asyncio.gather(scan_task, status_task, return_exceptions=True)
-            except asyncio.CancelledError:
-                pass
             print(f"{Colors.BRIGHT_GREEN}✅ Shutdown complete. Goodbye!{Colors.RESET}")
             logger.info("Background tasks finished.")
 

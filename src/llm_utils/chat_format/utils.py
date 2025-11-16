@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from typing import Callable, Dict, List
+from collections.abc import Callable
+from typing import Dict, List
 
 
-def build_chatml_input(template: str, params: List[str]) -> Callable:
-    def formator(**kwargs) -> List[List[Dict[str, str]]]:
-        system_msg = kwargs.get("system_msg", None)
+def build_chatml_input(template: str, params: list[str]) -> Callable:
+    def formator(**kwargs) -> list[list[dict[str, str]]]:
+        system_msg = kwargs.get("system_msg")
         kwargs.pop("system_msg", None)
         for param in params:
             if param not in kwargs:

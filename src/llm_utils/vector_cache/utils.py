@@ -39,9 +39,8 @@ def estimate_cache_size(num_texts: int, embedding_dim: int = 1024) -> str:
 
     if total_bytes < 1024:
         return f"{total_bytes} bytes"
-    elif total_bytes < 1024 * 1024:
+    if total_bytes < 1024 * 1024:
         return f"{total_bytes / 1024:.1f} KB"
-    elif total_bytes < 1024 * 1024 * 1024:
+    if total_bytes < 1024 * 1024 * 1024:
         return f"{total_bytes / (1024 * 1024):.1f} MB"
-    else:
-        return f"{total_bytes / (1024 * 1024 * 1024):.1f} GB"
+    return f"{total_bytes / (1024 * 1024 * 1024):.1f} GB"

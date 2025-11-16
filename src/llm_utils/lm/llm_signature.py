@@ -18,7 +18,7 @@ from .signature import Signature
 class LLMSignature(LLM):
     """Base class for LLM judges with template support and SFT export."""
 
-    def __init__(self, signature: Type[Signature], **kwargs):
+    def __init__(self, signature: type[Signature], **kwargs):
         """
         Initialize LLMJudgeBase.
 
@@ -28,7 +28,7 @@ class LLMSignature(LLM):
             **kwargs: Additional arguments passed to LLMTask
         """
         self.signature = signature
-        self.sft_data: List[Dict[str, Any]] = []  # Store SFT training examples
+        self.sft_data: list[dict[str, Any]] = []  # Store SFT training examples
 
         # Set instruction from signature if available
         kwargs.setdefault("instruction", signature.get_instruction())

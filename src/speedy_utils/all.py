@@ -65,7 +65,8 @@ import time
 import traceback
 import uuid
 from collections import Counter, defaultdict
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable as TypingCallable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from glob import glob
 from multiprocessing import Pool
@@ -73,18 +74,11 @@ from pathlib import Path
 from threading import Lock
 from typing import (
     Any,
-    Awaitable,
-)
-from typing import Callable as TypingCallable
-from typing import (
     Dict,
     Generic,
-    Iterable,
     List,
     Literal,
-    Mapping,
     Optional,
-    Sequence,
     Set,
     Tuple,
     Type,
@@ -133,6 +127,7 @@ from speedy_utils import (  # Clock module; Function decorators; Cache utilities
     speedy_timer,
     timef,
 )
+
 
 choice = random.choice
 

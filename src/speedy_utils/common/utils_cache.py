@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import functools
 import inspect
 import json
@@ -7,8 +8,10 @@ import os.path as osp
 import pickle
 import uuid
 import weakref
+from collections.abc import Awaitable, Callable
 from threading import Lock
-from typing import Any, Awaitable, Callable, Literal, Optional, TypeVar, overload
+from typing import Any, Literal, Optional, TypeVar, overload
+
 
 try:
     # Python 3.10+
@@ -25,11 +28,12 @@ from pydantic import BaseModel
 from speedy_utils.common.utils_io import dump_json_or_pickle, load_json_or_pickle
 from speedy_utils.common.utils_misc import mkdir_or_exist
 
+
 # --------------------------------------------------------------------------------------
 # Defaults / Globals
 # --------------------------------------------------------------------------------------
 
-SPEED_CACHE_DIR = osp.join(osp.expanduser("~"), ".cache/speedy_cache")
+SPEED_CACHE_DIR = osp.join(osp.expanduser('~'), '.cache/speedy_cache')
 
 # Thread locks for safety
 disk_lock = Lock()
@@ -37,10 +41,10 @@ mem_lock = Lock()
 
 # Quick identifier cache for big objects that support weakref
 # (prevents recomputing expensive keys for the same object instance)
-_QUICK_ID_MAP: "weakref.WeakKeyDictionary[Any, str]" = weakref.WeakKeyDictionary()
+_QUICK_ID_MAP: 'weakref.WeakKeyDictionary[Any, str]' = weakref.WeakKeyDictionary()
 
 # Per-function memory caches (so different functions can have different LRU sizes)
-_MEM_CACHES: "weakref.WeakKeyDictionary[Callable[..., Any], cachetools.LRUCache]" = (
+_MEM_CACHES: 'weakref.WeakKeyDictionary[Callable[..., Any], cachetools.LRUCache]' = (
     weakref.WeakKeyDictionary()
 )
 
@@ -51,8 +55,8 @@ _GLOBAL_MEMORY_CACHE: dict[str, Any] = {}
 LRU_MEM_CACHE = cachetools.LRUCache(maxsize=256)
 
 # Typing helpers
-P = ParamSpec("P")
-R = TypeVar("R")
+P = ParamSpec('P')
+R = TypeVar('R')
 AsyncFunc = Callable[P, Awaitable[R]]
 
 # --------------------------------------------------------------------------------------
@@ -63,7 +67,7 @@ AsyncFunc = Callable[P, Awaitable[R]]
 def fast_serialize(x: Any) -> bytes:
     """Serialize x quickly; JSON if possible (stable), else pickle."""
     try:
-        return json.dumps(x, sort_keys=True, default=str).encode("utf-8")
+        return json.dumps(x, sort_keys=True, default=str).encode('utf-8')
     except (TypeError, ValueError):
         return pickle.dumps(x, protocol=pickle.HIGHEST_PROTOCOL)
 
@@ -80,31 +84,28 @@ def get_source(func: Callable[..., Any]) -> str:
         code = inspect.getsource(func)
     except OSError:
         # source not available (e.g., builtins, some C extensions)
-        mod = getattr(func, "__module__", "unknown")
-        qn = getattr(func, "__qualname__", getattr(func, "__name__", "unknown"))
-        code = f"{mod}.{qn}"
+        mod = getattr(func, '__module__', 'unknown')
+        qn = getattr(func, '__qualname__', getattr(func, '__name__', 'unknown'))
+        code = f'{mod}.{qn}'
     # normalize whitespace to make it stable
-    for r in (" ", "\n", "\t", "\r"):
-        code = code.replace(r, "")
+    for r in (' ', '\n', '\t', '\r'):
+        code = code.replace(r, '')
     return code
 
 
-def _try_get_quick_id(obj: Any) -> Optional[str]:
+def _try_get_quick_id(obj: Any) -> str | None:
     """Return a quick identifier if obj is weakref-able and cached."""
-    try:
+    with contextlib.suppress(TypeError):
         return _QUICK_ID_MAP.get(obj)  # type: ignore[arg-type]
-    except TypeError:
-        # not weakref-able (e.g., list/dict); cannot use WeakKeyDictionary
-        return None
+    # not weakref-able (e.g., list/dict); cannot use WeakKeyDictionary
+    return None
 
 
 def _try_store_quick_id(obj: Any, ident: str) -> None:
     """Store quick identifier if obj is weakref-able."""
-    try:
+    with contextlib.suppress(TypeError):
         _QUICK_ID_MAP[obj] = ident  # type: ignore[index]
-    except TypeError:
-        # not weakref-able
-        pass
+    # not weakref-able
 
 
 def identify(obj: Any, depth: int = 0, max_depth: int = 2) -> str:
@@ -120,45 +121,50 @@ def identify(obj: Any, depth: int = 0, max_depth: int = 2) -> str:
 
     if isinstance(obj, (list, tuple)):
         x = [identify(x, depth + 1, max_depth) for x in obj]
-        x = "\n".join(x)
+        x = '\n'.join(x)
         out = identify(x, depth + 1, max_depth)
         if depth == 0:
             _try_store_quick_id(obj, out)
         return out
-    elif isinstance(obj, (pd.DataFrame, pd.Series)):
+    if isinstance(obj, (pd.DataFrame, pd.Series)):
         x = str(obj.to_dict())
         out = identify(x, depth + 1, max_depth)
         if depth == 0:
             _try_store_quick_id(obj, out)
         return out
-    elif hasattr(obj, "__code__"):
+    if hasattr(obj, '__code__'):
         out = identify(get_source(obj), depth + 1, max_depth)
         if depth == 0:
             _try_store_quick_id(obj, out)
         return out
-    elif isinstance(obj, BaseModel):
-        out = identify(obj.model_dump(), depth + 1, max_depth)
+    if isinstance(obj, BaseModel):
+        # Use hasattr for type checker compatibility
+        model_data = (
+            obj.model_dump()  # type: ignore
+            if hasattr(obj, 'model_dump')
+            else obj.dict()
+        )
+        out = identify(model_data, depth + 1, max_depth)
         if depth == 0:
             _try_store_quick_id(obj, out)
         return out
-    elif isinstance(obj, dict):
+    if isinstance(obj, dict):
         ks = sorted(obj.keys())
         vs = [identify(obj[k], depth + 1, max_depth) for k in ks]
         out = identify([ks, vs], depth + 1, max_depth)
         if depth == 0:
             _try_store_quick_id(obj, out)
         return out
-    elif obj is None:
-        out = identify("None", depth + 1, max_depth)
+    if obj is None:
+        out = identify('None', depth + 1, max_depth)
         if depth == 0:
             _try_store_quick_id(obj, out)
         return out
-    else:
-        # primitives / everything else
-        out = xxhash.xxh64_hexdigest(fast_serialize(obj), seed=0)
-        if depth == 0:
-            _try_store_quick_id(obj, out)
-        return out
+    # primitives / everything else
+    out = xxhash.xxh64_hexdigest(fast_serialize(obj), seed=0)
+    if depth == 0:
+        _try_store_quick_id(obj, out)
+    return out
 
 
 def _build_named_keys(
@@ -173,7 +179,7 @@ def _build_named_keys(
     used_args.update(kwargs)
     values = [used_args[k] for k in keys if k in used_args]
     if not values:
-        raise ValueError(f"Keys {keys} not found in function arguments")
+        raise ValueError(f'Keys {keys} not found in function arguments')
     return values
 
 
@@ -182,8 +188,8 @@ def _compute_cache_components(
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
     ignore_self: bool,
-    keys: Optional[list[str]],
-    key_fn: Optional[Callable[..., Any]],
+    keys: list[str] | None,
+    key_fn: Callable[..., Any] | None,
 ):
     """
     Return (func_source, sub_dir, key_id) for disk paths and memory keying.
@@ -198,30 +204,30 @@ def _compute_cache_components(
         try:
             custom_val = key_fn(*args, **kwargs)
         except Exception as e:
-            raise ValueError(f"key function for {func.__name__} raised: {e}") from e
-        sub_dir = "custom"
-        key_id = f"{identify(custom_val)}.pkl"
+            raise ValueError(f'key function for {func.__name__} raised: {e}') from e
+        sub_dir = 'custom'
+        key_id = f'{identify(custom_val)}.pkl'
         return func_source, sub_dir, key_id
 
     # Named keys (back-compat)
     if keys:
         values = _build_named_keys(func, args, kwargs, keys)
         param_hash = identify(values)
-        dir_path = f"{func.__name__}_{identify(func_source)}"
-        key_id = f"{'_'.join(keys)}_{param_hash}.pkl"
+        dir_path = f'{func.__name__}_{identify(func_source)}'
+        key_id = f'{"_".join(keys)}_{param_hash}.pkl'
         return func_source, dir_path, key_id
 
     # Default: full argument identity (optionally ignoring 'self')
     if (
         inspect.getfullargspec(func).args
-        and inspect.getfullargspec(func).args[0] == "self"
+        and inspect.getfullargspec(func).args[0] == 'self'
         and ignore_self
     ):
         fid = (func_source, args[1:], kwargs)
     else:
         fid = (func_source, args, kwargs)
 
-    return func_source, "funcs", f"{identify(fid)}.pkl"
+    return func_source, 'funcs', f'{identify(fid)}.pkl'
 
 
 def _mem_cache_for(func: Callable[..., Any], size: int) -> cachetools.LRUCache:
@@ -246,9 +252,9 @@ def _mem_cache_for(func: Callable[..., Any], size: int) -> cachetools.LRUCache:
 def _memory_memoize(
     func: Callable[P, R],
     size: int,
-    keys: Optional[list[str]],
+    keys: list[str] | None,
     ignore_self: bool,
-    key_fn: Optional[Callable[..., Any]],
+    key_fn: Callable[..., Any] | None,
 ) -> Callable[P, R]:
     mem_cache = _mem_cache_for(func, size)
 
@@ -276,9 +282,9 @@ def _memory_memoize(
 def _async_memory_memoize(
     func: AsyncFunc[P, R],
     size: int,
-    keys: Optional[list[str]],
+    keys: list[str] | None,
     ignore_self: bool,
-    key_fn: Optional[Callable[..., Any]],
+    key_fn: Callable[..., Any] | None,
 ) -> AsyncFunc[P, R]:
     mem_cache = _mem_cache_for(func, size)
 
@@ -321,11 +327,11 @@ def _async_memory_memoize(
 
 def _disk_memoize(
     func: Callable[P, R],
-    keys: Optional[list[str]],
+    keys: list[str] | None,
     cache_dir: str,
     ignore_self: bool,
     verbose: bool,
-    key_fn: Optional[Callable[..., Any]],
+    key_fn: Callable[..., Any] | None,
 ) -> Callable[P, R]:
     @functools.wraps(func)
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
@@ -333,7 +339,7 @@ def _disk_memoize(
             func_source, sub_dir, key_id = _compute_cache_components(
                 func, args, kwargs, ignore_self, keys, key_fn
             )
-            if sub_dir == "funcs":
+            if sub_dir == 'funcs':
                 cache_path = osp.join(cache_dir, sub_dir, func.__name__, key_id)
             else:
                 cache_path = osp.join(cache_dir, sub_dir, key_id)
@@ -348,7 +354,7 @@ def _disk_memoize(
                             os.remove(cache_path)
                         if verbose:
                             logger.opt(depth=1).warning(
-                                f"Error loading cache: {str(e)[:100]}, recomputing"
+                                f'Error loading cache: {str(e)[:100]}, recomputing'
                             )
 
             result = func(*args, **kwargs)
@@ -360,7 +366,7 @@ def _disk_memoize(
         except Exception as e:
             if verbose:
                 logger.opt(depth=1).warning(
-                    f"Failed to cache {func.__name__}: {e}, executing without cache"
+                    f'Failed to cache {func.__name__}: {e}, executing without cache'
                 )
             return func(*args, **kwargs)
 
@@ -369,11 +375,11 @@ def _disk_memoize(
 
 def _async_disk_memoize(
     func: AsyncFunc[P, R],
-    keys: Optional[list[str]],
+    keys: list[str] | None,
     cache_dir: str,
     ignore_self: bool,
     verbose: bool,
-    key_fn: Optional[Callable[..., Any]],
+    key_fn: Callable[..., Any] | None,
 ) -> AsyncFunc[P, R]:
     @functools.wraps(func)
     async def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
@@ -381,13 +387,13 @@ def _async_disk_memoize(
             func_source, sub_dir, key_id = _compute_cache_components(
                 func, args, kwargs, ignore_self, keys, key_fn
             )
-            if sub_dir == "funcs":
+            if sub_dir == 'funcs':
                 cache_path = osp.join(cache_dir, sub_dir, func.__name__, key_id)
             else:
                 cache_path = osp.join(cache_dir, sub_dir, key_id)
             mkdir_or_exist(osp.dirname(cache_path))
 
-            def check_cache() -> Optional[R]:
+            def check_cache() -> R | None:
                 with disk_lock:
                     if osp.exists(cache_path):
                         try:
@@ -397,7 +403,7 @@ def _async_disk_memoize(
                                 os.remove(cache_path)
                             if verbose:
                                 logger.opt(depth=1).warning(
-                                    f"Error loading cache: {str(e)[:100]}, recomputing"
+                                    f'Error loading cache: {str(e)[:100]}, recomputing'
                                 )
                     return None
 
@@ -418,7 +424,7 @@ def _async_disk_memoize(
         except Exception as e:
             if verbose:
                 logger.opt(depth=1).warning(
-                    f"Failed to cache {func.__name__}: {e}, executing without cache"
+                    f'Failed to cache {func.__name__}: {e}, executing without cache'
                 )
             return await func(*args, **kwargs)
 
@@ -432,11 +438,11 @@ def _async_disk_memoize(
 
 def both_memoize(
     func: Callable[P, R],
-    keys: Optional[list[str]],
+    keys: list[str] | None,
     cache_dir: str,
     ignore_self: bool,
     size: int,
-    key_fn: Optional[Callable[..., Any]],
+    key_fn: Callable[..., Any] | None,
 ) -> Callable[P, R]:
     mem_cache = _mem_cache_for(func, size)
 
@@ -453,13 +459,13 @@ def both_memoize(
                 return mem_cache[mem_key]
 
         # Disk next
-        if sub_dir == "funcs":
+        if sub_dir == 'funcs':
             cache_path = osp.join(cache_dir, sub_dir, func.__name__, key_id)
         else:
             cache_path = osp.join(cache_dir, sub_dir, key_id)
         mkdir_or_exist(osp.dirname(cache_path))
 
-        disk_result: Optional[R] = None
+        disk_result: R | None = None
         with disk_lock:
             if osp.exists(cache_path):
                 try:
@@ -488,11 +494,11 @@ def both_memoize(
 
 def _async_both_memoize(
     func: AsyncFunc[P, R],
-    keys: Optional[list[str]],
+    keys: list[str] | None,
     cache_dir: str,
     ignore_self: bool,
     size: int,
-    key_fn: Optional[Callable[..., Any]],
+    key_fn: Callable[..., Any] | None,
 ) -> AsyncFunc[P, R]:
     mem_cache = _mem_cache_for(func, size)
 
@@ -512,13 +518,13 @@ def _async_both_memoize(
                 return mem_cache[mem_key]
 
         # Disk
-        if sub_dir == "funcs":
+        if sub_dir == 'funcs':
             cache_path = osp.join(cache_dir, sub_dir, func.__name__, key_id)
         else:
             cache_path = osp.join(cache_dir, sub_dir, key_id)
         mkdir_or_exist(osp.dirname(cache_path))
 
-        def check_disk_cache() -> Optional[R]:
+        def check_disk_cache() -> R | None:
             with disk_lock:
                 if osp.exists(cache_path):
                     return load_json_or_pickle(cache_path)
@@ -569,10 +575,10 @@ def _async_both_memoize(
 def memoize(
     _func: Callable[P, R],
     *,
-    keys: Optional[list[str]] = ...,
-    key: Optional[Callable[..., Any]] = ...,
+    keys: list[str] | None = ...,
+    key: Callable[..., Any] | None = ...,
     cache_dir: str = ...,
-    cache_type: Literal["memory", "disk", "both"] = ...,
+    cache_type: Literal['memory', 'disk', 'both'] = ...,
     size: int = ...,
     ignore_self: bool = ...,
     verbose: bool = ...,
@@ -583,10 +589,10 @@ def memoize(
 def memoize(
     _func: Callable[P, Awaitable[R]],
     *,
-    keys: Optional[list[str]] = ...,
-    key: Optional[Callable[..., Any]] = ...,
+    keys: list[str] | None = ...,
+    key: Callable[..., Any] | None = ...,
     cache_dir: str = ...,
-    cache_type: Literal["memory", "disk", "both"] = ...,
+    cache_type: Literal['memory', 'disk', 'both'] = ...,
     size: int = ...,
     ignore_self: bool = ...,
     verbose: bool = ...,
@@ -597,10 +603,10 @@ def memoize(
 def memoize(
     _func: None = ...,
     *,
-    keys: Optional[list[str]] = ...,
-    key: Optional[Callable[..., Any]] = ...,
+    keys: list[str] | None = ...,
+    key: Callable[..., Any] | None = ...,
     cache_dir: str = ...,
-    cache_type: Literal["memory", "disk", "both"] = ...,
+    cache_type: Literal['memory', 'disk', 'both'] = ...,
     size: int = ...,
     ignore_self: bool = ...,
     verbose: bool = ...,
@@ -611,10 +617,10 @@ def memoize(
 def memoize(  # type: ignore
     _func: None = ...,
     *,
-    keys: Optional[list[str]] = ...,
-    key: Optional[Callable[..., Any]] = ...,
+    keys: list[str] | None = ...,
+    key: Callable[..., Any] | None = ...,
     cache_dir: str = ...,
-    cache_type: Literal["memory", "disk", "both"] = ...,
+    cache_type: Literal['memory', 'disk', 'both'] = ...,
     size: int = ...,
     ignore_self: bool = ...,
     verbose: bool = ...,
@@ -622,12 +628,12 @@ def memoize(  # type: ignore
 
 
 def memoize(
-    _func: Optional[Callable[P, Any]] = None,
+    _func: Callable[P, Any] | None = None,
     *,
-    keys: Optional[list[str]] = None,
-    key: Optional[Callable[..., Any]] = None,
+    keys: list[str] | None = None,
+    key: Callable[..., Any] | None = None,
     cache_dir: str = SPEED_CACHE_DIR,
-    cache_type: Literal["memory", "disk", "both"] = "both",
+    cache_type: Literal['memory', 'disk', 'both'] = 'both',
     size: int = 256,
     ignore_self: bool = True,
     verbose: bool = False,
@@ -645,7 +651,7 @@ def memoize(
     - ignore_self: ignore 'self' when building the default key for bound methods.
     - verbose: enable warnings on cache load/write errors.
     """
-    if "~/" in cache_dir:
+    if '~/' in cache_dir:
         cache_dir = osp.expanduser(cache_dir)
     from speedy_utils import timef
 
@@ -655,12 +661,12 @@ def memoize(
         # Apply timing decorator if verbose=True
         target_func = timef(func) if verbose else func
 
-        if cache_type == "memory":
+        if cache_type == 'memory':
             if is_async:
                 return _async_memory_memoize(target_func, size, keys, ignore_self, key)
             return _memory_memoize(target_func, size, keys, ignore_self, key)
 
-        if cache_type == "disk":
+        if cache_type == 'disk':
             if is_async:
                 return _async_disk_memoize(
                     target_func, keys, cache_dir, ignore_self, verbose, key
@@ -679,8 +685,7 @@ def memoize(
     # Support both @memoize and @memoize(...)
     if _func is None:
         return decorator
-    else:
-        return decorator(_func)
+    return decorator(_func)
 
 
 # --------------------------------------------------------------------------------------
@@ -692,8 +697,8 @@ def memoize(
 def imemoize(
     _func: Callable[P, R],
     *,
-    keys: Optional[list[str]] = ...,
-    key: Optional[Callable[..., Any]] = ...,
+    keys: list[str] | None = ...,
+    key: Callable[..., Any] | None = ...,
     ignore_self: bool = ...,
 ) -> Callable[P, R]: ...
 
@@ -702,8 +707,8 @@ def imemoize(
 def imemoize(
     _func: Callable[P, Awaitable[R]],
     *,
-    keys: Optional[list[str]] = ...,
-    key: Optional[Callable[..., Any]] = ...,
+    keys: list[str] | None = ...,
+    key: Callable[..., Any] | None = ...,
     ignore_self: bool = ...,
 ) -> Callable[P, Awaitable[R]]: ...
 
@@ -712,8 +717,8 @@ def imemoize(
 def imemoize(
     _func: None = ...,
     *,
-    keys: Optional[list[str]] = ...,
-    key: Optional[Callable[..., Any]] = ...,
+    keys: list[str] | None = ...,
+    key: Callable[..., Any] | None = ...,
     ignore_self: bool = ...,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]: ...
 
@@ -722,17 +727,17 @@ def imemoize(
 def imemoize(  # type: ignore
     _func: None = ...,
     *,
-    keys: Optional[list[str]] = ...,
-    key: Optional[Callable[..., Any]] = ...,
+    keys: list[str] | None = ...,
+    key: Callable[..., Any] | None = ...,
     ignore_self: bool = ...,
 ) -> Callable[[Callable[P, Awaitable[R]]], Callable[P, Awaitable[R]]]: ...
 
 
 def imemoize(
-    _func: Optional[Callable[P, Any]] = None,
+    _func: Callable[P, Any] | None = None,
     *,
-    keys: Optional[list[str]] = None,
-    key: Optional[Callable[..., Any]] = None,
+    keys: list[str] | None = None,
+    key: Callable[..., Any] | None = None,
     ignore_self: bool = True,
 ):
     """
@@ -791,36 +796,34 @@ def imemoize(
                 return result
 
             return async_wrapper
-        else:
 
-            @functools.wraps(func)
-            def sync_wrapper(*args: P.args, **kwargs: P.kwargs) -> Any:
-                # Compute cache key based on function source + args
-                func_source, sub_dir, key_id = _compute_cache_components(
-                    func, args, kwargs, ignore_self, keys, key
-                )
-                cache_key = identify((func_source, sub_dir, key_id))
+        @functools.wraps(func)
+        def sync_wrapper(*args: P.args, **kwargs: P.kwargs) -> Any:
+            # Compute cache key based on function source + args
+            func_source, sub_dir, key_id = _compute_cache_components(
+                func, args, kwargs, ignore_self, keys, key
+            )
+            cache_key = identify((func_source, sub_dir, key_id))
 
-                # Check global memory cache
-                with mem_lock:
-                    if cache_key in _GLOBAL_MEMORY_CACHE:
-                        return _GLOBAL_MEMORY_CACHE[cache_key]
+            # Check global memory cache
+            with mem_lock:
+                if cache_key in _GLOBAL_MEMORY_CACHE:
+                    return _GLOBAL_MEMORY_CACHE[cache_key]
 
-                # Compute result and store in cache
-                result = func(*args, **kwargs)
+            # Compute result and store in cache
+            result = func(*args, **kwargs)
 
-                with mem_lock:
-                    _GLOBAL_MEMORY_CACHE[cache_key] = result
+            with mem_lock:
+                _GLOBAL_MEMORY_CACHE[cache_key] = result
 
-                return result
+            return result
 
-            return sync_wrapper
+        return sync_wrapper
 
     # Support both @imemoize and @imemoize(...)
     if _func is None:
         return decorator
-    else:
-        return decorator(_func)
+    return decorator(_func)
 
 
-__all__ = ["memoize", "imemoize", "identify"]
+__all__ = ['memoize', 'imemoize', 'identify']

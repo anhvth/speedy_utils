@@ -2,6 +2,7 @@ from typing import List
 
 from .async_lm import AsyncLM
 
+
 KNOWN_CONFIG = {
     # Qwen3 family (see model card "Best Practices" section)
     "qwen3-think": {
@@ -83,7 +84,7 @@ KNOWN_CONFIG = {
     # Add more as needed...
 }
 
-KNOWN_KEYS: List[str] = list(KNOWN_CONFIG.keys())
+KNOWN_KEYS: list[str] = list(KNOWN_CONFIG.keys())
 
 
 class AsyncLMQwenThink(AsyncLM):

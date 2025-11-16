@@ -93,6 +93,7 @@ from typing import Any, Generic, TypeVar, cast
 
 from loguru import logger
 
+
 try:
     from tqdm import tqdm
 except ImportError:  # pragma: no cover
@@ -237,14 +238,14 @@ def _run_batch(
 
 
 def _attach_metadata(fut: Future[Any], idx: int, logical_size: int) -> None:
-    setattr(fut, "_speedy_idx", idx)
-    setattr(fut, "_speedy_size", logical_size)
+    fut._speedy_idx = idx
+    fut._speedy_size = logical_size
 
 
 def _future_meta(fut: Future[Any]) -> tuple[int, int]:
     return (
-        getattr(fut, "_speedy_idx"),
-        getattr(fut, "_speedy_size"),
+        fut._speedy_idx,
+        fut._speedy_size,
     )
 
 
@@ -303,9 +304,7 @@ def _normalize_batch_result(result: Any, logical_size: int) -> list[Any]:
         raise ValueError("batched callable returned None for a batch result")
     if isinstance(result, (str, bytes, bytearray)):
         raise TypeError("batched callable must not return str/bytes when batching")
-    if isinstance(result, Sequence):
-        out = list(result)
-    elif isinstance(result, Iterable):
+    if isinstance(result, (Sequence, Iterable)):
         out = list(result)
     else:
         raise TypeError("batched callable must return an iterable of results")
