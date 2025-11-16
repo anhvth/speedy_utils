@@ -101,7 +101,7 @@ class TwoStepPydanticMixin:
             List of parsed response dictionaries
         """
         from pydantic import BaseModel
-        
+
         # Step 1: Get text completions
         results = self.text_completion(input_data, **runtime_kwargs)
         parsed_results = []
@@ -122,6 +122,7 @@ class TwoStepPydanticMixin:
                 else:
                     # Pydantic v1
                     import json
+
                     parsed = response_model.parse_obj(json.loads(response_text))
             except Exception:
                 # Fallback: use LLM to extract JSON

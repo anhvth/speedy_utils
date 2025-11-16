@@ -1,10 +1,4 @@
-import functools
-import time
-import traceback
-from collections.abc import Callable
-from typing import Any
-
-from loguru import logger
+from ..__imports import *
 
 
 def retry_runtime(
@@ -33,14 +27,14 @@ def retry_runtime(
                 except (SyntaxError, NameError, ImportError, TypeError) as e:
                     # Don't retry on syntax/compilation errors
                     logger.opt(depth=1).error(
-                        f"Critical error in {func.__name__}: {str(e)}\n{traceback.format_exc()}"
+                        f'Critical error in {func.__name__}: {str(e)}\n{traceback.format_exc()}'
                     )
                     raise
 
                 except exceptions as e:
                     if attempt == max_retry:
                         logger.opt(depth=1).error(
-                            f"Function {func.__name__} failed after {max_retry} retries: {str(e)}"
+                            f'Function {func.__name__} failed after {max_retry} retries: {str(e)}'
                         )
                         raise
 
@@ -48,8 +42,8 @@ def retry_runtime(
                         2 ** (attempt - 1)
                     )  # Exponential backoff
                     logger.opt(depth=1).warning(
-                        f"Attempt {attempt}/{max_retry} failed: {str(e)[:100]}. "
-                        f"Retrying in {backoff_time} seconds."
+                        f'Attempt {attempt}/{max_retry} failed: {str(e)[:100]}. '
+                        f'Retrying in {backoff_time} seconds.'
                     )
                     time.sleep(backoff_time)
 
@@ -60,4 +54,4 @@ def retry_runtime(
     return decorator
 
 
-__all__ = ["retry_runtime"]
+__all__ = ['retry_runtime']

@@ -1,27 +1,30 @@
 # jupyter notebook utilities
-import json
-import os
-import pathlib
-from typing import Any
+# import json
+# import os
+# import pathlib
+# from typing import Any
 
-from IPython.display import HTML, display
-from tabulate import tabulate
+# from IPython.display import HTML, display
+# from tabulate import tabulate
 
 
-def change_dir(target_directory: str = "POLY") -> None:
+from ..__imports import *
+
+
+def change_dir(target_directory: str = 'POLY') -> None:
     """Change directory to the first occurrence of x in the current path."""
-    cur_dir = pathlib.Path("./")
+    cur_dir = pathlib.Path('./')
     target_dir = str(cur_dir.absolute()).split(target_directory)[0] + target_directory
     os.chdir(target_dir)
-    print(f"Current dir: {target_dir}")
+    print(f'Current dir: {target_dir}')
 
 
 def display_pretty_table_html(data: dict) -> None:
     """Display a pretty HTML table in Jupyter notebooks."""
-    table = "<table>"
+    table = '<table>'
     for key, value in data.items():
-        table += f"<tr><td>{key}</td><td>{value}</td></tr>"
-    table += "</table>"
+        table += f'<tr><td>{key}</td><td>{value}</td></tr>'
+    table += '</table>'
     display(HTML(table))
 
 
@@ -33,26 +36,26 @@ def print_table(data: Any, use_html: bool = True) -> None:
             try:
                 data = json.loads(data)
             except json.JSONDecodeError as exc:
-                raise ValueError("String input could not be decoded as JSON") from exc
+                raise ValueError('String input could not be decoded as JSON') from exc
 
         if isinstance(data, list):
             if all(isinstance(item, dict) for item in data):
                 headers = list(data[0].keys())
                 rows = [list(item.values()) for item in data]
                 return tabulate(
-                    rows, headers=headers, tablefmt="html" if use_html else "grid"
+                    rows, headers=headers, tablefmt='html' if use_html else 'grid'
                 )
-            raise ValueError("List must contain dictionaries")
+            raise ValueError('List must contain dictionaries')
 
         if isinstance(data, dict):
-            headers = ["Key", "Value"]
+            headers = ['Key', 'Value']
             rows = list(data.items())
             return tabulate(
-                rows, headers=headers, tablefmt="html" if use_html else "grid"
+                rows, headers=headers, tablefmt='html' if use_html else 'grid'
             )
 
         raise TypeError(
-            "Input data must be a list of dictionaries, a dictionary, or a JSON string"
+            'Input data must be a list of dictionaries, a dictionary, or a JSON string'
         )
 
     table = __get_table(data)

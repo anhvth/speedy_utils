@@ -1,28 +1,18 @@
 # ray_multi_process.py
-import datetime
-import os
-import pickle
-import threading
-import time
-import uuid
-from collections.abc import Callable, Iterable
-from pathlib import Path
-from typing import Any
-
-import psutil
-from fastcore.parallel import parallel
-from tqdm import tqdm
 
 
-ray: Any
-try:
-    import ray as ray  # type: ignore
+from ..__imports import *
 
-    _HAS_RAY = True
-except Exception:  # pragma: no cover
-    ray = None  # type: ignore
-    _HAS_RAY = False
 
+# ray: Any
+# try:
+#     import ray as ray  # type: ignore
+
+#     _HAS_RAY = True
+# except Exception:  # pragma: no cover
+#     ray = None  # type: ignore
+#     _HAS_RAY = False
+_HAS_RAY = True
 
 # ─── global tracking ──────────────────────────────────────────
 
@@ -65,7 +55,7 @@ def _track_ray_processes() -> None:
         ray_processes = []
         for child in parent.children(recursive=True):
             try:
-                if "ray" in child.name().lower() or "worker" in child.name().lower():
+                if 'ray' in child.name().lower() or 'worker' in child.name().lower():
                     ray_processes.append(child)
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
@@ -102,11 +92,11 @@ def _track_multiprocessing_processes() -> None:
 
 def _build_cache_dir(func: Callable, items: list[Any]) -> Path:
     """Build cache dir with function name + timestamp."""
-    func_name = getattr(func, "__name__", "func")
+    func_name = getattr(func, '__name__', 'func')
     now = datetime.datetime.now()
-    stamp = now.strftime("%m%d_%Hh%Mm%Ss")
-    run_id = f"{func_name}_{stamp}_{uuid.uuid4().hex[:6]}"
-    path = Path(".cache") / run_id
+    stamp = now.strftime('%m%d_%Hh%Mm%Ss')
+    run_id = f'{func_name}_{stamp}_{uuid.uuid4().hex[:6]}'
+    path = Path('.cache') / run_id
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -118,8 +108,8 @@ def wrap_dump(func: Callable, cache_dir: Path | None):
 
     def wrapped(x, *args, **kwargs):
         res = func(x, *args, **kwargs)
-        p = cache_dir / f"{uuid.uuid4().hex}.pkl"
-        with open(p, "wb") as fh:
+        p = cache_dir / f'{uuid.uuid4().hex}.pkl'
+        with open(p, 'wb') as fh:
             pickle.dump(res, fh)
         return str(p)
 
@@ -136,19 +126,15 @@ def ensure_ray(workers: int, pbar: tqdm | None = None):
     global RAY_WORKER
     if not ray.is_initialized() or workers != RAY_WORKER:
         if ray.is_initialized() and pbar:
-            pbar.set_postfix_str(f"Restarting Ray {workers} workers")
+            pbar.set_postfix_str(f'Restarting Ray {workers} workers')
             ray.shutdown()
         t0 = time.time()
         ray.init(num_cpus=workers, ignore_reinit_error=True)
         took = time.time() - t0
         _track_ray_processes()  # Track Ray worker processes
         if pbar:
-            pbar.set_postfix_str(f"ray.init {workers} took {took:.2f}s")
+            pbar.set_postfix_str(f'ray.init {workers} took {took:.2f}s')
         RAY_WORKER = workers
-
-
-# ─── main API ───────────────────────────────────────────────
-from typing import Literal
 
 
 def multi_process(
@@ -160,7 +146,7 @@ def multi_process(
     lazy_output: bool = False,
     progress: bool = True,
     # backend: str = "ray",   # "seq", "ray", or "fastcore"
-    backend: Literal["seq", "ray", "mp", "threadpool", "safe"] = "mp",
+    backend: Literal['seq', 'ray', 'mp', 'threadpool', 'safe'] = 'mp',
     **func_kwargs: Any,
 ) -> list[Any]:
     """
@@ -179,7 +165,7 @@ def multi_process(
 
     # default backend selection
     if backend is None:
-        backend = "ray" if _HAS_RAY else "mp"
+        backend = 'ray' if _HAS_RAY else 'mp'
 
     # unify items
     # unify items and coerce to concrete list so we can use len() and
@@ -200,11 +186,11 @@ def multi_process(
 
     total = len(items)
     with tqdm(
-        total=total, desc=f"multi_process [{backend}]", disable=not progress
+        total=total, desc=f'multi_process [{backend}]', disable=not progress
     ) as pbar:
         # ---- sequential backend ----
-        if backend == "seq":
-            pbar.set_postfix_str("backend=seq")
+        if backend == 'seq':
+            pbar.set_postfix_str('backend=seq')
             results = []
             for x in items:
                 results.append(f_wrapped(x, **func_kwargs))
@@ -212,15 +198,15 @@ def multi_process(
             return results
 
         # ---- ray backend ----
-        if backend == "ray":
+        if backend == 'ray':
             if not _HAS_RAY:
                 msg = (
                     "Ray backend requested but 'ray' is not installed. "
                     "Install extra: pip install 'speedy-utils[ray]' or "
-                    "poetry install -E ray."
+                    'poetry install -E ray.'
                 )
                 raise RuntimeError(msg)
-            pbar.set_postfix_str("backend=ray")
+            pbar.set_postfix_str('backend=ray')
             ensure_ray(workers, pbar)
 
             @ray.remote
@@ -236,19 +222,19 @@ def multi_process(
             return results
 
         # ---- fastcore backend ----
-        if backend == "mp":
+        if backend == 'mp':
             results = parallel(
                 f_wrapped, items, n_workers=workers, progress=progress, threadpool=False
             )
             _track_multiprocessing_processes()  # Track multiprocessing workers
             _prune_dead_processes()  # Clean up dead processes
             return list(results)
-        if backend == "threadpool":
+        if backend == 'threadpool':
             results = parallel(
                 f_wrapped, items, n_workers=workers, progress=progress, threadpool=True
             )
             return list(results)
-        if backend == "safe":
+        if backend == 'safe':
             # Completely safe backend for tests - no multiprocessing, no external progress bars
             import concurrent.futures
 
@@ -270,7 +256,7 @@ def multi_process(
                     results = list(executor.map(f_wrapped, items))
             return results
 
-        raise ValueError(f"Unsupported backend: {backend!r}")
+        raise ValueError(f'Unsupported backend: {backend!r}')
 
 
 def cleanup_phantom_workers():
@@ -286,18 +272,18 @@ def cleanup_phantom_workers():
             :
         ]:  # Copy to avoid modification during iteration
             try:
-                print(f"🔪 Killing tracked process {process.pid} ({process.name()})")
+                print(f'🔪 Killing tracked process {process.pid} ({process.name()})')
                 process.kill()
                 killed_processes += 1
             except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
-                print(f"⚠️ Could not kill process {process.pid}: {e}")
+                print(f'⚠️ Could not kill process {process.pid}: {e}')
         SPEEDY_RUNNING_PROCESSES.clear()
 
     # Also kill any remaining child processes (fallback)
     parent = psutil.Process(os.getpid())
     for child in parent.children(recursive=True):
         try:
-            print(f"🔪 Killing child process {child.pid} ({child.name()})")
+            print(f'🔪 Killing child process {child.pid} ({child.name()})')
             child.kill()
         except psutil.NoSuchProcess:
             pass
@@ -309,17 +295,17 @@ def cleanup_phantom_workers():
         _prune_dead_threads()
         killed_threads = kill_all_thread()
         if killed_threads > 0:
-            print(f"🔪 Killed {killed_threads} tracked threads")
+            print(f'🔪 Killed {killed_threads} tracked threads')
     except ImportError:
         # Fallback: just report stray threads
         for t in threading.enumerate():
             if t is threading.current_thread():
                 continue
             if not t.daemon:
-                print(f"⚠️ Thread {t.name} is still running (cannot be force-killed).")
+                print(f'⚠️ Thread {t.name} is still running (cannot be force-killed).')
 
     print(
-        f"✅ Cleaned up {killed_processes} tracked processes and child processes (kernel untouched)."
+        f'✅ Cleaned up {killed_processes} tracked processes and child processes (kernel untouched).'
     )
 
 
@@ -327,7 +313,7 @@ def cleanup_phantom_workers():
 
 
 __all__ = [
-    "SPEEDY_RUNNING_PROCESSES",
-    "multi_process",
-    "cleanup_phantom_workers",
+    'SPEEDY_RUNNING_PROCESSES',
+    'multi_process',
+    'cleanup_phantom_workers',
 ]

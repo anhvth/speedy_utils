@@ -1,42 +1,15 @@
 # type: ignore
 import os
 from collections.abc import Sequence
-from pathlib import Path
-
-import numpy as np
+from typing import TYPE_CHECKING
 
 
-try:
-    from tqdm.auto import tqdm
-except ImportError:  # pragma: no cover - tqdm is optional
-
-    def tqdm(iterable, **kwargs):
-        return iterable
-
-
-try:
+if TYPE_CHECKING:
+    import numpy as np
     from nvidia.dali import fn, pipeline_def
     from nvidia.dali import types as dali_types
-
-    _DALI_AVAILABLE = True
-    _DALI_IMPORT_ERROR = None
-except ImportError as exc:  # pragma: no cover - handled at runtime
-    fn = None
-    pipeline_def = None
-    dali_types = None
-    _DALI_AVAILABLE = False
-    _DALI_IMPORT_ERROR = exc
-
-try:
     from PIL import Image
-
-    _PIL_AVAILABLE = True
-    _PIL_IMPORT_ERROR = None
-except ImportError as exc:  # pragma: no cover - handled at runtime
-    Image = None
-    _PIL_AVAILABLE = False
-    _PIL_IMPORT_ERROR = exc
-    _PIL_IMPORT_ERROR = exc
+    from tqdm import tqdm
 
 
 PathLike = str | os.PathLike
@@ -51,17 +24,12 @@ def _validate_image(path: PathLike) -> bool:
     Validate if an image file is readable and not corrupted.
     Returns True if valid, False otherwise.
     """
+    from PIL import Image
+
     path = os.fspath(path)
 
     if not os.path.exists(path):
         return False
-    if not _PIL_AVAILABLE:
-        # Without PIL, just check if file exists and has non-zero size
-        try:
-            return Path(path).stat().st_size > 0
-        except Exception:
-            return False
-            return False
 
     try:
         with Image.open(path) as img:
@@ -77,7 +45,7 @@ def _validate_image(path: PathLike) -> bool:
 def read_images_cpu(
     paths: Sequence[PathLike],
     hw: tuple[int, int] | None = None,
-) -> dict[str, np.ndarray | None]:
+) -> dict[str, 'np.ndarray | None']:
     """
     CPU image loader using Pillow.
 
@@ -87,11 +55,9 @@ def read_images_cpu(
         paths: Sequence of image file paths.
         hw: Optional (height, width) for resizing.
     """
-    if not _PIL_AVAILABLE:
-        raise RuntimeError(
-            'Pillow is required for CPU loader but is not installed. '
-            'Install it with `pip install pillow`.'
-        ) from _PIL_IMPORT_ERROR
+    import numpy as np
+    from PIL import Image
+    from tqdm import tqdm
 
     str_paths = _to_str_paths(paths)
 
@@ -104,7 +70,7 @@ def read_images_cpu(
         h, w = hw
         target_size = (w, h)
 
-    result: dict[str, np.ndarray | None] = {}
+    result: dict[str, 'np.ndarray | None'] = {}
     for path in tqdm(str_paths, desc='Loading images (CPU)', unit='img'):
         try:
             with Image.open(path) as img:
@@ -126,7 +92,7 @@ def read_images_gpu(
     validate: bool = False,
     device: str = 'mixed',
     device_id: int = 0,
-) -> dict[str, np.ndarray | None]:
+) -> dict[str, 'np.ndarray | None']:
     """
     GPU-accelerated image reader using NVIDIA DALI.
 
@@ -141,24 +107,22 @@ def read_images_gpu(
         device: DALI decoder device: "mixed" (default), "cpu", or "gpu".
         device_id: GPU device id.
     """
+    import numpy as np
+    from nvidia.dali import fn, pipeline_def
+    from nvidia.dali import types as dali_types
+
     str_paths = _to_str_paths(paths)
 
     if not str_paths:
         return {}
 
-    if not _DALI_AVAILABLE:
-        raise RuntimeError(
-            'nvidia-dali is not installed. Install it with '
-            '`pip install nvidia-dali-cuda120` or '
-            '`pip install --extra-index-url https://pypi.nvidia.com '
-            '--upgrade nvidia-dali-cuda120`'
-        ) from _DALI_IMPORT_ERROR
-
-    result: dict[str, np.ndarray | None] = {}
+    result: dict[str, 'np.ndarray | None'] = {}
     valid_paths: list[str] = str_paths
 
     # Optional validation (slow but safer)
     if validate:
+        from tqdm import tqdm
+
         print('Validating images...')
         tmp_valid: list[str] = []
         invalid_paths: list[str] = []
@@ -213,9 +177,11 @@ def read_images_gpu(
     )
     dali_pipe.build()
 
-    imgs: list[np.ndarray] = []
+    imgs: list['np.ndarray'] = []
     num_files = len(valid_paths)
     num_batches = (num_files + batch_size - 1) // batch_size
+
+    from tqdm import tqdm
 
     for _ in tqdm(range(num_batches), desc='Decoding (DALI)', unit='batch'):
         (out,) = dali_pipe.run()
@@ -246,7 +212,7 @@ def read_images(
     validate: bool = False,
     device: str = 'mixed',
     device_id: int = 0,
-) -> dict[str, np.ndarray | None]:
+) -> dict[str, 'np.ndarray | None']:
     """
     Fast image reader that tries GPU (DALI) first, falls back to CPU (Pillow).
 
@@ -266,21 +232,19 @@ def read_images(
     if not str_paths:
         return {}
 
-    if _DALI_AVAILABLE:
-        try:
-            return read_images_gpu(
-                str_paths,
-                batch_size=batch_size,
-                num_threads=num_threads,
-                hw=hw,
-                validate=validate,
-                device=device,
-                device_id=device_id,
-            )
-        except Exception as exc:
-            print(f'GPU loading failed ({exc}), falling back to CPU...')
+    try:
+        return read_images_gpu(
+            str_paths,
+            batch_size=batch_size,
+            num_threads=num_threads,
+            hw=hw,
+            validate=validate,
+            device=device,
+            device_id=device_id,
+        )
+    except Exception as exc:
+        print(f'GPU loading failed ({exc}), falling back to CPU...')
+        return read_images_cpu(str_paths, hw=hw)
 
-    else:
-        print('DALI not available, using CPU loader...')
 
-    return read_images_cpu(str_paths, hw=hw)
+__all__ = ['read_images', 'read_images_cpu', 'read_images_gpu']

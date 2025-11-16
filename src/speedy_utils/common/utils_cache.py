@@ -1,32 +1,6 @@
-import asyncio
-import contextlib
-import functools
-import inspect
-import json
-import os
-import os.path as osp
-import pickle
-import uuid
-import weakref
-from collections.abc import Awaitable, Callable
-from threading import Lock
-from typing import Any, Literal, Optional, TypeVar, overload
-
-
-try:
-    # Python 3.10+
-    from typing import ParamSpec
-except ImportError:  # pragma: no cover
-    from typing_extensions import ParamSpec  # type: ignore
-
-import cachetools
-import pandas as pd
-import xxhash
-from loguru import logger
-from pydantic import BaseModel
-
-from speedy_utils.common.utils_io import dump_json_or_pickle, load_json_or_pickle
-from speedy_utils.common.utils_misc import mkdir_or_exist
+from ..__imports import *
+from .utils_io import dump_json_or_pickle, load_json_or_pickle
+from .utils_misc import mkdir_or_exist
 
 
 # --------------------------------------------------------------------------------------
@@ -653,13 +627,17 @@ def memoize(
     """
     if '~/' in cache_dir:
         cache_dir = osp.expanduser(cache_dir)
-    from speedy_utils import timef
 
     def decorator(func: Callable[P, Any]) -> Callable[P, Any]:
         is_async = inspect.iscoroutinefunction(func)
 
         # Apply timing decorator if verbose=True
-        target_func = timef(func) if verbose else func
+        if verbose:
+            from speedy_utils import timef
+
+            target_func = timef(func)
+        else:
+            target_func = func
 
         if cache_type == 'memory':
             if is_async:

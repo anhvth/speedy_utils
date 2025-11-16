@@ -1,13 +1,4 @@
-# utils/utils_print.py
-
-import inspect
-import re
-import sys
-import time
-from collections import OrderedDict
-from typing import Annotated, Literal, Union
-
-from loguru import logger
+from ..__imports import *
 
 
 # A subclass of OrderedDict to automatically evict the oldest item after max_size is exceeded
@@ -34,26 +25,26 @@ _last_log_times = _RateLimitCache(max_size=2000)
 def setup_logger(
     level: Annotated[
         Literal[
-            "Trace",
-            "Debug",
-            "Info",
-            "Success",
-            "Warning",
-            "Error",
-            "Critical",
-            "Disable",
-            "T",
-            "D",
-            "I",
-            "S",
-            "W",
-            "E",
-            "C",
+            'Trace',
+            'Debug',
+            'Info',
+            'Success',
+            'Warning',
+            'Error',
+            'Critical',
+            'Disable',
+            'T',
+            'D',
+            'I',
+            'S',
+            'W',
+            'E',
+            'C',
         ],
-        "The desired log level",
-    ] = "Info",
-    enable_grep: Annotated[str, "Comma-separated patterns for enabling logs"] = "",
-    disable_grep: Annotated[str, "Comma-separated patterns for disabling logs"] = "",
+        'The desired log level',
+    ] = 'Info',
+    enable_grep: Annotated[str, 'Comma-separated patterns for enabling logs'] = '',
+    disable_grep: Annotated[str, 'Comma-separated patterns for disabling logs'] = '',
     min_interval: float = -1,
     max_cache_entries: int = 2000,
 ) -> None:
@@ -67,13 +58,13 @@ def setup_logger(
 
     # Map the shorthand level to the full name
     level_mapping = {
-        "T": "TRACE",
-        "D": "DEBUG",
-        "I": "INFO",
-        "S": "SUCCESS",
-        "W": "WARNING",
-        "E": "ERROR",
-        "C": "CRITICAL",
+        'T': 'TRACE',
+        'D': 'DEBUG',
+        'I': 'INFO',
+        'S': 'SUCCESS',
+        'W': 'WARNING',
+        'E': 'ERROR',
+        'C': 'CRITICAL',
     }
     level_str = level_mapping.get(level.upper(), level.upper())
 
@@ -84,8 +75,8 @@ def setup_logger(
     logger.remove()
 
     # Prepare grep patterns
-    enable_patterns = [p.strip() for p in enable_grep.split(",") if p.strip()]
-    disable_patterns = [p.strip() for p in disable_grep.split(",") if p.strip()]
+    enable_patterns = [p.strip() for p in enable_grep.split(',') if p.strip()]
+    disable_patterns = [p.strip() for p in disable_grep.split(',') if p.strip()]
 
     def log_filter(record):
         """
@@ -95,11 +86,11 @@ def setup_logger(
         4. Enforces a max size on the (file:line) dictionary.
         """
         # ---------- 1) Log-level check ----------
-        if record["level"].no < logger.level(level_str).no:
+        if record['level'].no < logger.level(level_str).no:
             return False
 
         # ---------- 2) Grep pattern handling ----------
-        log_message = f"{record['file']}:{record['line']} ({record['function']})"
+        log_message = f'{record["file"]}:{record["line"]} ({record["function"]})'
         if enable_patterns and not any(
             re.search(p, log_message) for p in enable_patterns
         ):
@@ -110,7 +101,7 @@ def setup_logger(
             return False
 
         # ---------- 3) Rate limiting by file:line ----------
-        file_line_key = f"{record['file']}:{record['line']}"
+        file_line_key = f'{record["file"]}:{record["line"]}'
         now = time.time()
 
         last_time = _last_log_times.get(file_line_key)
@@ -131,20 +122,20 @@ def setup_logger(
         sys.stdout,
         colorize=True,
         format=(
-            "<green>{time:HH:mm:ss}</green> | "
-            "<level>{level: <8}</level> | "
-            "<cyan>{file}:{line} ({function})</cyan> - <level>{message}</level>"
+            '<green>{time:HH:mm:ss}</green> | '
+            '<level>{level: <8}</level> | '
+            '<cyan>{file}:{line} ({function})</cyan> - <level>{message}</level>'
         ),
         filter=log_filter,
     )
 
     # ---------- 4) Handle "DISABLE" level ----------
-    if level_str.upper() == "DISABLE":
-        logger.disable("")
-        logger.info("Logging disabled")
+    if level_str.upper() == 'DISABLE':
+        logger.disable('')
+        logger.info('Logging disabled')
     else:
-        logger.enable("")
-        logger.debug(f"Logging set to {level_str}")
+        logger.enable('')
+        logger.debug(f'Logging set to {level_str}')
 
 
 _logged_once_set = set()
@@ -158,13 +149,13 @@ def _get_call_site_id(depth=2) -> str:
     """
     frame = inspect.stack()[depth]
     # Use a stable identifier in test environment to handle mocking
-    return f"{frame.filename}:{frame.lineno}"
+    return f'{frame.filename}:{frame.lineno}'
 
 
 def log(
     msg: str,
     *,
-    level: Literal["info", "warning", "error", "critical", "success"] = "info",
+    level: Literal['info', 'warning', 'error', 'critical', 'success'] = 'info',
     once: bool = False,
     interval: float | None = None,
 ) -> None:

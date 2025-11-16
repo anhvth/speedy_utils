@@ -1,17 +1,11 @@
 # utils/utils_print.py
 
-import copy
-import pprint
-import textwrap
-from typing import Any, Union
-
-from tabulate import tabulate
-
+from ..__imports import *
 from .notebook_utils import display_pretty_table_html
 
 
 # Flattening the dictionary using "." notation for keys
-def flatten_dict(d, parent_key="", sep="."):
+def flatten_dict(d, parent_key='', sep='.'):
     items = []
     for k, v in d.items():
         new_key = parent_key + sep + k if parent_key else k
@@ -29,7 +23,7 @@ def fprint(
     max_width: int = 100,
     indent: int = 2,
     depth: int | None = None,
-    table_format: str = "grid",
+    table_format: str = 'grid',
     str_wrap_width: int = 80,
     grep=None,
     is_notebook=None,
@@ -53,7 +47,7 @@ def fprint(
                 is_notebook,
                 f,
             )
-            print("\n" + "-" * 100 + "\n")
+            print('\n' + '-' * 100 + '\n')
 
     from speedy_utils import is_notebook as is_interactive
 
@@ -61,24 +55,24 @@ def fprint(
     if is_notebook is None:
         is_notebook = is_interactive()
     if isinstance(input_data, list):
-        if all(hasattr(item, "toDict") for item in input_data):
+        if all(hasattr(item, 'toDict') for item in input_data):
             input_data = [item.toDict() for item in input_data]
-    elif hasattr(input_data, "toDict"):
+    elif hasattr(input_data, 'toDict'):
         input_data = input_data.toDict()
 
     if isinstance(input_data, list):
-        if all(hasattr(item, "to_dict") for item in input_data):
+        if all(hasattr(item, 'to_dict') for item in input_data):
             input_data = [item.to_dict() for item in input_data]
-    elif hasattr(input_data, "to_dict"):
+    elif hasattr(input_data, 'to_dict'):
         input_data = input_data.to_dict()
 
     if isinstance(input_data, list):
-        if all(hasattr(item, "model_dump") for item in input_data):
+        if all(hasattr(item, 'model_dump') for item in input_data):
             input_data = [item.model_dump() for item in input_data]
-    elif hasattr(input_data, "model_dump"):
+    elif hasattr(input_data, 'model_dump'):
         input_data = input_data.model_dump()
     if not isinstance(input_data, (dict, str)):
-        raise ValueError("Input data must be a dictionary or string")
+        raise ValueError('Input data must be a dictionary or string')
 
     if isinstance(input_data, dict):
         input_data = flatten_dict(input_data)
@@ -89,7 +83,7 @@ def fprint(
     def remove_keys(d: dict, keys: list[str]) -> dict:
         """Remove specified keys from a dictionary."""
         for key in keys:
-            parts = key.split(".")
+            parts = key.split('.')
             sub_dict = d
             for part in parts[:-1]:
                 sub_dict = sub_dict.get(part, {})
@@ -100,7 +94,7 @@ def fprint(
         """Keep only specified keys in a dictionary."""
         result = {}
         for key in keys:
-            parts = key.split(".")
+            parts = key.split('.')
             sub_source = d
             sub_result = result
             for part in parts[:-1]:
@@ -112,7 +106,7 @@ def fprint(
                 sub_result[parts[-1]] = copy.deepcopy(sub_source.get(parts[-1]))
         return result
 
-    if hasattr(input_data, "to_dict") and not isinstance(input_data, str):
+    if hasattr(input_data, 'to_dict') and not isinstance(input_data, str):
         input_data = input_data.to_dict()
 
     processed_data = copy.deepcopy(input_data)
@@ -132,7 +126,7 @@ def fprint(
         f(
             tabulate(
                 table,
-                headers=["Key", "Value"],
+                headers=['Key', 'Value'],
                 tablefmt=table_format,
                 maxcolwidths=[None, max_width],
             )
@@ -148,6 +142,6 @@ def fprint(
 
 
 __all__ = [
-    "flatten_dict",
-    "fprint",
+    'flatten_dict',
+    'fprint',
 ]

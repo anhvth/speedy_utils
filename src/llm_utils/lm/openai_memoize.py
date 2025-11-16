@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any
 
 from speedy_utils.common.utils_cache import memoize
 
+
 if TYPE_CHECKING:
     from openai import AsyncOpenAI, OpenAI
 

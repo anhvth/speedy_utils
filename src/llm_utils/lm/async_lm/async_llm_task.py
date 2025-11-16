@@ -16,11 +16,11 @@ from pydantic import BaseModel
 from llm_utils.chat_format.display import get_conversation_one_turn
 from llm_utils.lm.async_lm._utils import InputModelType, OutputModelType, ParsedOutput
 from llm_utils.lm.async_lm.async_lm import AsyncLM
-from speedy_utils.all import dump_json_or_pickle, identify
+from speedy_utils import dump_json_or_pickle, identify
 
 
 # Type aliases for better readability
-TModel = TypeVar("TModel", bound=BaseModel)
+TModel = TypeVar('TModel', bound=BaseModel)
 Messages = list[ChatCompletionMessageParam]
 LegacyMsgs = list[dict[str, str]]
 RawMsgs = Union[Messages, LegacyMsgs]
@@ -50,20 +50,20 @@ class LMConfiguration:
     def to_dict(self) -> dict[str, Any]:
         """Convert configuration to dictionary format."""
         return {
-            "model": self.model,
-            "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
-            "base_url": self.base_url,
-            "api_key": self.api_key,
-            "cache": self.cache,
-            "think": self.think,
-            "add_json_schema_to_instruction": self.add_json_schema_to_instruction,
-            "use_beta": self.use_beta,
-            "ports": self.ports,
-            "top_p": self.top_p,
-            "presence_penalty": self.presence_penalty,
-            "top_k": self.top_k,
-            "repetition_penalty": self.repetition_penalty,
+            'model': self.model,
+            'temperature': self.temperature,
+            'max_tokens': self.max_tokens,
+            'base_url': self.base_url,
+            'api_key': self.api_key,
+            'cache': self.cache,
+            'think': self.think,
+            'add_json_schema_to_instruction': self.add_json_schema_to_instruction,
+            'use_beta': self.use_beta,
+            'ports': self.ports,
+            'top_p': self.top_p,
+            'presence_penalty': self.presence_penalty,
+            'top_k': self.top_k,
+            'repetition_penalty': self.repetition_penalty,
         }
 
 
@@ -185,21 +185,21 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
             TypeError: If output model type cannot be determined
         """
         # Try to get type from generic base classes
-        orig_bases = getattr(self.__class__, "__orig_bases__", None)
+        orig_bases = getattr(self.__class__, '__orig_bases__', None)
         if (
             orig_bases
-            and hasattr(orig_bases[0], "__args__")
+            and hasattr(orig_bases[0], '__args__')
             and len(orig_bases[0].__args__) >= 2
         ):
             return orig_bases[0].__args__[1]
 
         # Fallback to class attribute
-        if hasattr(self, "OutputModel"):
+        if hasattr(self, 'OutputModel'):
             return self.OutputModel  # type: ignore
 
         raise TypeError(
-            f"{self.__class__.__name__} must define OutputModel as a class attribute "
-            "or use proper generic typing with AsyncLLMTask[InputModel, OutputModel]"
+            f'{self.__class__.__name__} must define OutputModel as a class attribute '
+            'or use proper generic typing with AsyncLLMTask[InputModel, OutputModel]'
         )
 
     def _get_input_model_type(self) -> type[InputModelType]:
@@ -213,17 +213,17 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
             TypeError: If input model type cannot be determined
         """
         # Try to get type from generic base classes
-        orig_bases = getattr(self.__class__, "__orig_bases__", None)
+        orig_bases = getattr(self.__class__, '__orig_bases__', None)
         if (
             orig_bases
-            and hasattr(orig_bases[0], "__args__")
+            and hasattr(orig_bases[0], '__args__')
             and len(orig_bases[0].__args__) >= 2
         ):
             return orig_bases[0].__args__[0]
 
         raise TypeError(
-            f"{self.__class__.__name__} must define InputModel as a class attribute "
-            "or use proper generic typing with AsyncLLMTask[InputModel, OutputModel]"
+            f'{self.__class__.__name__} must define InputModel as a class attribute '
+            'or use proper generic typing with AsyncLLMTask[InputModel, OutputModel]'
         )
 
     def _validate_and_convert_input(self, data: BaseModel | dict) -> BaseModel:
@@ -250,10 +250,10 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
                 return input_model_type(**data)
             except Exception as e:
                 raise TypeError(
-                    f"Failed to convert input data to {input_model_type.__name__}: {e}"
+                    f'Failed to convert input data to {input_model_type.__name__}: {e}'
                 ) from e
 
-        raise TypeError("InputModel must be a subclass of BaseModel")
+        raise TypeError('InputModel must be a subclass of BaseModel')
 
     def _validate_output_model(self) -> type[BaseModel]:
         """
@@ -270,12 +270,10 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
             isinstance(output_model_type, type)
             and issubclass(output_model_type, BaseModel)
         ):
-            raise TypeError("OutputModel must be a subclass of BaseModel")
+            raise TypeError('OutputModel must be a subclass of BaseModel')
         return output_model_type
 
-    async def _base_call(
-        self, data: BaseModel | dict
-    ) -> ParsedOutput[OutputModelType]:
+    async def _base_call(self, data: BaseModel | dict) -> ParsedOutput[OutputModelType]:
         """
         Core method that handles language model interaction with type safety.
 
@@ -296,7 +294,7 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
         return cast(
             ParsedOutput[OutputModelType],
             await self.lm.parse(
-                instruction=self.__doc__ or "",
+                instruction=self.__doc__ or '',
                 prompt=validated_input.model_dump_json(),
             ),
         )
@@ -318,22 +316,22 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
         no_think_messages = copy.deepcopy(think_messages)
 
         # Update system message
-        if no_think_messages and "content" in no_think_messages[0]:
-            system_content = no_think_messages[0]["content"]
+        if no_think_messages and 'content' in no_think_messages[0]:
+            system_content = no_think_messages[0]['content']
             if isinstance(system_content, str):
-                no_think_messages[0]["content"] = system_content.replace(
-                    "/think", "/no_think"
+                no_think_messages[0]['content'] = system_content.replace(
+                    '/think', '/no_think'
                 )
 
         # Update assistant message (last message)
-        if len(no_think_messages) > 1 and "content" in no_think_messages[-1]:
-            assistant_content = no_think_messages[-1]["content"]
-            if isinstance(assistant_content, str) and "</think>" in assistant_content:
+        if len(no_think_messages) > 1 and 'content' in no_think_messages[-1]:
+            assistant_content = no_think_messages[-1]['content']
+            if isinstance(assistant_content, str) and '</think>' in assistant_content:
                 # Extract content after thinking block
-                post_think_content = assistant_content.split("</think>", 1)[1].strip()
-                no_think_messages[-1][
-                    "content"
-                ] = f"<think>\n\n</think>\n\n{post_think_content}"
+                post_think_content = assistant_content.split('</think>', 1)[1].strip()
+                no_think_messages[-1]['content'] = (
+                    f'<think>\n\n</think>\n\n{post_think_content}'
+                )
 
         return no_think_messages
 
@@ -366,18 +364,18 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
 
         # Prepare combined training data
         training_data = {
-            "think_messages": think_messages,
-            "no_think_messages": no_think_messages,
-            "model_kwargs": model_kwargs,
-            "input_data": input_data.model_dump(),
-            "label": label,
+            'think_messages': think_messages,
+            'no_think_messages': no_think_messages,
+            'model_kwargs': model_kwargs,
+            'input_data': input_data.model_dump(),
+            'label': label,
         }
 
         if expected_response is not None:
-            training_data["expected_response"] = expected_response.model_dump()
+            training_data['expected_response'] = expected_response.model_dump()
 
         # Save to file
-        training_file = class_cache_dir / f"{input_id}.json"
+        training_file = class_cache_dir / f'{input_id}.json'
         dump_json_or_pickle(training_data, str(training_file))
 
     async def _generate_training_data_with_thinking_mode(
@@ -405,22 +403,22 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
         """
         # Execute the base call to get thinking mode data
         output = await self._base_call(input_data)
-        parsed_result = output["parsed"]
-        think_messages = output["messages"]
+        parsed_result = output['parsed']
+        think_messages = output['messages']
 
         # Create non-thinking mode equivalent
         no_think_messages = self._create_no_think_messages(think_messages)
 
         # Use default cache directory if none provided
         if cache_dir is None:
-            cache_dir = self.DEFAULT_CACHE_DIR or pathlib.Path("./cache")
+            cache_dir = self.DEFAULT_CACHE_DIR or pathlib.Path('./cache')
 
         # Save training data
         self._save_training_data(
             input_data=input_data,
             think_messages=think_messages,
             no_think_messages=no_think_messages,
-            model_kwargs=output["model_kwargs"],
+            model_kwargs=output['model_kwargs'],
             cache_dir=cache_dir,
             expected_response=expected_response,
             label=label,
@@ -467,7 +465,7 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
                 label=label,
             )
         output = await self._base_call(input_data)
-        return output["parsed"]
+        return output['parsed']
 
     def generate_training_data(
         self, input_json: str, output_json: str
@@ -494,16 +492,16 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
         #         "as class attributes to use generate_training_data"
         #     )
 
-        system_prompt = self.__doc__ or ""
-        assert isinstance(input_json, str), "Input must be a JSON string"
-        assert isinstance(output_json, str), "Output must be a JSON string"
+        system_prompt = self.__doc__ or ''
+        assert isinstance(input_json, str), 'Input must be a JSON string'
+        assert isinstance(output_json, str), 'Output must be a JSON string'
         messages = get_conversation_one_turn(
             system_msg=system_prompt,
             user_msg=input_json,
             assistant_msg=output_json,
         )
 
-        return {"messages": messages}
+        return {'messages': messages}
 
     # Compatibility alias for other LLMTask implementations
     arun = __call__
@@ -512,8 +510,8 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        if hasattr(self._lm, "_last_client"):
+        if hasattr(self._lm, '_last_client'):
             last_client = self._lm._last_client  # type: ignore
             await last_client._client.aclose()
         else:
-            logger.warning("No last client to close")
+            logger.warning('No last client to close')

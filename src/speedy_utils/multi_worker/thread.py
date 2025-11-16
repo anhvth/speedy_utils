@@ -1,97 +1,4 @@
-"""
-# ============================================================================= #
-# THREAD-BASED PARALLEL EXECUTION WITH PROGRESS TRACKING AND ERROR HANDLING
-# ============================================================================= #
-#
-# Title & Intent:
-# High-performance thread pool utilities for parallel processing with comprehensive error handling
-#
-# High-level Summary:
-# This module provides robust thread-based parallel execution utilities designed for CPU-bound
-# and I/O-bound tasks requiring concurrent processing. It features intelligent worker management,
-# comprehensive error handling with detailed tracebacks, progress tracking with tqdm integration,
-# and flexible batching strategies. The module optimizes for both throughput and reliability,
-# making it suitable for data processing pipelines, batch operations, and concurrent API calls.
-#
-# Public API / Data Contracts:
-# • multi_thread(func, inputs, *, workers=None, **kwargs) -> list[Any] - Main executor
-# • multi_thread_standard(func, inputs, workers=4) -> list[Any] - Simple ordered helper
-# • kill_all_thread(exc_type=SystemExit, join_timeout=0.1) -> int - Emergency stop
-# • DEFAULT_WORKERS = (cpu_count * 2) - Default worker thread count
-# • T = TypeVar('T'), R = TypeVar('R') - Generic type variables for input/output typing
-# • _group_iter(src, size) -> Iterable[list[T]] - Utility for chunking iterables
-# • _worker(item, func, fixed_kwargs) -> R - Individual worker function wrapper
-# • _ResultCollector - Maintains ordered/unordered result aggregation
-#
-# Invariants / Constraints:
-# • Worker count MUST be positive integer, defaults to (CPU cores * 2)
-# • Input iterables MUST be finite and non-empty for meaningful processing
-# • Functions MUST be thread-safe when used with multiple workers
-# • Error handling MUST capture and log detailed tracebacks for debugging
-# • Progress tracking MUST be optional and gracefully handle tqdm unavailability
-# • Batch processing MUST maintain input order in results
-# • MUST handle keyboard interruption gracefully with resource cleanup
-# • Thread pool MUST be properly closed and joined after completion
-#
-# Usage Example:
-# ```python
-# from speedy_utils.multi_worker.thread import multi_thread, multi_thread_batch
-# import requests
-#
-# # Simple parallel processing
-# def square(x):
-#     return x ** 2
-#
-# numbers = list(range(100))
-# results = multi_thread(square, numbers, num_workers=8)
-# print(f"Processed {len(results)} items")
-#
-# # Parallel API calls with error handling
-# def fetch_url(url):
-#     response = requests.get(url, timeout=10)
-#     return response.status_code, len(response.content)
-#
-# urls = ["http://example.com", "http://google.com", "http://github.com"]
-# results = multi_thread(fetch_url, urls, num_workers=3, progress=True)
-#
-# # Batched processing for memory efficiency
-# def process_batch(items):
-#     return [item.upper() for item in items]
-#
-# large_dataset = ["item" + str(i) for i in range(10000)]
-# batched_results = multi_thread_batch(
-#     process_batch,
-#     large_dataset,
-#     batch_size=100,
-#     num_workers=4
-# )
-# ```
-#
-# TODO & Future Work:
-# • Add adaptive worker count based on task characteristics
-# • Implement priority queuing for time-sensitive tasks
-# • Add memory usage monitoring and automatic batch size adjustment
-# • Support for async function execution within thread pool
-# • Add detailed performance metrics and timing analysis
-# • Implement graceful degradation for resource-constrained environments
-#
-# ============================================================================= #
-"""
-
-import ctypes
-import os
-import sys
-import threading
-import time
-import traceback
-from collections.abc import Callable, Iterable, Mapping, Sequence
-from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
-from heapq import heappop, heappush
-from itertools import islice
-from types import MappingProxyType
-from typing import Any, Generic, TypeVar, cast
-
-from loguru import logger
+from ..__imports import *
 
 
 try:
@@ -102,8 +9,8 @@ except ImportError:  # pragma: no cover
 # Sensible defaults
 DEFAULT_WORKERS = (os.cpu_count() or 4) * 2
 
-T = TypeVar("T")
-R = TypeVar("R")
+T = TypeVar('T')
+R = TypeVar('R')
 
 SPEEDY_RUNNING_THREADS: list[threading.Thread] = []  # cooperative shutdown tracking
 _SPEEDY_THREADS_LOCK = threading.Lock()
@@ -125,11 +32,11 @@ class UserFunctionError(Exception):
         self.user_traceback = user_traceback
 
         # Create a focused error message
-        tb_str = "".join(traceback.format_list(user_traceback))
+        tb_str = ''.join(traceback.format_list(user_traceback))
         msg = (
             f'\nError in function "{func_name}" with input: {input_value!r}\n'
-            f"\nUser code traceback:\n{tb_str}"
-            f"{type(original_exception).__name__}: {original_exception}"
+            f'\nUser code traceback:\n{tb_str}'
+            f'{type(original_exception).__name__}: {original_exception}'
         )
         super().__init__(msg)
 
@@ -166,7 +73,7 @@ def _track_threads(threads: Iterable[threading.Thread]) -> None:
 
 
 def _track_executor_threads(pool: ThreadPoolExecutor) -> None:
-    thread_set = getattr(pool, "_threads", None)
+    thread_set = getattr(pool, '_threads', None)
     if not thread_set:
         return
     _track_threads(tuple(thread_set))
@@ -189,9 +96,9 @@ def _worker(
     if not callable(func):
         func_type = type(func).__name__
         raise TypeError(
-            f"\nmulti_thread: func parameter must be callable, "
-            f"got {func_type}: {func!r}\n"
-            f"Hint: Did you accidentally pass a {func_type} instead of a function?"
+            f'\nmulti_thread: func parameter must be callable, '
+            f'got {func_type}: {func!r}\n'
+            f'Hint: Did you accidentally pass a {func_type} instead of a function?'
         )
 
     try:
@@ -206,9 +113,9 @@ def _worker(
             # Filter to keep only user code frames
             user_frames = []
             skip_patterns = [
-                "multi_worker/thread.py",
-                "concurrent/futures/",
-                "threading.py",
+                'multi_worker/thread.py',
+                'concurrent/futures/',
+                'threading.py',
             ]
 
             for frame in tb_list:
@@ -217,7 +124,7 @@ def _worker(
 
             # If we have user frames, wrap in our custom exception
             if user_frames:
-                func_name = getattr(func, "__name__", repr(func))
+                func_name = getattr(func, '__name__', repr(func))
                 raise UserFunctionError(
                     exc,
                     func_name,
@@ -293,7 +200,7 @@ def _resolve_worker_count(workers: int | None) -> int:
     if workers is None:
         return DEFAULT_WORKERS
     if workers <= 0:
-        raise ValueError("workers must be a positive integer")
+        raise ValueError('workers must be a positive integer')
     return workers
 
 
@@ -301,16 +208,16 @@ def _normalize_batch_result(result: Any, logical_size: int) -> list[Any]:
     if logical_size == 1:
         return [result]
     if result is None:
-        raise ValueError("batched callable returned None for a batch result")
+        raise ValueError('batched callable returned None for a batch result')
     if isinstance(result, (str, bytes, bytearray)):
-        raise TypeError("batched callable must not return str/bytes when batching")
+        raise TypeError('batched callable must not return str/bytes when batching')
     if isinstance(result, (Sequence, Iterable)):
         out = list(result)
     else:
-        raise TypeError("batched callable must return an iterable of results")
+        raise TypeError('batched callable must return an iterable of results')
     if len(out) != logical_size:
         raise ValueError(
-            f"batched callable returned {len(out)} items, expected {logical_size}",
+            f'batched callable returned {len(out)} items, expected {logical_size}',
         )
     return out
 
@@ -398,7 +305,7 @@ def multi_thread(
 
         for proc_idx, chunk in enumerate(chunks):
             with tempfile.NamedTemporaryFile(
-                delete=False, suffix="multi_thread.pkl"
+                delete=False, suffix='multi_thread.pkl'
             ) as fh:
                 file_pkl = fh.name
             assert isinstance(in_process_multi_thread, Callable)
@@ -421,28 +328,28 @@ def multi_thread(
 
         for proc, file_pkl in procs:
             proc.join()
-            logger.info("process finished: %s", proc)
+            logger.info('process finished: %s', proc)
             try:
                 results.extend(load_by_ext(file_pkl))
             finally:
                 try:
                     os.unlink(file_pkl)
                 except OSError as exc:  # pragma: no cover - best effort cleanup
-                    logger.warning("failed to remove temp file %s: %s", file_pkl, exc)
+                    logger.warning('failed to remove temp file %s: %s', file_pkl, exc)
         return results
 
     try:
         import pandas as pd
 
         if isinstance(inputs, pd.DataFrame):
-            inputs = cast(Iterable[T], inputs.to_dict(orient="records"))
+            inputs = cast(Iterable[T], inputs.to_dict(orient='records'))
     except ImportError:  # pragma: no cover - optional dependency
         pass
 
     if batch <= 0:
-        raise ValueError("batch must be a positive integer")
+        raise ValueError('batch must be a positive integer')
     if prefetch_factor <= 0:
-        raise ValueError("prefetch_factor must be a positive integer")
+        raise ValueError('prefetch_factor must be a positive integer')
 
     workers_val = _resolve_worker_count(workers)
     progress_update = max(progress_update, 1)
@@ -473,9 +380,9 @@ def multi_thread(
         bar = tqdm(
             total=logical_total,
             ncols=128,
-            colour="green",
+            colour='green',
             bar_format=(
-                "{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}{postfix}]"
+                '{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}{postfix}]'
             ),
         )
 
@@ -490,9 +397,9 @@ def multi_thread(
     inflight: set[Future[Any]] = set()
     pool = ThreadPoolExecutor(
         max_workers=workers_val,
-        thread_name_prefix="speedy-thread",
+        thread_name_prefix='speedy-thread',
     )
-    shutdown_kwargs: dict[str, Any] = {"wait": True}
+    shutdown_kwargs: dict[str, Any] = {'wait': True}
 
     try:
 
@@ -525,7 +432,7 @@ def multi_thread(
                 if remaining <= 0:
                     _cancel_futures(inflight)
                     raise TimeoutError(
-                        f"multi_thread timed out after {timeout} seconds",
+                        f'multi_thread timed out after {timeout} seconds',
                     )
                 wait_timeout = max(remaining, 0.0)
 
@@ -538,7 +445,7 @@ def multi_thread(
             if not done:
                 _cancel_futures(inflight)
                 raise TimeoutError(
-                    f"multi_thread timed out after {timeout} seconds",
+                    f'multi_thread timed out after {timeout} seconds',
                 )
 
             for fut in done:
@@ -557,11 +464,11 @@ def multi_thread(
                         orig_exc = exc.original_exception
 
                         # Build new traceback from user frames only
-                        tb_str = "".join(traceback.format_list(exc.user_traceback))
+                        tb_str = ''.join(traceback.format_list(exc.user_traceback))
                         clean_msg = (
                             f'\nError in "{exc.func_name}" '
-                            f"with input: {exc.input_value!r}\n\n{tb_str}"
-                            f"{type(orig_exc).__name__}: {orig_exc}"
+                            f'with input: {exc.input_value!r}\n\n{tb_str}'
+                            f'{type(orig_exc).__name__}: {orig_exc}'
                         )
 
                         # Raise a new instance of the original exception type
@@ -576,7 +483,7 @@ def multi_thread(
                     if stop_on_error:
                         _cancel_futures(inflight)
                         raise
-                    logger.exception("multi_thread task failed", exc_info=exc)
+                    logger.exception('multi_thread task failed', exc_info=exc)
                     out_items = [None] * logical_size
                 else:
                     try:
@@ -584,7 +491,7 @@ def multi_thread(
                     except Exception as exc:
                         _cancel_futures(inflight)
                         raise RuntimeError(
-                            "batched callable returned an unexpected shape",
+                            'batched callable returned an unexpected shape',
                         ) from exc
 
                 collector.add(idx, out_items)
@@ -599,11 +506,11 @@ def multi_thread(
                         pending = (
                             max(logical_total - submitted, 0)
                             if logical_total is not None
-                            else "-"
+                            else '-'
                         )
                         postfix = {
-                            "processing": min(len(inflight), workers_val),
-                            "pending": pending,
+                            'processing': min(len(inflight), workers_val),
+                            'pending': pending,
                         }
                         bar.set_postfix(postfix)
 
@@ -616,7 +523,7 @@ def multi_thread(
         results = collector.finalize()
 
     except KeyboardInterrupt:
-        shutdown_kwargs = {"wait": False, "cancel_futures": True}
+        shutdown_kwargs = {'wait': False, 'cancel_futures': True}
         _cancel_futures(inflight)
         kill_all_thread(SystemExit)
         raise KeyboardInterrupt() from None
@@ -624,14 +531,14 @@ def multi_thread(
         try:
             pool.shutdown(**shutdown_kwargs)
         except TypeError:  # pragma: no cover - Python <3.9 fallback
-            pool.shutdown(shutdown_kwargs.get("wait", True))
+            pool.shutdown(shutdown_kwargs.get('wait', True))
         if bar:
             delta = completed_items - last_bar_update
             if delta > 0:
                 bar.update(delta)
             bar.close()
 
-    results = collector.finalize() if "results" not in locals() else results
+    results = collector.finalize() if 'results' not in locals() else results
     if store_output_pkl_file:
         dump_json_or_pickle(results, store_output_pkl_file)
     _prune_dead_threads()
@@ -646,7 +553,7 @@ def multi_thread_standard(
     workers_val = _resolve_worker_count(workers)
     with ThreadPoolExecutor(
         max_workers=workers_val,
-        thread_name_prefix="speedy-thread",
+        thread_name_prefix='speedy-thread',
     ) as executor:
         futures: list[Future[R]] = []
         for item in items:
@@ -661,13 +568,13 @@ def _async_raise(thread_id: int, exc_type: type[BaseException]) -> bool:
     if thread_id <= 0:
         return False
     if not issubclass(exc_type, BaseException):
-        raise TypeError("exc_type must derive from BaseException")
+        raise TypeError('exc_type must derive from BaseException')
     res = _PY_SET_ASYNC_EXC(ctypes.c_ulong(thread_id), ctypes.py_object(exc_type))
     if res == 0:
         return False
     if res > 1:  # pragma: no cover - defensive branch
         _PY_SET_ASYNC_EXC(ctypes.c_ulong(thread_id), None)
-        raise SystemError("PyThreadState_SetAsyncExc failed")
+        raise SystemError('PyThreadState_SetAsyncExc failed')
     return True
 
 
@@ -698,17 +605,17 @@ def kill_all_thread(
                 terminated += 1
                 thread.join(timeout=join_timeout)
             else:
-                logger.warning("Unable to signal thread %s", thread.name)
+                logger.warning('Unable to signal thread %s', thread.name)
         except Exception as exc:  # pragma: no cover - defensive
-            logger.error("Failed to stop thread %s: %s", thread.name, exc)
+            logger.error('Failed to stop thread %s: %s', thread.name, exc)
     _prune_dead_threads()
     return terminated
 
 
 __all__ = [
-    "SPEEDY_RUNNING_THREADS",
-    "UserFunctionError",
-    "multi_thread",
-    "multi_thread_standard",
-    "kill_all_thread",
+    'SPEEDY_RUNNING_THREADS',
+    'UserFunctionError',
+    'multi_thread',
+    'multi_thread_standard',
+    'kill_all_thread',
 ]

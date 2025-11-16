@@ -1,14 +1,8 @@
 # utils/utils_misc.py
-
-import inspect
-import os
-from collections.abc import Callable
-from typing import Any, TypeVar
-
-from pydantic import BaseModel
+from ..__imports import *
 
 
-T = TypeVar("T")
+T = TypeVar('T')
 
 
 def mkdir_or_exist(dir_name: str) -> None:
@@ -28,10 +22,10 @@ def get_arg_names(func: Callable) -> list[str]:
 
 def is_notebook() -> bool:
     try:
-        if "get_ipython" in globals():
-            get_ipython = globals()["get_ipython"]
+        if 'get_ipython' in globals():
+            get_ipython = globals()['get_ipython']
             shell = get_ipython().__class__.__name__
-            if shell == "ZMQInteractiveShell":
+            if shell == 'ZMQInteractiveShell':
                 return True  # Jupyter notebook or qtconsole
         return False  # Other type (?)
     except NameError:
@@ -49,7 +43,7 @@ def convert_to_builtin_python(input_data: Any) -> Any:
     if isinstance(input_data, BaseModel):
         data = input_data.model_dump_json()
         return convert_to_builtin_python(data)
-    raise ValueError(f"Unsupported type {type(input_data)}")
+    raise ValueError(f'Unsupported type {type(input_data)}')
 
 
 def dedup(items: list[T], key: Callable[[T], Any]) -> list[T]:
@@ -74,10 +68,10 @@ def dedup(items: list[T], key: Callable[[T], Any]) -> list[T]:
 
 
 __all__ = [
-    "mkdir_or_exist",
-    "flatten_list",
-    "get_arg_names",
-    "is_notebook",
-    "convert_to_builtin_python",
-    "dedup",
+    'mkdir_or_exist',
+    'flatten_list',
+    'get_arg_names',
+    'is_notebook',
+    'convert_to_builtin_python',
+    'dedup',
 ]
