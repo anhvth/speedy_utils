@@ -133,6 +133,7 @@ def multi_process(
     progress: bool = True,
     # backend: str = "ray",   # "seq", "ray", or "fastcore"
     backend: Literal['seq', 'ray', 'mp', 'threadpool', 'safe'] = 'mp',
+    desc: str | None = None,
     **func_kwargs: Any,
 ) -> list[Any]:
     """
@@ -171,8 +172,12 @@ def multi_process(
     f_wrapped = wrap_dump(func, cache_dir)
 
     total = len(items)
+    if desc:
+        desc = desc.strip() + f'[{backend}]'
+    else:
+        desc = f'Multi-process [{backend}]'
     with tqdm(
-        total=total, desc=f'multi_process [{backend}]', disable=not progress
+        total=total, desc=desc , disable=not progress
     ) as pbar:
         # ---- sequential backend ----
         if backend == 'seq':

@@ -1,14 +1,25 @@
+from __future__ import annotations
+
 # type: ignore
 import os
-from collections.abc import Sequence
-from typing import TYPE_CHECKING
+import time
+from pathlib import Path
+from typing import Sequence, Tuple, TYPE_CHECKING
+from multiprocessing import cpu_count
+
+import numpy as np
+from PIL import Image
+from speedy_utils import identify
+
+try:
+    from torch.utils.data import Dataset
+except ImportError:
+    Dataset = object
 
 
 if TYPE_CHECKING:
-    import numpy as np
     from nvidia.dali import fn, pipeline_def
     from nvidia.dali import types as dali_types
-    from PIL import Image
     from tqdm import tqdm
 
 
@@ -247,4 +258,213 @@ def read_images(
         return read_images_cpu(str_paths, hw=hw)
 
 
-__all__ = ['read_images', 'read_images_cpu', 'read_images_gpu']
+
+
+
+class ImageMmap(Dataset):
+    """
+    One-time build + read-only mmap dataset.
+
+    - First run (no mmap file): read all img_paths -> resize -> write mmap.
+    - Next runs: only read from mmap (no filesystem image reads).
+    """
+
+    def __init__(
+        self,
+        img_paths: Sequence[str | os.PathLike],
+        size: Tuple[int, int] = (224, 224),
+        mmap_path: str | os.PathLike | None = None,
+        dtype: np.dtype = np.uint8,
+        C=3,
+        safe: bool = True,
+    ) -> None:
+        self.imgpath2idx = {str(p): i for i, p in enumerate(img_paths)}
+        self.img_paths = [str(p) for p in img_paths]
+        self.H, self.W = size
+        self.C = C
+        self.n = len(self.img_paths)
+        self.dtype = np.dtype(dtype)
+        self.safe = safe
+
+        # Generate default mmap path if not provided
+        if mmap_path is None:
+            hash_idx = identify(''.join(self.img_paths))
+            mmap_path = Path('.cache') / f'mmap_dataset_{hash_idx}.dat'
+        
+        self.mmap_path = Path(mmap_path)
+        self.hash_path = Path(str(self.mmap_path) + '.hash')
+        self.lock_path = Path(str(self.mmap_path) + '.lock')
+        self.shape = (self.n, self.H, self.W, self.C)
+
+        if self.n == 0:
+            raise ValueError("Cannot create ImageMmap with empty img_paths list")
+
+        # Calculate hash of image paths
+        current_hash = identify(self.img_paths)
+        needs_rebuild = False
+        
+        if not self.mmap_path.exists():
+            needs_rebuild = True
+            print("Mmap file does not exist, building cache...")
+        elif not self.hash_path.exists():
+            needs_rebuild = True
+            print("Hash file does not exist, rebuilding cache...")
+        else:
+            # Check if hash matches
+            stored_hash = self.hash_path.read_text().strip()
+            if stored_hash != current_hash:
+                needs_rebuild = True
+                print(f"Hash mismatch (stored: {stored_hash[:16]}..., current: {current_hash[:16]}...), rebuilding cache...")
+        
+        # Verify file size matches expected
+        expected_bytes = np.prod(self.shape) * self.dtype.itemsize
+        if self.mmap_path.exists():
+            actual_size = self.mmap_path.stat().st_size
+            if actual_size != expected_bytes:
+                needs_rebuild = True
+                print(f"Mmap file size mismatch (expected: {expected_bytes}, got: {actual_size}), rebuilding cache...")
+        
+        if needs_rebuild:
+            self._build_cache_with_lock(current_hash)
+
+        # runtime: always open read-only; assume cache is complete
+        self.data = np.memmap(
+            self.mmap_path,
+            dtype=self.dtype,
+            mode="r",
+            shape=self.shape,
+        )
+
+    # --------------------------------------------------------------------- #
+    # Build phase (only on first run)
+    # --------------------------------------------------------------------- #
+    def _build_cache_with_lock(self, current_hash: str, num_workers: int = None) -> None:
+        """Build cache with lock file to prevent concurrent disk writes"""
+        import fcntl
+        
+        self.mmap_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Try to acquire lock file
+        lock_fd = None
+        try:
+            lock_fd = open(self.lock_path, 'w')
+            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            
+            # We got the lock, build the cache
+            self._build_cache(current_hash, num_workers)
+            
+        except BlockingIOError:
+            # Another process is building, wait for it
+            print("Another process is building the cache, waiting...")
+            if lock_fd:
+                lock_fd.close()
+            lock_fd = open(self.lock_path, 'w')
+            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)  # Wait for lock
+            print("Cache built by another process!")
+            
+        finally:
+            if lock_fd:
+                lock_fd.close()
+            if self.lock_path.exists():
+                try:
+                    self.lock_path.unlink()
+                except:
+                    pass
+    
+    def _build_cache(self, current_hash: str, num_workers: int = None) -> None:
+        from tqdm import tqdm
+        
+        # Pre-allocate the file with the required size
+        total_bytes = np.prod(self.shape) * self.dtype.itemsize
+        print(f"Pre-allocating {total_bytes / (1024**3):.2f} GB for mmap file...")
+        with open(self.mmap_path, 'wb') as f:
+            f.seek(total_bytes - 1)
+            f.write(b'\0')
+        
+        mm = np.memmap(
+            self.mmap_path,
+            dtype=self.dtype,
+            mode='r+',
+            shape=self.shape,
+        )
+        
+        # Process images in batches to avoid memory explosion
+        batch_size = 4096
+        num_batches = (self.n + batch_size - 1) // batch_size
+        
+        print(f"Loading {self.n} images in {num_batches} batches of up to {batch_size} images...")
+        
+        with tqdm(total=self.n, desc='Processing images', unit='img') as pbar:
+            for batch_idx in range(num_batches):
+                start_idx = batch_idx * batch_size
+                end_idx = min(start_idx + batch_size, self.n)
+                batch_paths = self.img_paths[start_idx:end_idx]
+                
+                # Load one batch at a time
+                images_dict = read_images(
+                    batch_paths,
+                    hw=(self.H, self.W),
+                    batch_size=32,
+                    num_threads=num_workers or max(1, cpu_count() - 1),
+                )
+                
+                # Write batch to mmap
+                for local_idx, path in enumerate(batch_paths):
+                    global_idx = start_idx + local_idx
+                    img = images_dict.get(path)
+                    
+                    if img is None:
+                        if self.safe:
+                            raise ValueError(f'Failed to load image: {path}')
+                        else:
+                            # Failed to load, write zeros
+                            print(f'Warning: Failed to load {path}, using zeros')
+                            mm[global_idx] = np.zeros(
+                                (self.H, self.W, self.C),
+                                dtype=self.dtype
+                            )
+                    else:
+                        # Ensure correct dtype
+                        if img.dtype != self.dtype:
+                            img = img.astype(self.dtype)
+                        mm[global_idx] = img
+                    
+                    pbar.update(1)
+                
+                # Flush after each batch and clear memory
+                mm.flush()
+                del images_dict
+        
+        mm.flush()
+        del mm  # ensure descriptor is closed
+        
+        # Save hash file
+        self.hash_path.write_text(current_hash)
+        print(f"Mmap cache built successfully! Hash saved to {self.hash_path}")
+
+    def _load_and_resize(self, path: str) -> np.ndarray:
+        img = Image.open(path).convert("RGB")
+        img = img.resize((self.W, self.H), Image.BILINEAR)
+        return np.asarray(img, dtype=self.dtype)
+
+    # --------------------------------------------------------------------- #
+    # Dataset API
+    # --------------------------------------------------------------------- #
+    def __len__(self) -> int:
+        return self.n
+
+    def __getitem__(self, idx: int) -> np.ndarray:
+        # At runtime: this is just a mmap read
+        return np.array(self.data[idx])  # copy to normal ndarray
+    
+    def imread(self, image_path: str | os.PathLike) -> np.ndarray:
+        idx = self.imgpath2idx.get(str(image_path))
+        if idx is None:
+            raise ValueError(f"Image path {image_path} not found in dataset")
+        img =  np.array(self.data[idx])  # copy to normal ndarray
+        summary = img.sum()
+        assert summary > 0, f"Image at {image_path} appears to be all zeros"
+        return img
+
+
+__all__ = ['read_images', 'read_images_cpu', 'read_images_gpu', 'ImageMmap']
