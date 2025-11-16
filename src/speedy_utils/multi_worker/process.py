@@ -4,19 +4,6 @@
 from ..__imports import *
 
 
-# ray: Any
-# try:
-#     import ray as ray  # type: ignore
-
-#     _HAS_RAY = True
-# except Exception:  # pragma: no cover
-#     ray = None  # type: ignore
-#     _HAS_RAY = False
-_HAS_RAY = True
-
-# ─── global tracking ──────────────────────────────────────────
-
-# Global tracking for processes and threads
 SPEEDY_RUNNING_PROCESSES: list[psutil.Process] = []
 _SPEEDY_PROCESSES_LOCK = threading.Lock()
 
@@ -46,8 +33,7 @@ def _track_processes(processes: list[psutil.Process]) -> None:
 
 def _track_ray_processes() -> None:
     """Track Ray worker processes when Ray is initialized."""
-    if not _HAS_RAY or not ray.is_initialized():
-        return
+
     try:
         # Get Ray worker processes
         current_pid = os.getpid()
@@ -199,13 +185,6 @@ def multi_process(
 
         # ---- ray backend ----
         if backend == 'ray':
-            if not _HAS_RAY:
-                msg = (
-                    "Ray backend requested but 'ray' is not installed. "
-                    "Install extra: pip install 'speedy-utils[ray]' or "
-                    'poetry install -E ray.'
-                )
-                raise RuntimeError(msg)
             pbar.set_postfix_str('backend=ray')
             ensure_ray(workers, pbar)
 

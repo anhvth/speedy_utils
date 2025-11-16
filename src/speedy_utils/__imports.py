@@ -58,7 +58,7 @@ from concurrent.futures import (
     as_completed,
     wait,
 )
-from datetime import datetime
+from datetime import datetime  # noqa: F811
 from glob import glob
 from heapq import heappop, heappush
 from itertools import islice
@@ -111,9 +111,12 @@ BaseModel = lazy.load('pydantic').BaseModel
 _pil = lazy.load('PIL.Image')
 Image = _pil.Image
 
+
+ray = lazy.load('ray')  # lazy at runtime
 if TYPE_CHECKING:
     import numpy as np
     import pandas as pd
+    import ray
     import torch
 
     # xxhash
@@ -126,6 +129,113 @@ if TYPE_CHECKING:
     from tabulate import tabulate  # type: ignore
     from tqdm import tqdm  # type: ignore
 
-
-# Import specific functions from speedy_utils
-load_time = time.time() - t
+__all__ = [
+    # ------------------------------------------------------------------
+    # Lazy-loaded external modules / objects
+    # ------------------------------------------------------------------
+    'torch',
+    'np',
+    'pd',
+    'tqdm',
+    'tabulate',
+    'xxhash',
+    'get_ipython',
+    'HTML',
+    'display',
+    'BaseModel',
+    'Image',
+    'ray',
+    # ------------------------------------------------------------------
+    # Standard library modules imported
+    # ------------------------------------------------------------------
+    'asyncio',
+    'contextlib',
+    'copy',
+    'ctypes',
+    'datetime',
+    'functools',
+    'gc',
+    'inspect',
+    'io',
+    'json',
+    'multiprocessing',
+    'os',
+    'osp',
+    'pathlib',
+    'pickle',
+    'pprint',
+    'random',
+    're',
+    'sys',
+    'textwrap',
+    'threading',
+    'time',
+    'traceback',
+    'types',
+    'uuid',
+    'weakref',
+    'warnings',
+    # ------------------------------------------------------------------
+    # Data structures
+    # ------------------------------------------------------------------
+    'Counter',
+    'OrderedDict',
+    'defaultdict',
+    'MappingProxyType',
+    # ------------------------------------------------------------------
+    # File & path utilities
+    # ------------------------------------------------------------------
+    'Path',
+    'glob',
+    # ------------------------------------------------------------------
+    # Concurrency / parallelism
+    # ------------------------------------------------------------------
+    'ThreadPoolExecutor',
+    'as_completed',
+    'wait',
+    'FIRST_COMPLETED',
+    'Future',
+    'Pool',
+    'Lock',
+    # ------------------------------------------------------------------
+    # Algorithms / heap helpers
+    # ------------------------------------------------------------------
+    'heappop',
+    'heappush',
+    'islice',
+    # ------------------------------------------------------------------
+    # Typing
+    # ------------------------------------------------------------------
+    'Annotated',
+    'Any',
+    'Awaitable',
+    'Callable',
+    'Dict',
+    'Generic',
+    'IO',
+    'Iterable',
+    'List',
+    'Literal',
+    'Mapping',
+    'Optional',
+    'ParamSpec',
+    'Sequence',
+    'Set',
+    'Tuple',
+    'Type',
+    'TYPE_CHECKING',
+    'TypeVar',
+    'TypingCallable',
+    'Union',
+    'cast',
+    'overload',
+    # ------------------------------------------------------------------
+    # Third-party modules
+    # ------------------------------------------------------------------
+    'cachetools',
+    'lazy',
+    'psutil',
+    'parallel',
+    'jloads',
+    'logger',
+]

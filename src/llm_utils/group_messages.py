@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import random
 from collections.abc import Sequence
-from typing import Optional
+from typing import Optional, cast
 
 import numpy as np
 import pandas as pd
@@ -56,19 +56,19 @@ def split_indices_by_length(
         desc = pd.Series(batch_lengths).describe()
 
         table = [
-            ["New avg item len", desc["mean"]],
-            ["Number groups", len(batches)],
-            ["Max length", max_batch_length],
+            ['New avg item len', desc['mean']],
+            ['Number groups', len(batches)],
+            ['Max length', max_batch_length],
         ]
 
-        print(tabulate(table, headers=["Metric", "Value"], tablefmt="pretty"))
+        print(tabulate(table, headers=['Metric', 'Value'], tablefmt='pretty'))
 
     return batches
 
 
 def group_messages_by_len(
     messages: Sequence[dict],
-    model_name: str = "Qwen/Qwen2.5-7B-Instruct",
+    model_name: str = 'Qwen/Qwen2.5-7B-Instruct',
     batch_size: int = 4,
     mean_length: int = 512,
 ) -> list[dict]:
@@ -76,17 +76,19 @@ def group_messages_by_len(
     Groups messages into batches based on token length and concatenates them.
     """
     if messages is None:
-        raise ValueError("messages parameter cannot be None")
+        raise ValueError('messages parameter cannot be None')
     from transformers.models.auto.tokenization_auto import AutoTokenizer  # type: ignore
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
     def create_batches(messages: Sequence[dict]) -> list[dict]:
         def get_token_length(message: dict) -> int:
-            ids = tokenizer.apply_chat_template(message["messages"][1:], tokenize=True)
+            ids = tokenizer.apply_chat_template(message['messages'][1:], tokenize=True)
             return len(ids)
 
-        lengths: list[int] = multi_thread(get_token_length, messages, workers=64)
+        lengths: list[int] = cast(
+            list[int], multi_thread(get_token_length, messages, workers=64)
+        )
         list_ids: list[list[int]] = split_indices_by_length(
             lengths,
             batch_size,
@@ -102,12 +104,12 @@ def group_messages_by_len(
             turns: list[dict] = []
             for conv in conversations:
                 turns.extend(conv[1:])
-            return {"messages": [system_message] + turns}
+            return {'messages': [system_message] + turns}
 
         for batch_ids in list_ids:
             if not batch_ids:
                 continue
-            conversations = [messages[i]["messages"] for i in batch_ids]
+            conversations = [messages[i]['messages'] for i in batch_ids]
             concatenated_messages.append(concatenate_messages(conversations))
         return concatenated_messages
 
@@ -116,6 +118,6 @@ def group_messages_by_len(
 
 
 __all__ = [
-    "split_indices_by_length",
-    "group_messages_by_len",
+    'split_indices_by_length',
+    'group_messages_by_len',
 ]

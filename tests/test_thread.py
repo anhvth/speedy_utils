@@ -96,8 +96,8 @@ def test_string_scalar():
     def f(name):
         return _sleepy(name.upper())
 
-    inp = ["ab", "cd"]
-    assert multi_thread(f, inp, progress=False) == ["AB", "CD"]
+    inp = ['ab', 'cd']
+    assert multi_thread(f, inp, progress=False) == ['AB', 'CD']
 
 
 # ────────────────────────────────────────────────────────────
@@ -132,25 +132,25 @@ def test_unordered():
 def test_stop_on_error_false():
     def f(x):
         if x == 3:
-            raise ValueError("boom")
+            raise ValueError('boom')
         return _sleepy(x)
 
     inp = list(range(5))
     out = multi_thread(f, inp, stop_on_error=False, workers=2, progress=False)
-    print("Input:", inp)
-    print("Output:", out)
+    print('Input:', inp)
+    print('Output:', out)
     num_errors = out.count(None)
-    print("Number of errors (None):", num_errors)
+    print('Number of errors (None):', num_errors)
     for idx, val in enumerate(out):
         if idx == 3:
-            print(f"Index {idx}: Expected None, got {val}")
+            print(f'Index {idx}: Expected None, got {val}')
         else:
-            print(f"Index {idx}: Expected {idx}, got {val}")
-    assert num_errors == 1, f"Expected 1 error, got {num_errors}"
-    assert out[3] is None, f"Expected None at index 3, got {out[3]}"
+            print(f'Index {idx}: Expected {idx}, got {val}')
+    assert num_errors == 1, f'Expected 1 error, got {num_errors}'
+    assert out[3] is None, f'Expected None at index 3, got {out[3]}'
     for i, val in enumerate(out):
         if i != 3:
-            assert val == i, f"Expected {i} at index {i}, got {val}"
+            assert val == i, f'Expected {i} at index {i}, got {val}'
 
 
 def test_kill_all_thread_interrupts_sleepy_workers():
@@ -172,11 +172,11 @@ def test_kill_all_thread_interrupts_sleepy_workers():
                 prefetch_factor=1,
             )
         except SystemExit:
-            outcome["system_exit"] = True
+            outcome['system_exit'] = True
         except Exception as exc:  # pragma: no cover - diagnostic safety net
-            outcome["exception"] = exc
+            outcome['exception'] = exc
         else:
-            outcome["completed"] = True
+            outcome['completed'] = True
 
     runner = threading.Thread(target=run_pool, daemon=True)
     runner.start()
@@ -185,7 +185,7 @@ def test_kill_all_thread_interrupts_sleepy_workers():
     while not SPEEDY_RUNNING_THREADS and time.time() - start < 1.0:
         time.sleep(0.01)
 
-    assert SPEEDY_RUNNING_THREADS, "expected worker threads to be active"
+    assert SPEEDY_RUNNING_THREADS, 'expected worker threads to be active'
 
     killed = kill_all_thread()
     runner.join(timeout=2.0)
@@ -193,12 +193,12 @@ def test_kill_all_thread_interrupts_sleepy_workers():
     time.sleep(0.05)
     _prune_dead_threads()
 
-    assert killed > 0, "kill_all_thread should signal at least one worker"
-    assert not runner.is_alive(), "background multi_thread should have stopped"
-    assert not SPEEDY_RUNNING_THREADS, "all tracked threads must be cleared"
-    unexpected = outcome.get("exception")
-    assert unexpected is None, f"unexpected exception: {unexpected}"
-    assert outcome.get("system_exit") or outcome.get("completed")
+    assert killed > 0, 'kill_all_thread should signal at least one worker'
+    assert not runner.is_alive(), 'background multi_thread should have stopped'
+    assert not SPEEDY_RUNNING_THREADS, 'all tracked threads must be cleared'
+    unexpected = outcome.get('exception')
+    assert unexpected is None, f'unexpected exception: {unexpected}'
+    assert outcome.get('system_exit') or outcome.get('completed')
 
 
 def test_keyboard_interrupt_cancels_immediately(monkeypatch):
@@ -213,11 +213,11 @@ def test_keyboard_interrupt_cancels_immediately(monkeypatch):
     kill_calls: dict[str, int] = {}
 
     def wrapped_kill(exc_type=SystemExit, join_timeout=0.1):
-        kill_calls["count"] = kill_calls.get("count", 0) + 1
+        kill_calls['count'] = kill_calls.get('count', 0) + 1
         return real_kill(exc_type, join_timeout)
 
-    monkeypatch.setattr(thread_mod, "wait", fake_wait)
-    monkeypatch.setattr(thread_mod, "kill_all_thread", wrapped_kill)
+    monkeypatch.setattr(thread_mod, 'wait', fake_wait)
+    monkeypatch.setattr(thread_mod, 'kill_all_thread', wrapped_kill)
 
     with pytest.raises(KeyboardInterrupt):
         multi_thread(
@@ -227,8 +227,8 @@ def test_keyboard_interrupt_cancels_immediately(monkeypatch):
             progress=False,
         )
 
-    monkeypatch.setattr(thread_mod, "wait", real_wait)
-    monkeypatch.setattr(thread_mod, "kill_all_thread", real_kill)
+    monkeypatch.setattr(thread_mod, 'wait', real_wait)
+    monkeypatch.setattr(thread_mod, 'kill_all_thread', real_kill)
 
     for _ in range(50):
         _prune_dead_threads()
@@ -236,7 +236,7 @@ def test_keyboard_interrupt_cancels_immediately(monkeypatch):
             break
         time.sleep(0.02)
 
-    assert kill_calls.get("count") == 1
+    assert kill_calls.get('count') == 1
     assert not SPEEDY_RUNNING_THREADS
 
 
@@ -250,27 +250,27 @@ def test_speedy_vs_normal():
     inp = list(range(100))
 
     # Add more visible output for debugging
-    print("\n" + "=" * 50)
-    print("RUNNING SPEED COMPARISON TEST")
-    print("Input size:", len(inp))
-    print("=" * 50)
+    print('\n' + '=' * 50)
+    print('RUNNING SPEED COMPARISON TEST')
+    print('Input size:', len(inp))
+    print('=' * 50)
 
     # First try: Basic configuration - no progress bar
     start_time = time.time()
     out1 = multi_thread(f, inp, workers=4, progress=True, stop_on_error=False)
     mt_time = time.time() - start_time
-    print(f"Speedy multi-threading took: {mt_time:.4f} seconds")
+    print(f'Speedy multi-threading took: {mt_time:.4f} seconds')
 
     start_time = time.time()
     out2 = [f(x) for x in inp]
     st_time = time.time() - start_time
-    print(f"Normal for loop took: {st_time:.4f} seconds")
+    print(f'Normal for loop took: {st_time:.4f} seconds')
 
-    print(f"Speed improvement: {st_time / mt_time:.2f}x faster")
+    print(f'Speed improvement: {st_time / mt_time:.2f}x faster')
 
     # Print details about the outputs for debugging
-    print(f"\nSpeedy output (length={len(out1)}): {out1}")
-    print(f"Normal output (length={len(out2)}): {out2}")
+    print(f'\nSpeedy output (length={len(out1)}): {out1}')
+    print(f'Normal output (length={len(out2)}): {out2}')
 
     # Check if all values match
     is_equal = True
@@ -278,17 +278,17 @@ def test_speedy_vs_normal():
     for i, (v1, v2) in enumerate(zip(out1, out2, strict=False)):
         if v1 != v2:
             is_equal = False
-            differences.append(f"Index {i}: {v1} != {v2}")
+            differences.append(f'Index {i}: {v1} != {v2}')
 
     if not is_equal:
-        print("\nOutput differences:")
+        print('\nOutput differences:')
         for diff in differences[:5]:  # Show only first 5 differences
             print(diff)
         if len(differences) > 5:
-            print(f"...and {len(differences) - 5} more differences")
+            print(f'...and {len(differences) - 5} more differences')
 
     # Final assertion
-    assert out1 == out2, "Outputs do not match!"
+    assert out1 == out2, 'Outputs do not match!'
 
 
 # =====
@@ -326,6 +326,6 @@ def test_multi_thread_vs_standard():
     std_time = time.time() - start_std
 
     print(
-        f"multi_thread: {mt_time:.4f}s, standard: {std_time:.4f}s, outputs equal: {out_mt == out_std}"
+        f'multi_thread: {mt_time:.4f}s, standard: {std_time:.4f}s, outputs equal: {out_mt == out_std}'
     )
-    assert out_mt == out_std, "multi_thread and standard outputs differ"
+    assert out_mt == out_std, 'multi_thread and standard outputs differ'

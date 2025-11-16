@@ -4,6 +4,9 @@
         "editor.formatOnSave": true,
         "editor.defaultFormatter": "charliermarsh.ruff"
     },
+    "[**/tests/**]": {
+        "python.analysis.typeCheckingMode": "off"
+    },
     "notebook.formatOnSave.enabled": true,
     "editor.codeActionsOnSave": {
         "source.fixAll": "explicit"
