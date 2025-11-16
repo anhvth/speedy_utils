@@ -2,15 +2,20 @@
 
 # type: ignore
 
+from __future__ import annotations
+
 import os
 import subprocess
 from time import sleep
-from typing import Any, Dict, List, Optional, Type, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type, Union
 
 import requests
 from loguru import logger
-from openai import OpenAI
-from pydantic import BaseModel
+
+
+if TYPE_CHECKING:
+    from openai import OpenAI
+    from pydantic import BaseModel
 
 
 class TemperatureRangeMixin:
@@ -18,10 +23,10 @@ class TemperatureRangeMixin:
 
     def temperature_range_sampling(
         self,
-        input_data: str | BaseModel | list[dict],
+        input_data: 'str | BaseModel | list[dict]',
         temperature_ranges: tuple[float, float],
         n: int = 32,
-        response_model: type[BaseModel] | type[str] | None = None,
+        response_model: 'type[BaseModel] | type[str] | None' = None,
         **runtime_kwargs,
     ) -> list[dict[str, Any]]:
         """
@@ -40,6 +45,8 @@ class TemperatureRangeMixin:
         Returns:
             List of response dictionaries from all temperature samples
         """
+        from pydantic import BaseModel
+
         from speedy_utils.multi_worker.thread import multi_thread
 
         min_temp, max_temp = temperature_ranges
@@ -75,8 +82,8 @@ class TwoStepPydanticMixin:
 
     def two_step_pydantic_parse(
         self,
-        input_data: str | BaseModel | list[dict],
-        response_model: type[BaseModel],
+        input_data,
+        response_model,
         **runtime_kwargs,
     ) -> list[dict[str, Any]]:
         """
@@ -93,6 +100,8 @@ class TwoStepPydanticMixin:
         Returns:
             List of parsed response dictionaries
         """
+        from pydantic import BaseModel
+        
         # Step 1: Get text completions
         results = self.text_completion(input_data, **runtime_kwargs)
         parsed_results = []
@@ -106,8 +115,14 @@ class TwoStepPydanticMixin:
                 response_text = response_text.split('</think>')[1]
 
             try:
-                # Try direct parsing
-                parsed = response_model.model_validate_json(response_text)
+                # Try direct parsing - support both Pydantic v1 and v2
+                if hasattr(response_model, 'model_validate_json'):
+                    # Pydantic v2
+                    parsed = response_model.model_validate_json(response_text)
+                else:
+                    # Pydantic v1
+                    import json
+                    parsed = response_model.parse_obj(json.loads(response_text))
             except Exception:
                 # Fallback: use LLM to extract JSON
                 logger.warning('Failed to parse JSON directly, using LLM to extract')
@@ -384,7 +399,7 @@ class ModelUtilsMixin:
     """Mixin for model utility methods."""
 
     @staticmethod
-    def list_models(client: OpenAI | int | str | None = None) -> list[str]:
+    def list_models(client=None) -> list[str]:
         """
         List available models from the OpenAI client.
 
@@ -394,6 +409,8 @@ class ModelUtilsMixin:
         Returns:
             List of available model names
         """
+        from openai import OpenAI
+
         from .utils import get_base_client
 
         client_instance = get_base_client(client, cache=False)

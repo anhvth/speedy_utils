@@ -19,7 +19,7 @@ class TestOutput(BaseModel):
 class TestTemperatureRangeMixin(unittest.TestCase):
     """Test TemperatureRangeMixin functionality."""
 
-    @patch('llm_utils.lm.mixins.multi_thread')
+    @patch('speedy_utils.multi_worker.thread.multi_thread')
     @patch('llm_utils.lm.llm.get_base_client')
     def test_temperature_range_sampling(self, mock_get_client, mock_multi_thread):
         """Test temperature range sampling generates correct params."""
@@ -56,7 +56,7 @@ class TestTemperatureRangeMixin(unittest.TestCase):
             self.assertAlmostEqual(kwargs['temperature'], expected_temp, places=5)
 
     @patch('llm_utils.lm.llm.get_base_client')
-    @patch('llm_utils.lm.mixins.multi_thread')
+    @patch('speedy_utils.multi_worker.thread.multi_thread')
     def test_temperature_range_via_call(self, mock_multi_thread, mock_get_client):
         """Test temperature_ranges parameter in __call__ method."""
         mock_get_client.return_value = MagicMock()
