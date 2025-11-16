@@ -9,7 +9,7 @@ from llm_utils.lm.llm import LLM
 from llm_utils.lm.mixins import TemperatureRangeMixin, TwoStepPydanticMixin
 
 
-class TestOutput(BaseModel):
+class OutputModel(BaseModel):
     """Test Pydantic model."""
 
     text: str
@@ -78,7 +78,7 @@ class TestTwoStepPydanticMixin(unittest.TestCase):
     def test_two_step_parse_success(self, mock_get_client):
         """Test successful two-step parsing."""
         mock_get_client.return_value = MagicMock()
-        llm = LLM(output_model=TestOutput)
+        llm = LLM(output_model=OutputModel)
 
         # Mock text_completion to return JSON string
         with patch.object(llm, 'text_completion') as mock_text:
@@ -90,11 +90,11 @@ class TestTwoStepPydanticMixin(unittest.TestCase):
             ]
 
             result = llm.two_step_pydantic_parse(
-                'test input', response_model=TestOutput
+                'test input', response_model=OutputModel
             )
 
             self.assertEqual(len(result), 1)
-            self.assertIsInstance(result[0]['parsed'], TestOutput)
+            self.assertIsInstance(result[0]['parsed'], OutputModel)
             self.assertEqual(result[0]['parsed'].text, 'hello')
             self.assertEqual(result[0]['parsed'].score, 42)
 
@@ -102,7 +102,7 @@ class TestTwoStepPydanticMixin(unittest.TestCase):
     def test_two_step_parse_with_think_tags(self, mock_get_client):
         """Test parsing with reasoning <think> tags."""
         mock_get_client.return_value = MagicMock()
-        llm = LLM(output_model=TestOutput)
+        llm = LLM(output_model=OutputModel)
 
         # Mock text_completion with <think> tags
         with patch.object(llm, 'text_completion') as mock_text:
@@ -114,7 +114,7 @@ class TestTwoStepPydanticMixin(unittest.TestCase):
             ]
 
             result = llm.two_step_pydantic_parse(
-                'test input', response_model=TestOutput
+                'test input', response_model=OutputModel
             )
 
             # Should strip <think> and parse successfully
@@ -125,7 +125,7 @@ class TestTwoStepPydanticMixin(unittest.TestCase):
     def test_two_step_parse_fallback(self, mock_get_client):
         """Test fallback to LLM extraction when JSON parsing fails."""
         mock_get_client.return_value = MagicMock()
-        llm = LLM(output_model=TestOutput)
+        llm = LLM(output_model=OutputModel)
 
         # Mock text_completion with invalid JSON
         with patch.object(llm, 'text_completion') as mock_text:
@@ -139,11 +139,11 @@ class TestTwoStepPydanticMixin(unittest.TestCase):
             # Mock pydantic_parse for fallback
             with patch.object(llm, 'pydantic_parse') as mock_parse:
                 mock_parse.return_value = [
-                    {'parsed': TestOutput(text='extracted', score=1), 'messages': []}
+                    {'parsed': OutputModel(text='extracted', score=1), 'messages': []}
                 ]
 
                 result = llm.two_step_pydantic_parse(
-                    'test input', response_model=TestOutput
+                    'test input', response_model=OutputModel
                 )
 
                 # Should have called fallback
@@ -154,7 +154,7 @@ class TestTwoStepPydanticMixin(unittest.TestCase):
     def test_two_step_via_call(self, mock_get_client):
         """Test two_step_parse_pydantic parameter in __call__ method."""
         mock_get_client.return_value = MagicMock()
-        llm = LLM(output_model=TestOutput)
+        llm = LLM(output_model=OutputModel)
 
         with patch.object(llm, 'text_completion') as mock_text:
             mock_text.return_value = [
@@ -167,7 +167,7 @@ class TestTwoStepPydanticMixin(unittest.TestCase):
             result = llm('test input', two_step_parse_pydantic=True)
 
             self.assertTrue(mock_text.called)
-            self.assertIsInstance(result[0]['parsed'], TestOutput)
+            self.assertIsInstance(result[0]['parsed'], OutputModel)
 
 
 class TestMixinIntegration(unittest.TestCase):
