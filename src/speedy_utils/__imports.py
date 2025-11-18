@@ -110,6 +110,8 @@ display = lazy.load('IPython.display').display
 BaseModel = lazy.load('pydantic').BaseModel
 _pil = lazy.load('PIL.Image')
 Image = _pil.Image
+matplotlib = lazy.load('matplotlib')
+plt = lazy.load('matplotlib.pyplot')
 
 
 ray = lazy.load('ray')  # lazy at runtime
@@ -118,7 +120,7 @@ if TYPE_CHECKING:
     import pandas as pd
     import ray
     import torch
-
+    import matplotlib.pyplot as plt
     # xxhash
     import xxhash  # type: ignore
     from IPython.core.getipython import get_ipython  # type: ignore
@@ -238,4 +240,5 @@ __all__ = [
     'parallel',
     'jloads',
     'logger',
+    'plt',
 ]

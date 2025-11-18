@@ -1,10 +1,10 @@
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
 
-from speedy_utils.__imports import np
+from speedy_utils.__imports import np, plt
 
 
 if TYPE_CHECKING:
-    from pathlib import Path
 
     import lazy_loader as lazy
     import matplotlib.pyplot as plt
@@ -196,6 +196,10 @@ def plot_images_notebook(
         ... ]
         >>> plot_images_notebook(images, ncols=2)
     """
+    # Check matplotlib availability
+    mpl_available, plt = _check_matplotlib_available()
+    if not mpl_available:
+        raise ImportError("matplotlib is required for plotting. Install it with: pip install matplotlib")
 
     # Normalize all images to list of (H, W, C) numpy arrays
     images_list = _normalize_batch(images)
@@ -301,6 +305,11 @@ def visualize_tensor(img_tensor, mode='hwc', normalize=True, max_cols=8):
         normalize: scale float tensor to 0–255 uint8 for display
         max_cols: max columns when tiling a batch
     """
+    # Check matplotlib availability
+    mpl_available, plt = _check_matplotlib_available()
+    if not mpl_available:
+        raise ImportError("matplotlib is required for plotting. Install it with: pip install matplotlib")
+    
     if mode == 'chw':
         img_tensor = img_tensor.permute(1, 2, 0)
         imgs = [img_tensor]
