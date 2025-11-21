@@ -142,7 +142,7 @@ def _normalize_batch(
 
 
 def plot_images_notebook(
-    images: Union[np.ndarray, List[np.ndarray], List[Any], Any],
+    images: Union[np.ndarray, List[np.ndarray], List[Any], Any, Tuple],
     nrows: Optional[int] = None,
     ncols: Optional[int] = None,
     figsize: Optional[Tuple[float, float]] = None,
@@ -196,6 +196,8 @@ def plot_images_notebook(
         ... ]
         >>> plot_images_notebook(images, ncols=2)
     """
+    if isinstance(images, tuple):
+        images = list(images)
     # Check matplotlib availability
     mpl_available, plt = _check_matplotlib_available()
     if not mpl_available:
