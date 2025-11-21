@@ -288,7 +288,7 @@ class ImageMmap(Dataset):
 
         # Generate default mmap path if not provided
         if mmap_path is None:
-            hash_idx = identify(''.join(self.img_paths))
+            hash_idx = identify(''.join(sorted(self.img_paths)))
             mmap_path = Path('.cache') / f'mmap_dataset_{hash_idx}.dat'
         
         self.mmap_path = Path(mmap_path)
