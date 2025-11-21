@@ -466,5 +466,270 @@ class ImageMmap(Dataset):
         assert summary > 0, f"Image at {image_path} appears to be all zeros"
         return img
 
+class ImageMmapDynamic(Dataset):
+    """
+    Dynamic-shape mmap dataset.
 
-__all__ = ['read_images', 'read_images_cpu', 'read_images_gpu', 'ImageMmap']
+    - First run (no mmap/meta or hash mismatch): read all img_paths, keep original H/W,
+      append flattened bytes sequentially into a flat mmap file.
+    - Also writes a .meta file with mapping:
+        img_path -> [offset, H, W, C]
+    - Next runs: only open mmap + meta and do constant-time slice + reshape.
+    """
+
+    def __init__(
+        self,
+        img_paths: Sequence[str | os.PathLike],
+        mmap_path: str | os.PathLike | None = None,
+        dtype: np.dtype | str = np.uint8,
+        safe: bool = True,
+    ) -> None:
+        self.img_paths = [str(p) for p in img_paths]
+        self.imgpath2idx = {p: i for i, p in enumerate(self.img_paths)}
+        self.n = len(self.img_paths)
+        if self.n == 0:
+            raise ValueError('Cannot create ImageMmapDynamic with empty img_paths list')
+
+        self.dtype = np.dtype(dtype)
+        self.safe = safe
+
+        # Default path if not provided
+        if mmap_path is None:
+            hash_idx = identify(''.join(self.img_paths))
+            mmap_path = Path('.cache') / f'mmap_dynamic_{hash_idx}.dat'
+
+        self.mmap_path = Path(mmap_path)
+        self.meta_path = Path(str(self.mmap_path) + '.meta')
+        self.hash_path = Path(str(self.mmap_path) + '.hash')
+        self.lock_path = Path(str(self.mmap_path) + '.lock')
+
+        # Hash of the path list to detect changes
+        current_hash = identify(self.img_paths)
+        needs_rebuild = False
+
+        if not self.mmap_path.exists() or not self.meta_path.exists():
+            needs_rebuild = True
+            print('Dynamic mmap or meta file does not exist, building cache...')
+        elif not self.hash_path.exists():
+            needs_rebuild = True
+            print('Hash file does not exist for dynamic mmap, rebuilding cache...')
+        else:
+            stored_hash = self.hash_path.read_text().strip()
+            if stored_hash != current_hash:
+                needs_rebuild = True
+                print(
+                    f'Dynamic mmap hash mismatch '
+                    f'(stored: {stored_hash[:16]}..., current: {current_hash[:16]}...), '
+                    'rebuilding cache...'
+                )
+            else:
+                # Check size vs meta
+                import json
+
+                try:
+                    with open(self.meta_path, 'r') as f:
+                        meta = json.load(f)
+                    meta_dtype = np.dtype(meta.get('dtype', 'uint8'))
+                    total_elems = int(meta['total_elems'])
+                    expected_bytes = total_elems * meta_dtype.itemsize
+                    actual_bytes = self.mmap_path.stat().st_size
+                    if actual_bytes != expected_bytes:
+                        needs_rebuild = True
+                        print(
+                            'Dynamic mmap file size mismatch '
+                            f'(expected: {expected_bytes}, got: {actual_bytes}), '
+                            'rebuilding cache...'
+                        )
+                except Exception as e:
+                    needs_rebuild = True
+                    print(f'Failed to read dynamic mmap meta ({e}), rebuilding cache...')
+
+        if needs_rebuild:
+            self._build_cache_with_lock(current_hash)
+
+        # After build (or if cache was already OK), load meta + mmap
+        self._load_metadata()
+        self.data = np.memmap(
+            self.mmap_path,
+            dtype=self.dtype,
+            mode='r',
+            shape=(self.total_elems,),
+        )
+
+    # ------------------------------------------------------------------ #
+    # Build phase with lock (same pattern as ImageMmap)
+    # ------------------------------------------------------------------ #
+    def _build_cache_with_lock(self, current_hash: str) -> None:
+        """Build dynamic mmap with a lock file to prevent concurrent writes."""
+        self.mmap_path.parent.mkdir(parents=True, exist_ok=True)
+
+        lock_fd = None
+        try:
+            import fcntl  # POSIX only, same as ImageMmap
+
+            lock_fd = open(self.lock_path, 'w')
+            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+            # We got the lock -> build cache
+            self._build_cache(current_hash)
+        except BlockingIOError:
+            # Another process is building -> wait
+            print('Another process is building the dynamic mmap cache, waiting...')
+            if lock_fd:
+                lock_fd.close()
+            lock_fd = open(self.lock_path, 'w')
+            import fcntl as _fcntl
+
+            _fcntl.flock(lock_fd.fileno(), _fcntl.LOCK_EX)  # block until released
+            print('Dynamic mmap cache built by another process!')
+        finally:
+            if lock_fd:
+                lock_fd.close()
+            if self.lock_path.exists():
+                try:
+                    self.lock_path.unlink()
+                except Exception:
+                    pass
+
+    def _build_cache(self, current_hash: str) -> None:
+        """
+        Build the flat mmap + .meta file.
+
+        Layout:
+          - data file: concatenated flattened images in path order
+          - meta: JSON with offsets, shapes, dtype, total_elems, paths, n
+        """
+        from tqdm import tqdm
+        import json
+
+        print(f'Building dynamic mmap cache for {self.n} images...')
+        # We don't know total size up front -> write sequentially
+        offsets = np.zeros(self.n, dtype=np.int64)
+        shapes = np.zeros((self.n, 3), dtype=np.int64)
+
+        batch_size = 4096
+        num_batches = (self.n + batch_size - 1) // batch_size
+
+        current_offset = 0  # in elements, not bytes
+
+        with open(self.mmap_path, 'wb') as f, tqdm(
+            total=self.n, desc='Processing images (dynamic)', unit='img'
+        ) as pbar:
+            for batch_idx in range(num_batches):
+                start_idx = batch_idx * batch_size
+                end_idx = min(start_idx + batch_size, self.n)
+                batch_paths = self.img_paths[start_idx:end_idx]
+
+                images_dict = read_images(
+                    batch_paths,
+                    hw=None,  # keep original size
+                    batch_size=32,
+                    num_threads=max(1, cpu_count() - 1),
+                )
+
+                for local_idx, path in enumerate(batch_paths):
+                    global_idx = start_idx + local_idx
+                    img = images_dict.get(path)
+
+                    if img is None:
+                        if self.safe:
+                            raise ValueError(f'Failed to load image: {path}')
+                        else:
+                            print(
+                                f'Warning: Failed to load {path}, storing 1x1x3 zeros'
+                            )
+                            img = np.zeros((1, 1, 3), dtype=self.dtype)
+
+                    if img.dtype != self.dtype:
+                        img = img.astype(self.dtype)
+
+                    if img.ndim != 3:
+                        raise ValueError(
+                            f'Expected image with 3 dims (H,W,C), got shape {img.shape} '
+                            f'for path {path}'
+                        )
+
+                    h, w, c = img.shape
+                    shapes[global_idx] = (h, w, c)
+                    offsets[global_idx] = current_offset
+
+                    flat = img.reshape(-1)
+                    f.write(flat.tobytes())
+
+                    current_offset += flat.size
+                    pbar.update(1)
+
+        total_elems = int(current_offset)
+        self.total_elems = total_elems
+
+        meta = {
+            'version': 1,
+            'dtype': self.dtype.name,
+            'n': self.n,
+            'paths': self.img_paths,
+            'offsets': offsets.tolist(),
+            'shapes': shapes.tolist(),
+            'total_elems': total_elems,
+        }
+
+        with open(self.meta_path, 'w') as mf:
+            json.dump(meta, mf)
+
+        self.hash_path.write_text(current_hash)
+        print(
+            f'Dynamic mmap cache built successfully! '
+            f'Meta saved to {self.meta_path}, total_elems={total_elems}'
+        )
+
+    # ------------------------------------------------------------------ #
+    # Metadata loader
+    # ------------------------------------------------------------------ #
+    def _load_metadata(self) -> None:
+        import json
+
+        with open(self.meta_path, 'r') as f:
+            meta = json.load(f)
+
+        # If paths order changed without hash mismatch, this will still keep
+        # the meta-consistent order (but hash comparison should prevent that).
+        self.img_paths = [str(p) for p in meta['paths']]
+        self.imgpath2idx = {p: i for i, p in enumerate(self.img_paths)}
+        self.n = int(meta['n'])
+        self.dtype = np.dtype(meta.get('dtype', 'uint8'))
+        self.offsets = np.asarray(meta['offsets'], dtype=np.int64)
+        self.shapes = np.asarray(meta['shapes'], dtype=np.int64)
+        self.total_elems = int(meta['total_elems'])
+
+        assert len(self.offsets) == self.n
+        assert self.shapes.shape == (self.n, 3)
+
+    # ------------------------------------------------------------------ #
+    # Dataset API
+    # ------------------------------------------------------------------ #
+    def __len__(self) -> int:
+        return self.n
+
+    def _get_flat_slice(self, idx: int) -> np.ndarray:
+        """Return flat view for image idx (no copy)."""
+        offset = int(self.offsets[idx])
+        h, w, c = [int(x) for x in self.shapes[idx]]
+        num_elems = h * w * c
+        flat = self.data[offset : offset + num_elems]
+        return flat, h, w, c
+
+    def __getitem__(self, idx: int) -> np.ndarray:
+        flat, h, w, c = self._get_flat_slice(idx)
+        img = np.array(flat).reshape(h, w, c)  # copy to normal ndarray
+        return img
+
+    def imread(self, image_path: str | os.PathLike) -> np.ndarray:
+        idx = self.imgpath2idx.get(str(image_path))
+        if idx is None:
+            raise ValueError(f'Image path {image_path} not found in dynamic dataset')
+        img = self[idx]
+        if self.safe:
+            summary = img.sum()
+            assert summary > 0, f'Image at {image_path} appears to be all zeros'
+        return img
+
+__all__ = ['read_images', 'read_images_cpu', 'read_images_gpu', 'ImageMmap', 'ImageMmapDynamic']
