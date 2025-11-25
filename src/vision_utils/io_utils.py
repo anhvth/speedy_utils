@@ -56,7 +56,8 @@ def _validate_image(path: PathLike) -> bool:
 def read_images_cpu(
     paths: Sequence[PathLike],
     hw: tuple[int, int] | None = None,
-) -> dict[str, 'np.ndarray | None']:
+    verbose: bool = True,
+) -> dict[str, "np.ndarray | None"]:
     """
     CPU image loader using Pillow.
 
@@ -73,7 +74,7 @@ def read_images_cpu(
     str_paths = _to_str_paths(paths)
 
     # Pillow < 9.1.0 exposes resampling filters directly on Image
-    resample_attr = getattr(Image, 'Resampling', Image)
+    resample_attr = getattr(Image, "Resampling", Image)
     resample = resample_attr.BILINEAR
 
     target_size = None  # Pillow expects (width, height)
@@ -81,16 +82,20 @@ def read_images_cpu(
         h, w = hw
         target_size = (w, h)
 
-    result: dict[str, 'np.ndarray | None'] = {}
-    for path in tqdm(str_paths, desc='Loading images (CPU)', unit='img'):
+    result: dict[str, "np.ndarray | None"] = {}
+    if verbose:
+        pbar = tqdm(str_paths, desc="Loading images (CPU)", unit="img")
+    else:
+        pbar = str_paths
+    for path in pbar:
         try:
             with Image.open(path) as img:
-                img = img.convert('RGB')
+                img = img.convert("RGB")
                 if target_size is not None:
                     img = img.resize(target_size, resample=resample)
                 result[path] = np.asarray(img)
         except Exception as e:
-            print(f'Warning: Failed to load {path}: {e}')
+            print(f"Warning: Failed to load {path}: {e}")
             result[path] = None
     return result
 
@@ -101,9 +106,10 @@ def read_images_gpu(
     num_threads: int = 4,
     hw: tuple[int, int] | None = None,
     validate: bool = False,
-    device: str = 'mixed',
+    device: str = "mixed",
     device_id: int = 0,
-) -> dict[str, 'np.ndarray | None']:
+    verbose: bool = True,
+) -> dict[str, "np.ndarray | None"]:
     """
     GPU-accelerated image reader using NVIDIA DALI.
 
@@ -117,6 +123,7 @@ def read_images_gpu(
         validate: If True, pre-validate images (slower).
         device: DALI decoder device: "mixed" (default), "cpu", or "gpu".
         device_id: GPU device id.
+        verbose: If True, show progress bar.
     """
     import numpy as np
     from nvidia.dali import fn, pipeline_def
@@ -127,23 +134,23 @@ def read_images_gpu(
     if not str_paths:
         return {}
 
-    result: dict[str, 'np.ndarray | None'] = {}
+    result: dict[str, "np.ndarray | None"] = {}
     valid_paths: list[str] = str_paths
 
     # Optional validation (slow but safer)
     if validate:
         from tqdm import tqdm
 
-        print('Validating images...')
+        print("Validating images...")
         tmp_valid: list[str] = []
         invalid_paths: list[str] = []
 
-        for path in tqdm(str_paths, desc='Validating', unit='img'):
+        for path in tqdm(str_paths, desc="Validating", unit="img"):
             if _validate_image(path):
                 tmp_valid.append(path)
             else:
                 invalid_paths.append(path)
-                print(f'Warning: Skipping invalid/corrupted image: {path}')
+                print(f"Warning: Skipping invalid/corrupted image: {path}")
 
         valid_paths = tmp_valid
         # pre-fill invalid paths with None
@@ -151,7 +158,7 @@ def read_images_gpu(
             result[p] = None
 
         if not valid_paths:
-            print('No valid images found.')
+            print("No valid images found.")
             return result
 
     resize_h, resize_w = (None, None)
@@ -166,7 +173,7 @@ def read_images_gpu(
         jpegs, _ = fn.readers.file(
             files=files_for_reader,
             random_shuffle=False,
-            name='Reader',
+            name="Reader",
         )
         imgs = fn.decoders.image(jpegs, device=device, output_type=dali_types.RGB)
         if resize_h is not None and resize_w is not None:
@@ -188,13 +195,17 @@ def read_images_gpu(
     )
     dali_pipe.build()
 
-    imgs: list['np.ndarray'] = []
+    imgs: list["np.ndarray"] = []
     num_files = len(valid_paths)
     num_batches = (num_files + batch_size - 1) // batch_size
 
     from tqdm import tqdm
+    if verbose:
+        pbar = tqdm(range(num_batches), desc="Decoding (DALI)", unit="batch")
+    else:
+        pbar = range(num_batches)
 
-    for _ in tqdm(range(num_batches), desc='Decoding (DALI)', unit='batch'):
+    for _ in pbar:
         (out,) = dali_pipe.run()
         out = out.as_cpu()
         for i in range(len(out)):
@@ -203,7 +214,7 @@ def read_images_gpu(
     # Handle possible padding / extra samples
     if len(imgs) < num_files:
         print(
-            f'Warning: DALI returned fewer samples ({len(imgs)}) than expected ({num_files}).'
+            f"Warning: DALI returned fewer samples ({len(imgs)}) than expected ({num_files})."
         )
     if len(imgs) > num_files:
         imgs = imgs[:num_files]
@@ -221,9 +232,10 @@ def read_images(
     num_threads: int = 4,
     hw: tuple[int, int] | None = None,
     validate: bool = False,
-    device: str = 'mixed',
+    device: str = "mixed",
     device_id: int = 0,
-) -> dict[str, 'np.ndarray | None']:
+    verbose: bool = True,
+) -> dict[str, "np.ndarray | None"]:
     """
     Fast image reader that tries GPU (DALI) first, falls back to CPU (Pillow).
 
@@ -237,6 +249,7 @@ def read_images(
         validate: If True, pre-validate images before GPU processing (slower).
         device: DALI decoder device: "mixed", "cpu", or "gpu".
         device_id: GPU device id for DALI.
+        verbose: If True, show progress bars.
     """
     str_paths = _to_str_paths(paths)
 
@@ -252,13 +265,12 @@ def read_images(
             validate=validate,
             device=device,
             device_id=device_id,
+            verbose=verbose,
         )
     except Exception as exc:
-        print(f'GPU loading failed ({exc}), falling back to CPU...')
-        return read_images_cpu(str_paths, hw=hw)
-
-
-
+        if verbose:
+            print(f"GPU loading failed ({exc}), falling back to CPU...")
+        return read_images_cpu(str_paths, hw=hw, verbose=verbose)
 
 
 class ImageMmap(Dataset):
@@ -287,22 +299,24 @@ class ImageMmap(Dataset):
         self.safe = safe
 
         # Generate default mmap path if not provided
+        current_hash = identify(
+            "".join(sorted(self.img_paths)) + f"_{self.H}x{self.W}x{self.C}"
+        )
         if mmap_path is None:
-            hash_idx = identify(''.join(sorted(self.img_paths)))
-            mmap_path = Path('.cache') / f'mmap_dataset_{hash_idx}.dat'
-        
+            # hash_idx = identify(''.join(sorted(self.img_paths)))
+            mmap_path = Path(".cache") / f"mmap_dataset_{current_hash}.dat"
+
         self.mmap_path = Path(mmap_path)
-        self.hash_path = Path(str(self.mmap_path) + '.hash')
-        self.lock_path = Path(str(self.mmap_path) + '.lock')
+        self.hash_path = Path(str(self.mmap_path) + ".hash")
+        self.lock_path = Path(str(self.mmap_path) + ".lock")
         self.shape = (self.n, self.H, self.W, self.C)
 
         if self.n == 0:
             raise ValueError("Cannot create ImageMmap with empty img_paths list")
 
         # Calculate hash of image paths
-        current_hash = identify(self.img_paths)
         needs_rebuild = False
-        
+
         if not self.mmap_path.exists():
             needs_rebuild = True
             print("Mmap file does not exist, building cache...")
@@ -314,16 +328,20 @@ class ImageMmap(Dataset):
             stored_hash = self.hash_path.read_text().strip()
             if stored_hash != current_hash:
                 needs_rebuild = True
-                print(f"Hash mismatch (stored: {stored_hash[:16]}..., current: {current_hash[:16]}...), rebuilding cache...")
-        
+                print(
+                    f"Hash mismatch (stored: {stored_hash[:16]}..., current: {current_hash[:16]}...), rebuilding cache..."
+                )
+
         # Verify file size matches expected
         expected_bytes = np.prod(self.shape) * self.dtype.itemsize
         if self.mmap_path.exists():
             actual_size = self.mmap_path.stat().st_size
             if actual_size != expected_bytes:
                 needs_rebuild = True
-                print(f"Mmap file size mismatch (expected: {expected_bytes}, got: {actual_size}), rebuilding cache...")
-        
+                print(
+                    f"Mmap file size mismatch (expected: {expected_bytes}, got: {actual_size}), rebuilding cache..."
+                )
+
         if needs_rebuild:
             self._build_cache_with_lock(current_hash)
 
@@ -338,30 +356,32 @@ class ImageMmap(Dataset):
     # --------------------------------------------------------------------- #
     # Build phase (only on first run)
     # --------------------------------------------------------------------- #
-    def _build_cache_with_lock(self, current_hash: str, num_workers: int = None) -> None:
+    def _build_cache_with_lock(
+        self, current_hash: str, num_workers: int = None
+    ) -> None:
         """Build cache with lock file to prevent concurrent disk writes"""
         import fcntl
-        
+
         self.mmap_path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         # Try to acquire lock file
         lock_fd = None
         try:
-            lock_fd = open(self.lock_path, 'w')
+            lock_fd = open(self.lock_path, "w")
             fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            
+
             # We got the lock, build the cache
             self._build_cache(current_hash, num_workers)
-            
+
         except BlockingIOError:
             # Another process is building, wait for it
             print("Another process is building the cache, waiting...")
             if lock_fd:
                 lock_fd.close()
-            lock_fd = open(self.lock_path, 'w')
+            lock_fd = open(self.lock_path, "w")
             fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)  # Wait for lock
             print("Cache built by another process!")
-            
+
         finally:
             if lock_fd:
                 lock_fd.close()
@@ -370,36 +390,38 @@ class ImageMmap(Dataset):
                     self.lock_path.unlink()
                 except:
                     pass
-    
+
     def _build_cache(self, current_hash: str, num_workers: int = None) -> None:
         from tqdm import tqdm
-        
+
         # Pre-allocate the file with the required size
         total_bytes = np.prod(self.shape) * self.dtype.itemsize
         print(f"Pre-allocating {total_bytes / (1024**3):.2f} GB for mmap file...")
-        with open(self.mmap_path, 'wb') as f:
+        with open(self.mmap_path, "wb") as f:
             f.seek(total_bytes - 1)
-            f.write(b'\0')
-        
+            f.write(b"\0")
+
         mm = np.memmap(
             self.mmap_path,
             dtype=self.dtype,
-            mode='r+',
+            mode="r+",
             shape=self.shape,
         )
-        
+
         # Process images in batches to avoid memory explosion
-        batch_size = 4096
+        batch_size = 40960
         num_batches = (self.n + batch_size - 1) // batch_size
-        
-        print(f"Loading {self.n} images in {num_batches} batches of up to {batch_size} images...")
-        
-        with tqdm(total=self.n, desc='Processing images', unit='img') as pbar:
+
+        print(
+            f"Loading {self.n} images in {num_batches} batches of up to {batch_size} images..."
+        )
+
+        with tqdm(total=self.n, desc="Processing images", unit="img") as pbar:
             for batch_idx in range(num_batches):
                 start_idx = batch_idx * batch_size
                 end_idx = min(start_idx + batch_size, self.n)
                 batch_paths = self.img_paths[start_idx:end_idx]
-                
+
                 # Load one batch at a time
                 images_dict = read_images(
                     batch_paths,
@@ -407,37 +429,38 @@ class ImageMmap(Dataset):
                     batch_size=32,
                     num_threads=num_workers or max(1, cpu_count() - 1),
                 )
-                
+
                 # Write batch to mmap
                 for local_idx, path in enumerate(batch_paths):
                     global_idx = start_idx + local_idx
                     img = images_dict.get(path)
-                    
+
                     if img is None:
                         if self.safe:
-                            raise ValueError(f'Failed to load image: {path}')
+                            raise ValueError(f"Failed to load image: {path}")
                         else:
                             # Failed to load, write zeros
-                            print(f'Warning: Failed to load {path}, using zeros')
+                            print(f"Warning: Failed to load {path}, using zeros")
                             mm[global_idx] = np.zeros(
-                                (self.H, self.W, self.C),
-                                dtype=self.dtype
+                                (self.H, self.W, self.C), dtype=self.dtype
                             )
                     else:
-                        # Ensure correct dtype
+                        # Clip to valid range and ensure correct dtype
+                        if self.dtype == np.uint8:
+                            img = np.clip(img, 0, 255)
                         if img.dtype != self.dtype:
                             img = img.astype(self.dtype)
                         mm[global_idx] = img
-                    
+
                     pbar.update(1)
-                
+
                 # Flush after each batch and clear memory
                 mm.flush()
                 del images_dict
-        
+
         mm.flush()
         del mm  # ensure descriptor is closed
-        
+
         # Save hash file
         self.hash_path.write_text(current_hash)
         print(f"Mmap cache built successfully! Hash saved to {self.hash_path}")
@@ -456,15 +479,16 @@ class ImageMmap(Dataset):
     def __getitem__(self, idx: int) -> np.ndarray:
         # At runtime: this is just a mmap read
         return np.array(self.data[idx])  # copy to normal ndarray
-    
+
     def imread(self, image_path: str | os.PathLike) -> np.ndarray:
         idx = self.imgpath2idx.get(str(image_path))
         if idx is None:
             raise ValueError(f"Image path {image_path} not found in dataset")
-        img =  np.array(self.data[idx])  # copy to normal ndarray
+        img = np.array(self.data[idx])  # copy to normal ndarray
         summary = img.sum()
         assert summary > 0, f"Image at {image_path} appears to be all zeros"
         return img
+
 
 class ImageMmapDynamic(Dataset):
     """
@@ -488,20 +512,20 @@ class ImageMmapDynamic(Dataset):
         self.imgpath2idx = {p: i for i, p in enumerate(self.img_paths)}
         self.n = len(self.img_paths)
         if self.n == 0:
-            raise ValueError('Cannot create ImageMmapDynamic with empty img_paths list')
+            raise ValueError("Cannot create ImageMmapDynamic with empty img_paths list")
 
         self.dtype = np.dtype(dtype)
         self.safe = safe
 
         # Default path if not provided
         if mmap_path is None:
-            hash_idx = identify(''.join(self.img_paths))
-            mmap_path = Path('.cache') / f'mmap_dynamic_{hash_idx}.dat'
+            hash_idx = identify("".join(self.img_paths))
+            mmap_path = Path(".cache") / f"mmap_dynamic_{hash_idx}.dat"
 
         self.mmap_path = Path(mmap_path)
-        self.meta_path = Path(str(self.mmap_path) + '.meta')
-        self.hash_path = Path(str(self.mmap_path) + '.hash')
-        self.lock_path = Path(str(self.mmap_path) + '.lock')
+        self.meta_path = Path(str(self.mmap_path) + ".meta")
+        self.hash_path = Path(str(self.mmap_path) + ".hash")
+        self.lock_path = Path(str(self.mmap_path) + ".lock")
 
         # Hash of the path list to detect changes
         current_hash = identify(self.img_paths)
@@ -509,40 +533,42 @@ class ImageMmapDynamic(Dataset):
 
         if not self.mmap_path.exists() or not self.meta_path.exists():
             needs_rebuild = True
-            print('Dynamic mmap or meta file does not exist, building cache...')
+            print("Dynamic mmap or meta file does not exist, building cache...")
         elif not self.hash_path.exists():
             needs_rebuild = True
-            print('Hash file does not exist for dynamic mmap, rebuilding cache...')
+            print("Hash file does not exist for dynamic mmap, rebuilding cache...")
         else:
             stored_hash = self.hash_path.read_text().strip()
             if stored_hash != current_hash:
                 needs_rebuild = True
                 print(
-                    f'Dynamic mmap hash mismatch '
-                    f'(stored: {stored_hash[:16]}..., current: {current_hash[:16]}...), '
-                    'rebuilding cache...'
+                    f"Dynamic mmap hash mismatch "
+                    f"(stored: {stored_hash[:16]}..., current: {current_hash[:16]}...), "
+                    "rebuilding cache..."
                 )
             else:
                 # Check size vs meta
                 import json
 
                 try:
-                    with open(self.meta_path, 'r') as f:
+                    with open(self.meta_path, "r") as f:
                         meta = json.load(f)
-                    meta_dtype = np.dtype(meta.get('dtype', 'uint8'))
-                    total_elems = int(meta['total_elems'])
+                    meta_dtype = np.dtype(meta.get("dtype", "uint8"))
+                    total_elems = int(meta["total_elems"])
                     expected_bytes = total_elems * meta_dtype.itemsize
                     actual_bytes = self.mmap_path.stat().st_size
                     if actual_bytes != expected_bytes:
                         needs_rebuild = True
                         print(
-                            'Dynamic mmap file size mismatch '
-                            f'(expected: {expected_bytes}, got: {actual_bytes}), '
-                            'rebuilding cache...'
+                            "Dynamic mmap file size mismatch "
+                            f"(expected: {expected_bytes}, got: {actual_bytes}), "
+                            "rebuilding cache..."
                         )
                 except Exception as e:
                     needs_rebuild = True
-                    print(f'Failed to read dynamic mmap meta ({e}), rebuilding cache...')
+                    print(
+                        f"Failed to read dynamic mmap meta ({e}), rebuilding cache..."
+                    )
 
         if needs_rebuild:
             self._build_cache_with_lock(current_hash)
@@ -552,7 +578,7 @@ class ImageMmapDynamic(Dataset):
         self.data = np.memmap(
             self.mmap_path,
             dtype=self.dtype,
-            mode='r',
+            mode="r",
             shape=(self.total_elems,),
         )
 
@@ -567,21 +593,21 @@ class ImageMmapDynamic(Dataset):
         try:
             import fcntl  # POSIX only, same as ImageMmap
 
-            lock_fd = open(self.lock_path, 'w')
+            lock_fd = open(self.lock_path, "w")
             fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
 
             # We got the lock -> build cache
             self._build_cache(current_hash)
         except BlockingIOError:
             # Another process is building -> wait
-            print('Another process is building the dynamic mmap cache, waiting...')
+            print("Another process is building the dynamic mmap cache, waiting...")
             if lock_fd:
                 lock_fd.close()
-            lock_fd = open(self.lock_path, 'w')
+            lock_fd = open(self.lock_path, "w")
             import fcntl as _fcntl
 
             _fcntl.flock(lock_fd.fileno(), _fcntl.LOCK_EX)  # block until released
-            print('Dynamic mmap cache built by another process!')
+            print("Dynamic mmap cache built by another process!")
         finally:
             if lock_fd:
                 lock_fd.close()
@@ -591,7 +617,7 @@ class ImageMmapDynamic(Dataset):
                 except Exception:
                     pass
 
-    def _build_cache(self, current_hash: str) -> None:
+    def _build_cache(self, current_hash: str, batch_size: int = 4096) -> None:
         """
         Build the flat mmap + .meta file.
 
@@ -602,19 +628,19 @@ class ImageMmapDynamic(Dataset):
         from tqdm import tqdm
         import json
 
-        print(f'Building dynamic mmap cache for {self.n} images...')
+        print(f"Building dynamic mmap cache for {self.n} images...")
         # We don't know total size up front -> write sequentially
         offsets = np.zeros(self.n, dtype=np.int64)
         shapes = np.zeros((self.n, 3), dtype=np.int64)
 
-        batch_size = 4096
         num_batches = (self.n + batch_size - 1) // batch_size
 
         current_offset = 0  # in elements, not bytes
 
-        with open(self.mmap_path, 'wb') as f, tqdm(
-            total=self.n, desc='Processing images (dynamic)', unit='img'
-        ) as pbar:
+        with (
+            open(self.mmap_path, "wb") as f,
+            tqdm(total=self.n, desc="Processing images (dynamic)", unit="img") as pbar,
+        ):
             for batch_idx in range(num_batches):
                 start_idx = batch_idx * batch_size
                 end_idx = min(start_idx + batch_size, self.n)
@@ -623,7 +649,7 @@ class ImageMmapDynamic(Dataset):
                 images_dict = read_images(
                     batch_paths,
                     hw=None,  # keep original size
-                    batch_size=32,
+                    batch_size=128,
                     num_threads=max(1, cpu_count() - 1),
                 )
 
@@ -633,20 +659,23 @@ class ImageMmapDynamic(Dataset):
 
                     if img is None:
                         if self.safe:
-                            raise ValueError(f'Failed to load image: {path}')
+                            raise ValueError(f"Failed to load image: {path}")
                         else:
                             print(
-                                f'Warning: Failed to load {path}, storing 1x1x3 zeros'
+                                f"Warning: Failed to load {path}, storing 1x1x3 zeros"
                             )
                             img = np.zeros((1, 1, 3), dtype=self.dtype)
 
+                    # Clip to valid range for uint8
+                    if self.dtype == np.uint8:
+                        img = np.clip(img, 0, 255)
                     if img.dtype != self.dtype:
                         img = img.astype(self.dtype)
 
                     if img.ndim != 3:
                         raise ValueError(
-                            f'Expected image with 3 dims (H,W,C), got shape {img.shape} '
-                            f'for path {path}'
+                            f"Expected image with 3 dims (H,W,C), got shape {img.shape} "
+                            f"for path {path}"
                         )
 
                     h, w, c = img.shape
@@ -663,22 +692,22 @@ class ImageMmapDynamic(Dataset):
         self.total_elems = total_elems
 
         meta = {
-            'version': 1,
-            'dtype': self.dtype.name,
-            'n': self.n,
-            'paths': self.img_paths,
-            'offsets': offsets.tolist(),
-            'shapes': shapes.tolist(),
-            'total_elems': total_elems,
+            "version": 1,
+            "dtype": self.dtype.name,
+            "n": self.n,
+            "paths": self.img_paths,
+            "offsets": offsets.tolist(),
+            "shapes": shapes.tolist(),
+            "total_elems": total_elems,
         }
 
-        with open(self.meta_path, 'w') as mf:
+        with open(self.meta_path, "w") as mf:
             json.dump(meta, mf)
 
         self.hash_path.write_text(current_hash)
         print(
-            f'Dynamic mmap cache built successfully! '
-            f'Meta saved to {self.meta_path}, total_elems={total_elems}'
+            f"Dynamic mmap cache built successfully! "
+            f"Meta saved to {self.meta_path}, total_elems={total_elems}"
         )
 
     # ------------------------------------------------------------------ #
@@ -687,18 +716,18 @@ class ImageMmapDynamic(Dataset):
     def _load_metadata(self) -> None:
         import json
 
-        with open(self.meta_path, 'r') as f:
+        with open(self.meta_path, "r") as f:
             meta = json.load(f)
 
         # If paths order changed without hash mismatch, this will still keep
         # the meta-consistent order (but hash comparison should prevent that).
-        self.img_paths = [str(p) for p in meta['paths']]
+        self.img_paths = [str(p) for p in meta["paths"]]
         self.imgpath2idx = {p: i for i, p in enumerate(self.img_paths)}
-        self.n = int(meta['n'])
-        self.dtype = np.dtype(meta.get('dtype', 'uint8'))
-        self.offsets = np.asarray(meta['offsets'], dtype=np.int64)
-        self.shapes = np.asarray(meta['shapes'], dtype=np.int64)
-        self.total_elems = int(meta['total_elems'])
+        self.n = int(meta["n"])
+        self.dtype = np.dtype(meta.get("dtype", "uint8"))
+        self.offsets = np.asarray(meta["offsets"], dtype=np.int64)
+        self.shapes = np.asarray(meta["shapes"], dtype=np.int64)
+        self.total_elems = int(meta["total_elems"])
 
         assert len(self.offsets) == self.n
         assert self.shapes.shape == (self.n, 3)
@@ -725,11 +754,18 @@ class ImageMmapDynamic(Dataset):
     def imread(self, image_path: str | os.PathLike) -> np.ndarray:
         idx = self.imgpath2idx.get(str(image_path))
         if idx is None:
-            raise ValueError(f'Image path {image_path} not found in dynamic dataset')
+            raise ValueError(f"Image path {image_path} not found in dynamic dataset")
         img = self[idx]
         if self.safe:
             summary = img.sum()
-            assert summary > 0, f'Image at {image_path} appears to be all zeros'
+            assert summary > 0, f"Image at {image_path} appears to be all zeros"
         return img
 
-__all__ = ['read_images', 'read_images_cpu', 'read_images_gpu', 'ImageMmap', 'ImageMmapDynamic']
+
+__all__ = [
+    "read_images",
+    "read_images_cpu",
+    "read_images_gpu",
+    "ImageMmap",
+    "ImageMmapDynamic",
+]
