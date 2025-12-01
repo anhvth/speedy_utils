@@ -5,15 +5,6 @@ import time
 import warnings
 
 
-# Suppress lazy_loader subpackage warning
-warnings.filterwarnings(
-    'ignore',
-    message='subpackages can technically be lazily loaded',
-    category=RuntimeWarning,
-    module='lazy_loader',
-)
-
-t = time.time()
 # Third-party imports
 try:
     # Python 3.10+
@@ -86,7 +77,6 @@ from typing import (
 )
 
 import cachetools
-import lazy_loader as lazy
 import psutil
 from fastcore.parallel import parallel
 from json_repair import loads as jloads
@@ -94,27 +84,121 @@ from loguru import logger
 from tqdm import tqdm
 
 
-# Resolve long-import-time dependencies lazily
+# Direct imports (previously lazy-loaded)
+import numpy as np
+tabulate = __import__('tabulate').tabulate
+import xxhash
 
-torch = lazy.load('torch')  # lazy at runtime
-np = lazy.load('numpy')
-pd = lazy.load('pandas')
-tqdm = lazy.load('tqdm').tqdm  # type: ignore  # noqa: F811
-pd = lazy.load('pandas')
-tabulate = lazy.load('tabulate').tabulate
-xxhash = lazy.load('xxhash')
-get_ipython = lazy.load('IPython.core.getipython')
-HTML = lazy.load('IPython.display').HTML
-display = lazy.load('IPython.display').display
-# logger = lazy.load('loguru').logger
-BaseModel = lazy.load('pydantic').BaseModel
-_pil = lazy.load('PIL.Image')
-Image = _pil.Image
-matplotlib = lazy.load('matplotlib')
-plt = lazy.load('matplotlib.pyplot')
+# Optional imports - lazy loaded for performance
+def _get_pandas():
+    """Lazy import pandas."""
+    try:
+        import pandas as pd
+        return pd
+    except ImportError:
+        return None
 
+def _get_ray():
+    """Lazy import ray."""
+    try:
+        import ray
+        return ray
+    except ImportError:
+        return None
 
-ray = lazy.load('ray')  # lazy at runtime
+def _get_matplotlib():
+    """Lazy import matplotlib."""
+    try:
+        import matplotlib
+        return matplotlib
+    except ImportError:
+        return None
+
+def _get_matplotlib_pyplot():
+    """Lazy import matplotlib.pyplot."""
+    try:
+        import matplotlib.pyplot as plt
+        return plt
+    except ImportError:
+        return None
+
+def _get_ipython_core():
+    """Lazy import IPython.core.getipython."""
+    try:
+        from IPython.core.getipython import get_ipython
+        return get_ipython
+    except ImportError:
+        return None
+
+# Cache for lazy imports
+_pandas_cache = None
+_ray_cache = None
+_matplotlib_cache = None
+_plt_cache = None
+_get_ipython_cache = None
+
+# Lazy import classes for performance-critical modules
+class _LazyModule:
+    """Lazy module loader that imports only when accessed."""
+    def __init__(self, import_func, cache_var_name):
+        self._import_func = import_func
+        self._cache_var_name = cache_var_name
+        self._module = None
+
+    def __call__(self):
+        """Allow calling as a function to get the module."""
+        if self._module is None:
+            # Use global cache
+            cache = globals().get(self._cache_var_name)
+            if cache is None:
+                cache = self._import_func()
+                globals()[self._cache_var_name] = cache
+            self._module = cache
+        return self._module
+
+    def __getattr__(self, name):
+        """Lazy attribute access."""
+        if self._module is None:
+            self()  # Load the module
+        return getattr(self._module, name)
+
+    def __bool__(self):
+        """Support truthiness checks."""
+        return self._module is not None
+
+    def __repr__(self):
+        if self._module is None:
+            return f"<LazyModule: not loaded>"
+        return repr(self._module)
+
+# Create lazy loaders for top slow imports (import only when accessed)
+pd = _LazyModule(_get_pandas, '_pandas_cache')
+ray = _LazyModule(_get_ray, '_ray_cache')
+matplotlib = _LazyModule(_get_matplotlib, '_matplotlib_cache')
+plt = _LazyModule(_get_matplotlib_pyplot, '_plt_cache')
+get_ipython = _LazyModule(_get_ipython_core, '_get_ipython_cache')
+
+# Other optional imports (not lazy loaded as they're not in top slow imports)
+try:
+    import torch
+except ImportError:
+    torch = None
+
+try:
+    from IPython.display import HTML, display
+except ImportError:
+    HTML = None
+    display = None
+
+try:
+    from PIL import Image
+except ImportError:
+    Image = None
+
+try:
+    from pydantic import BaseModel
+except ImportError:
+    BaseModel = None
 if TYPE_CHECKING:
     import numpy as np
     import pandas as pd
@@ -133,7 +217,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     # ------------------------------------------------------------------
-    # Lazy-loaded external modules / objects
+    # Direct imports (previously lazy-loaded)
     # ------------------------------------------------------------------
     'torch',
     'np',
@@ -147,6 +231,8 @@ __all__ = [
     'BaseModel',
     'Image',
     'ray',
+    'matplotlib',
+    'plt',
     # ------------------------------------------------------------------
     # Standard library modules imported
     # ------------------------------------------------------------------
@@ -235,7 +321,6 @@ __all__ = [
     # Third-party modules
     # ------------------------------------------------------------------
     'cachetools',
-    'lazy',
     'psutil',
     'parallel',
     'jloads',

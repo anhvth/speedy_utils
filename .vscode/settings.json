@@ -1,5 +1,4 @@
 {
-    // RUFF formatter for Python files
     "[python]": {
         "editor.formatOnSave": true,
         "editor.defaultFormatter": "charliermarsh.ruff"
@@ -13,5 +12,6 @@
     },
     "python.analysis.diagnosticSeverityOverrides": {
         "reportAttributeAccessIssue": "none"
-    }
+    },
+    "python.defaultInterpreterPath": "/home/anh/projects/speedy_utils/.venv/bin/python"
 }

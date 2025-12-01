@@ -113,6 +113,8 @@ __all__ = [
     'tabulate',
     'tqdm',
     'np',
+    'matplotlib',
+    'plt',
     # Clock module
     'Clock',
     'speedy_timer',

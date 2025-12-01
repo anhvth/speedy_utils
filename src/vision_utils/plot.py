@@ -1,12 +1,12 @@
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
 
-from speedy_utils.__imports import np, plt
+import numpy as np
+import matplotlib.pyplot as plt
 
 
 if TYPE_CHECKING:
 
-    import lazy_loader as lazy
     import matplotlib.pyplot as plt
     import numpy as np
     import torch
