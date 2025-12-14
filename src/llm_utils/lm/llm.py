@@ -63,9 +63,13 @@ class LLM(
         vllm_cmd: str | None = None,
         vllm_timeout: int = 1200,
         vllm_reuse: bool = True,
+        verbose=False,
         **model_kwargs,
     ):
         """Initialize LLMTask."""
+        if verbose:
+            available_models = LLM.list_models(client=client)
+            logger.info(f'Available models: {available_models}')
         self.instruction = instruction
         self.input_model = input_model
         self.output_model = output_model

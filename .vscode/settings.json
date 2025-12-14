@@ -13,5 +13,5 @@
     "python.analysis.diagnosticSeverityOverrides": {
         "reportAttributeAccessIssue": "none"
     },
-    "python.defaultInterpreterPath": "/home/anh/projects/speedy_utils/.venv/bin/python"
+    "python.defaultInterpreterPath": "/mnt/data/anhvth/venvs/VI-COT/bin/python"
 }

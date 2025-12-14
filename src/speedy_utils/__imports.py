@@ -34,7 +34,6 @@ import re
 import sys
 import textwrap
 import threading
-import time
 import traceback
 import types
 import uuid
@@ -77,6 +76,9 @@ from typing import (
 )
 
 import cachetools
+
+# Direct imports (previously lazy-loaded)
+import numpy as np
 import psutil
 from fastcore.parallel import parallel
 from json_repair import loads as jloads
@@ -84,51 +86,60 @@ from loguru import logger
 from tqdm import tqdm
 
 
-# Direct imports (previously lazy-loaded)
-import numpy as np
 tabulate = __import__('tabulate').tabulate
 import xxhash
+
 
 # Optional imports - lazy loaded for performance
 def _get_pandas():
     """Lazy import pandas."""
     try:
         import pandas as pd
+
         return pd
     except ImportError:
         return None
+
 
 def _get_ray():
     """Lazy import ray."""
     try:
         import ray
+
         return ray
     except ImportError:
         return None
+
 
 def _get_matplotlib():
     """Lazy import matplotlib."""
     try:
         import matplotlib
+
         return matplotlib
     except ImportError:
         return None
+
 
 def _get_matplotlib_pyplot():
     """Lazy import matplotlib.pyplot."""
     try:
         import matplotlib.pyplot as plt
+
         return plt
     except ImportError:
         return None
+
 
 def _get_ipython_core():
     """Lazy import IPython.core.getipython."""
     try:
         from IPython.core.getipython import get_ipython
-        return get_ipython
+
+        return get_ipython()
     except ImportError:
         return None
+
 
 # Cache for lazy imports
 _pandas_cache = None
@@ -137,9 +148,11 @@ _matplotlib_cache = None
 _plt_cache = None
 _get_ipython_cache = None
 
+
 # Lazy import classes for performance-critical modules
 class _LazyModule:
     """Lazy module loader that imports only when accessed."""
+
     def __init__(self, import_func, cache_var_name):
         self._import_func = import_func
         self._cache_var_name = cache_var_name
@@ -168,8 +181,9 @@ class _LazyModule:
 
     def __repr__(self):
         if self._module is None:
-            return f"<LazyModule: not loaded>"
+            return '<LazyModule: not loaded>'
         return repr(self._module)
+
 
 # Create lazy loaders for top slow imports (import only when accessed)
 pd = _LazyModule(_get_pandas, '_pandas_cache')
@@ -200,11 +214,12 @@ try:
 except ImportError:
     BaseModel = None
 if TYPE_CHECKING:
+    import matplotlib.pyplot as plt
     import numpy as np
     import pandas as pd
     import ray
     import torch
-    import matplotlib.pyplot as plt
+
     # xxhash
     import xxhash  # type: ignore
     from IPython.core.getipython import get_ipython  # type: ignore
