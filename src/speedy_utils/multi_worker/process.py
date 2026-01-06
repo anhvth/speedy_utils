@@ -104,31 +104,25 @@ def wrap_dump(func: Callable, cache_dir: Path | None):
 RAY_WORKER = None
 
 
-def ensure_ray(workers: int, pbar: tqdm | None = None, gpus: list[int] | None = None):
+def ensure_ray(workers: int, pbar: tqdm | None = None):
     """Initialize or reinitialize Ray with a given worker count, log to bar postfix."""
     import ray as _ray_module
 
     global RAY_WORKER
+    # shutdown when worker count changes or if Ray not initialized
     if not _ray_module.is_initialized() or workers != RAY_WORKER:
         if _ray_module.is_initialized() and pbar:
             pbar.set_postfix_str(f'Restarting Ray {workers} workers')
             _ray_module.shutdown()
         t0 = time.time()
-        # If specific GPUs are requested, expose them via CUDA_VISIBLE_DEVICES
-        # and request the corresponding number of gpus from Ray.
-        if gpus:
-            os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(str(x) for x in gpus)
-            num_gpus = len(gpus)
-        else:
-            num_gpus = 0
-
-        _ray_module.init(num_cpus=workers, num_gpus=num_gpus, ignore_reinit_error=True)
+        _ray_module.init(num_cpus=workers, ignore_reinit_error=True)
         took = time.time() - t0
         _track_ray_processes()  # Track Ray worker processes
         if pbar:
             pbar.set_postfix_str(f'ray.init {workers} took {took:.2f}s')
         RAY_WORKER = workers
-
+    # os.environ["RAY_SILENCE_DEDUP_LOGS_REPORT"] = "0"
+    # os.environ["PYTHONWARNINGS"] = "ignore::DeprecationWarning" # Silences the warning if you can't edit the code
 
 def multi_process(
     func: Callable[[Any], Any],
@@ -142,7 +136,6 @@ def multi_process(
     backend: Literal['seq', 'ray', 'mp', 'threadpool', 'safe'] = 'mp',
     desc: str | None = None,
     shared_kwargs: list[str] | None = None,
-    gpus: list[int] | None = None,
     **func_kwargs: Any,
 ) -> list[Any]:
     """
@@ -240,17 +233,17 @@ def multi_process(
             import ray as _ray_module
 
             pbar.set_postfix_str('backend=ray')
-            ensure_ray(workers, pbar, gpus=gpus)
+            ensure_ray(workers, pbar)
 
             # Separate shared kwargs from regular kwargs
             shared_refs = {}
             regular_kwargs = {}
 
             if shared_kwargs:
-                for kw in shared_kwargs:
+                for kw in shared_kwargs:I
                     # Put large objects in Ray's object store (zero-copy)
                     shared_refs[kw] = _ray_module.put(func_kwargs[kw])
-                    pbar.set_postfix_str(f'ray: shared {kw} via object store')
+                    pbar.set_postfix_str(f'ray: shared `{kw}` via object store')
 
                 # Remaining kwargs are regular
                 regular_kwargs = {

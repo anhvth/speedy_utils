@@ -183,8 +183,7 @@ if __name__ == '__main__':
         backend='ray',
         model=model,
         batch_size=batch_size,
-        desc='Without sharing',
-        gpus=[0,1,2]
+        desc='Without sharing'
     )
     time_without = time.time() - start
     speedup_without = time_seq / time_without
