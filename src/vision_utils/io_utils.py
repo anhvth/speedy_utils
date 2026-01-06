@@ -3,13 +3,15 @@ from __future__ import annotations
 # type: ignore
 import os
 import time
-from pathlib import Path
-from typing import Sequence, Tuple, TYPE_CHECKING
 from multiprocessing import cpu_count
+from pathlib import Path
+from typing import TYPE_CHECKING, Sequence, Tuple
 
 import numpy as np
 from PIL import Image
+
 from speedy_utils import identify
+
 
 try:
     from torch.utils.data import Dataset
@@ -438,12 +440,11 @@ class ImageMmap(Dataset):
                     if img is None:
                         if self.safe:
                             raise ValueError(f"Failed to load image: {path}")
-                        else:
-                            # Failed to load, write zeros
-                            print(f"Warning: Failed to load {path}, using zeros")
-                            mm[global_idx] = np.zeros(
-                                (self.H, self.W, self.C), dtype=self.dtype
-                            )
+                        # Failed to load, write zeros
+                        print(f"Warning: Failed to load {path}, using zeros")
+                        mm[global_idx] = np.zeros(
+                            (self.H, self.W, self.C), dtype=self.dtype
+                        )
                     else:
                         # Clip to valid range and ensure correct dtype
                         if self.dtype == np.uint8:
@@ -625,8 +626,9 @@ class ImageMmapDynamic(Dataset):
           - data file: concatenated flattened images in path order
           - meta: JSON with offsets, shapes, dtype, total_elems, paths, n
         """
-        from tqdm import tqdm
         import json
+
+        from tqdm import tqdm
 
         print(f"Building dynamic mmap cache for {self.n} images...")
         # We don't know total size up front -> write sequentially
@@ -660,11 +662,10 @@ class ImageMmapDynamic(Dataset):
                     if img is None:
                         if self.safe:
                             raise ValueError(f"Failed to load image: {path}")
-                        else:
-                            print(
-                                f"Warning: Failed to load {path}, storing 1x1x3 zeros"
-                            )
-                            img = np.zeros((1, 1, 3), dtype=self.dtype)
+                        print(
+                            f"Warning: Failed to load {path}, storing 1x1x3 zeros"
+                        )
+                        img = np.zeros((1, 1, 3), dtype=self.dtype)
 
                     # Clip to valid range for uint8
                     if self.dtype == np.uint8:

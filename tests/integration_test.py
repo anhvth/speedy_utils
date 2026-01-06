@@ -1,5 +1,7 @@
-from speedy_utils import multi_process
 import numpy as np
+
+from speedy_utils import multi_process
+
 
 # Quick integration test
 print('🧪 Quick Integration Test')

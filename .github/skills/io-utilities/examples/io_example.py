@@ -1,23 +1,25 @@
-from speedy_utils import dump_json_or_pickle, load_by_ext, fast_load_jsonl
 import os
+
+from speedy_utils import dump_json_or_pickle, fast_load_jsonl, load_by_ext
+
 
 def main():
     # 1. Create some dummy data
     data = [{"id": i, "value": f"item_{i}"} for i in range(100)]
-    
+
     # 2. Dump to JSONL
     print("Dumping to data.jsonl...")
     dump_json_or_pickle(data, 'data.jsonl')
-    
+
     # 3. Dump to Pickle
     print("Dumping to data.pkl...")
     dump_json_or_pickle(data, 'data.pkl')
-    
+
     # 4. Load using load_by_ext
     print("Loading data.pkl...")
     loaded_pkl = load_by_ext('data.pkl')
     print(f"Loaded {len(loaded_pkl)} items from pickle.")
-    
+
     # 5. Stream using fast_load_jsonl
     print("Streaming data.jsonl...")
     count = 0

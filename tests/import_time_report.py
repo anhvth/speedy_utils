@@ -15,6 +15,7 @@ The script will display a table showing import times sorted from slowest to fast
 import time
 from typing import Callable, Dict, List, Tuple
 
+
 try:
     from tabulate import tabulate
 except ImportError:

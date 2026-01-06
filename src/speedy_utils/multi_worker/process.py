@@ -104,17 +104,25 @@ def wrap_dump(func: Callable, cache_dir: Path | None):
 RAY_WORKER = None
 
 
-def ensure_ray(workers: int, pbar: tqdm | None = None):
+def ensure_ray(workers: int, pbar: tqdm | None = None, gpus: list[int] | None = None):
     """Initialize or reinitialize Ray with a given worker count, log to bar postfix."""
     import ray as _ray_module
-    
+
     global RAY_WORKER
     if not _ray_module.is_initialized() or workers != RAY_WORKER:
         if _ray_module.is_initialized() and pbar:
             pbar.set_postfix_str(f'Restarting Ray {workers} workers')
             _ray_module.shutdown()
         t0 = time.time()
-        _ray_module.init(num_cpus=workers, ignore_reinit_error=True)
+        # If specific GPUs are requested, expose them via CUDA_VISIBLE_DEVICES
+        # and request the corresponding number of gpus from Ray.
+        if gpus:
+            os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(str(x) for x in gpus)
+            num_gpus = len(gpus)
+        else:
+            num_gpus = 0
+
+        _ray_module.init(num_cpus=workers, num_gpus=num_gpus, ignore_reinit_error=True)
         took = time.time() - t0
         _track_ray_processes()  # Track Ray worker processes
         if pbar:
@@ -134,6 +142,7 @@ def multi_process(
     backend: Literal['seq', 'ray', 'mp', 'threadpool', 'safe'] = 'mp',
     desc: str | None = None,
     shared_kwargs: list[str] | None = None,
+    gpus: list[int] | None = None,
     **func_kwargs: Any,
 ) -> list[Any]:
     """
@@ -169,7 +178,7 @@ def multi_process(
         # Validate that all shared_kwargs are valid kwargs for the function
         sig = inspect.signature(func)
         valid_params = set(sig.parameters.keys())
-        
+
         for kw in shared_kwargs:
             if kw not in func_kwargs:
                 raise ValueError(
@@ -177,7 +186,7 @@ def multi_process(
                 )
             # Check if parameter exists in function signature or if function accepts **kwargs
             has_var_keyword = any(
-                p.kind == inspect.Parameter.VAR_KEYWORD 
+                p.kind == inspect.Parameter.VAR_KEYWORD
                 for p in sig.parameters.values()
             )
             if kw not in valid_params and not has_var_keyword:
@@ -185,7 +194,7 @@ def multi_process(
                     f"shared_kwargs key '{kw}' is not a valid parameter for function '{func.__name__}'. "
                     f"Valid parameters: {valid_params}"
                 )
-        
+
         # Only allow shared_kwargs with Ray backend
         if backend != 'ray':
             raise ValueError(
@@ -229,23 +238,23 @@ def multi_process(
         # ---- ray backend ----
         if backend == 'ray':
             import ray as _ray_module
-            
+
             pbar.set_postfix_str('backend=ray')
-            ensure_ray(workers, pbar)
+            ensure_ray(workers, pbar, gpus=gpus)
 
             # Separate shared kwargs from regular kwargs
             shared_refs = {}
             regular_kwargs = {}
-            
+
             if shared_kwargs:
                 for kw in shared_kwargs:
                     # Put large objects in Ray's object store (zero-copy)
                     shared_refs[kw] = _ray_module.put(func_kwargs[kw])
                     pbar.set_postfix_str(f'ray: shared {kw} via object store')
-                
+
                 # Remaining kwargs are regular
                 regular_kwargs = {
-                    k: v for k, v in func_kwargs.items() 
+                    k: v for k, v in func_kwargs.items()
                     if k not in shared_kwargs
                 }
             else:

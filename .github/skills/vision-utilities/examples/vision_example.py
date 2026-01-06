@@ -1,7 +1,10 @@
+import os
+
 import numpy as np
 from PIL import Image
-import os
-from vision_utils.io_utils import read_images, ImageMmap
+
+from vision_utils.io_utils import ImageMmap, read_images
+
 
 def create_dummy_images(n=5):
     paths = []

@@ -1,8 +1,8 @@
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
 
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
 
 
 if TYPE_CHECKING:
@@ -311,7 +311,7 @@ def visualize_tensor(img_tensor, mode='hwc', normalize=True, max_cols=8):
     mpl_available, plt = _check_matplotlib_available()
     if not mpl_available:
         raise ImportError("matplotlib is required for plotting. Install it with: pip install matplotlib")
-    
+
     if mode == 'chw':
         img_tensor = img_tensor.permute(1, 2, 0)
         imgs = [img_tensor]

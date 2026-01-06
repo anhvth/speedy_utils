@@ -1,6 +1,8 @@
-import time
 import asyncio
-from speedy_utils import memoize, imemoize
+import time
+
+from speedy_utils import imemoize, memoize
+
 
 # Sync Hybrid Cache
 @memoize(cache_type='both')
