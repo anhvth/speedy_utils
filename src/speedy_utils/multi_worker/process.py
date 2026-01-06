@@ -1,6 +1,3 @@
-# ray_multi_process.py
-
-
 from ..__imports import *
 
 
@@ -109,13 +106,15 @@ RAY_WORKER = None
 
 def ensure_ray(workers: int, pbar: tqdm | None = None):
     """Initialize or reinitialize Ray with a given worker count, log to bar postfix."""
+    import ray as _ray_module
+    
     global RAY_WORKER
-    if not ray.is_initialized() or workers != RAY_WORKER:
-        if ray.is_initialized() and pbar:
+    if not _ray_module.is_initialized() or workers != RAY_WORKER:
+        if _ray_module.is_initialized() and pbar:
             pbar.set_postfix_str(f'Restarting Ray {workers} workers')
-            ray.shutdown()
+            _ray_module.shutdown()
         t0 = time.time()
-        ray.init(num_cpus=workers, ignore_reinit_error=True)
+        _ray_module.init(num_cpus=workers, ignore_reinit_error=True)
         took = time.time() - t0
         _track_ray_processes()  # Track Ray worker processes
         if pbar:
@@ -134,6 +133,7 @@ def multi_process(
     # backend: str = "ray",   # "seq", "ray", or "fastcore"
     backend: Literal['seq', 'ray', 'mp', 'threadpool', 'safe'] = 'mp',
     desc: str | None = None,
+    shared_kwargs: list[str] | None = None,
     **func_kwargs: Any,
 ) -> list[Any]:
     """
@@ -146,13 +146,51 @@ def multi_process(
         - "threadpool": run in parallel with thread pool
         - "safe": run in parallel with thread pool (explicitly safe for tests)
 
+    shared_kwargs:
+        - Optional list of kwarg names that should be shared via Ray's zero-copy object store
+        - Only works with Ray backend
+        - Useful for large objects (e.g., models, datasets) that should be shared across workers
+        - Example: shared_kwargs=['model', 'tokenizer'] for sharing large ML models
+
     If lazy_output=True, every result is saved to .pkl and
     the returned list contains file paths.
     """
 
     # default backend selection
     if backend is None:
-        backend = 'ray' if _HAS_RAY else 'mp'
+        try:
+            import ray as _ray_module
+            backend = 'ray'
+        except ImportError:
+            backend = 'mp'
+
+    # Validate shared_kwargs
+    if shared_kwargs:
+        # Validate that all shared_kwargs are valid kwargs for the function
+        sig = inspect.signature(func)
+        valid_params = set(sig.parameters.keys())
+        
+        for kw in shared_kwargs:
+            if kw not in func_kwargs:
+                raise ValueError(
+                    f"shared_kwargs key '{kw}' not found in provided func_kwargs"
+                )
+            # Check if parameter exists in function signature or if function accepts **kwargs
+            has_var_keyword = any(
+                p.kind == inspect.Parameter.VAR_KEYWORD 
+                for p in sig.parameters.values()
+            )
+            if kw not in valid_params and not has_var_keyword:
+                raise ValueError(
+                    f"shared_kwargs key '{kw}' is not a valid parameter for function '{func.__name__}'. "
+                    f"Valid parameters: {valid_params}"
+                )
+        
+        # Only allow shared_kwargs with Ray backend
+        if backend != 'ray':
+            raise ValueError(
+                f"shared_kwargs only supported with 'ray' backend, got '{backend}'"
+            )
 
     # unify items
     # unify items and coerce to concrete list so we can use len() and
@@ -190,18 +228,45 @@ def multi_process(
 
         # ---- ray backend ----
         if backend == 'ray':
+            import ray as _ray_module
+            
             pbar.set_postfix_str('backend=ray')
             ensure_ray(workers, pbar)
 
-            @ray.remote
-            def _task(x):
-                return f_wrapped(x, **func_kwargs)
+            # Separate shared kwargs from regular kwargs
+            shared_refs = {}
+            regular_kwargs = {}
+            
+            if shared_kwargs:
+                for kw in shared_kwargs:
+                    # Put large objects in Ray's object store (zero-copy)
+                    shared_refs[kw] = _ray_module.put(func_kwargs[kw])
+                    pbar.set_postfix_str(f'ray: shared {kw} via object store')
+                
+                # Remaining kwargs are regular
+                regular_kwargs = {
+                    k: v for k, v in func_kwargs.items() 
+                    if k not in shared_kwargs
+                }
+            else:
+                regular_kwargs = func_kwargs
 
-            refs = [_task.remote(x) for x in items]
+            @_ray_module.remote
+            def _task(x, shared_refs_dict, regular_kwargs_dict):
+                # Dereference shared objects (zero-copy for numpy arrays)
+                import ray as _ray_in_task
+                dereferenced = {k: _ray_in_task.get(v) for k, v in shared_refs_dict.items()}
+                # Merge with regular kwargs
+                all_kwargs = {**dereferenced, **regular_kwargs_dict}
+                return f_wrapped(x, **all_kwargs)
+
+            refs = [
+                _task.remote(x, shared_refs, regular_kwargs) for x in items
+            ]
 
             results = []
             for r in refs:
-                results.append(ray.get(r))
+                results.append(_ray_module.get(r))
                 pbar.update(1)
             return results
 
