@@ -133,9 +133,9 @@ if __name__ == '__main__':
     print(f'   Model size: {model_size_mb:.2f} MB')
     
     # Number of batches to process
-    num_batches = 100
+    num_batches = 200
     batch_size = 8
-    num_workers = 4
+    num_workers = 8
     
     print(f'\n🎯 Task: Classify {num_batches} batches ({num_batches * batch_size} images)')
     print(f'   Workers: {num_workers}')
