@@ -244,8 +244,6 @@ def multi_process(
     ) as pbar:
         # ---- sequential backend ----
         if backend == 'seq':
-            pbar.set_postfix_str('backend=seq')
-            results = []
             for x in items:
                 results.append(f_wrapped(x, **func_kwargs))
                 pbar.update(1)
@@ -255,10 +253,7 @@ def multi_process(
         if backend == 'ray':
             import ray as _ray_module
 
-            pbar.set_postfix_str('backend=ray')
             ensure_ray(workers, pbar)
-
-            # Separate shared kwargs from regular kwargs
             shared_refs = {}
             regular_kwargs = {}
 
