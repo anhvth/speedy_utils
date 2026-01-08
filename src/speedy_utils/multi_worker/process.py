@@ -5,6 +5,10 @@ SPEEDY_RUNNING_PROCESSES: list[psutil.Process] = []
 _SPEEDY_PROCESSES_LOCK = threading.Lock()
 
 
+# /mnt/data/anhvth8/venvs/Megatron-Bridge-Host/lib/python3.12/site-packages/ray/_private/worker.py:2046: FutureWarning: Tip: In future versions of Ray, Ray will no longer override accelerator visible devices env var if num_gpus=0 or num_gpus=None (default). To enable this behavior and turn off this error message, set RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO=0
+# turn off future warning
+os.environ["RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO"] = "0"
+
 def _prune_dead_processes() -> None:
     """Remove dead processes from tracking list."""
     with _SPEEDY_PROCESSES_LOCK:
@@ -75,6 +79,7 @@ def _track_multiprocessing_processes() -> None:
 
 def _build_cache_dir(func: Callable, items: list[Any]) -> Path:
     """Build cache dir with function name + timestamp."""
+    import datetime
     func_name = getattr(func, '__name__', 'func')
     now = datetime.datetime.now()
     stamp = now.strftime('%m%d_%Hh%Mm%Ss')
@@ -82,9 +87,8 @@ def _build_cache_dir(func: Callable, items: list[Any]) -> Path:
     path = Path('.cache') / run_id
     path.mkdir(parents=True, exist_ok=True)
     return path
-
-
-def wrap_dump(func: Callable, cache_dir: Path | None):
+_DUMP_THREADS = []
+def wrap_dump(func: Callable, cache_dir: Path | None, dump_in_thread: bool = True):
     """Wrap a function so results are dumped to .pkl when cache_dir is set."""
     if cache_dir is None:
         return func
@@ -92,8 +96,24 @@ def wrap_dump(func: Callable, cache_dir: Path | None):
     def wrapped(x, *args, **kwargs):
         res = func(x, *args, **kwargs)
         p = cache_dir / f'{uuid.uuid4().hex}.pkl'
-        with open(p, 'wb') as fh:
-            pickle.dump(res, fh)
+
+        def save():
+            with open(p, 'wb') as fh:
+                pickle.dump(res, fh)
+            # Clean trash to avoid bloating memory
+            # print(f'Thread count: {threading.active_count()}')
+            # print(f'Saved result to {p}')
+
+        if dump_in_thread:
+            thread = threading.Thread(target=save)
+            _DUMP_THREADS.append(thread)
+            # count thread
+            # print(f'Thread count: {threading.active_count()}')
+            while threading.active_count() > 16:
+                time.sleep(0.1)
+            thread.start()
+        else:
+            save()
         return str(p)
 
     return wrapped
@@ -121,8 +141,6 @@ def ensure_ray(workers: int, pbar: tqdm | None = None):
         if pbar:
             pbar.set_postfix_str(f'ray.init {workers} took {took:.2f}s')
         RAY_WORKER = workers
-    # os.environ["RAY_SILENCE_DEDUP_LOGS_REPORT"] = "0"
-    # os.environ["PYTHONWARNINGS"] = "ignore::DeprecationWarning" # Silences the warning if you can't edit the code
 
 def multi_process(
     func: Callable[[Any], Any],
@@ -136,6 +154,7 @@ def multi_process(
     backend: Literal['seq', 'ray', 'mp', 'threadpool', 'safe'] = 'mp',
     desc: str | None = None,
     shared_kwargs: list[str] | None = None,
+    dump_in_thread: bool = True,
     **func_kwargs: Any,
 ) -> list[Any]:
     """
@@ -153,6 +172,10 @@ def multi_process(
         - Only works with Ray backend
         - Useful for large objects (e.g., models, datasets) that should be shared across workers
         - Example: shared_kwargs=['model', 'tokenizer'] for sharing large ML models
+
+    dump_in_thread:
+        - Whether to dump results to disk in a separate thread (default: True)
+        - If False, dumping is done synchronously, which may block but ensures data is saved before returning
 
     If lazy_output=True, every result is saved to .pkl and
     the returned list contains file paths.
@@ -209,7 +232,7 @@ def multi_process(
 
     # build cache dir + wrap func
     cache_dir = _build_cache_dir(func, items) if lazy_output else None
-    f_wrapped = wrap_dump(func, cache_dir)
+    f_wrapped = wrap_dump(func, cache_dir, dump_in_thread)
 
     total = len(items)
     if desc:
@@ -240,7 +263,7 @@ def multi_process(
             regular_kwargs = {}
 
             if shared_kwargs:
-                for kw in shared_kwargs:I
+                for kw in shared_kwargs:
                     # Put large objects in Ray's object store (zero-copy)
                     shared_refs[kw] = _ray_module.put(func_kwargs[kw])
                     pbar.set_postfix_str(f'ray: shared `{kw}` via object store')
@@ -267,9 +290,12 @@ def multi_process(
             ]
 
             results = []
+            t_start = time.time()
             for r in refs:
                 results.append(_ray_module.get(r))
                 pbar.update(1)
+            t_end = time.time()
+            print(f"Ray processing took {t_end - t_start:.2f}s for {total} items")
             return results
 
         # ---- fastcore backend ----
