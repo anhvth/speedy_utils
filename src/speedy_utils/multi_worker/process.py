@@ -6,8 +6,10 @@ _SPEEDY_PROCESSES_LOCK = threading.Lock()
 
 
 # /mnt/data/anhvth8/venvs/Megatron-Bridge-Host/lib/python3.12/site-packages/ray/_private/worker.py:2046: FutureWarning: Tip: In future versions of Ray, Ray will no longer override accelerator visible devices env var if num_gpus=0 or num_gpus=None (default). To enable this behavior and turn off this error message, set RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO=0
-# turn off future warning
+# turn off future warning and verbose task logs
 os.environ["RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO"] = "0"
+os.environ["RAY_DEDUP_LOGS"] = "0"
+os.environ["RAY_LOG_TO_STDERR"] = "0"
 
 def _prune_dead_processes() -> None:
     """Remove dead processes from tracking list."""
@@ -127,6 +129,7 @@ RAY_WORKER = None
 def ensure_ray(workers: int, pbar: tqdm | None = None):
     """Initialize or reinitialize Ray with a given worker count, log to bar postfix."""
     import ray as _ray_module
+    import logging
 
     global RAY_WORKER
     # shutdown when worker count changes or if Ray not initialized
@@ -135,7 +138,12 @@ def ensure_ray(workers: int, pbar: tqdm | None = None):
             pbar.set_postfix_str(f'Restarting Ray {workers} workers')
             _ray_module.shutdown()
         t0 = time.time()
-        _ray_module.init(num_cpus=workers, ignore_reinit_error=True)
+        _ray_module.init(
+            num_cpus=workers,
+            ignore_reinit_error=True,
+            logging_level=logging.ERROR,
+            log_to_driver=False,
+        )
         took = time.time() - t0
         _track_ray_processes()  # Track Ray worker processes
         if pbar:

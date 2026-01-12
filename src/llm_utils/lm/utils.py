@@ -282,7 +282,11 @@ def get_base_client(
             return MOpenAI(
                 base_url=f"http://localhost:{port}/v1", api_key=api_key, cache=cache
             )
-        raise ValueError("Either client or vllm_cmd must be provided.")
+        # Use default port 8000 when client is None
+        logger.info("No client specified, using default port 8000 at http://localhost:8000/v1")
+        return MOpenAI(
+            base_url="http://localhost:8000/v1", api_key=api_key, cache=cache
+        )
     if isinstance(client, int):
         return MOpenAI(
             base_url=f"http://localhost:{client}/v1", api_key=api_key, cache=cache
