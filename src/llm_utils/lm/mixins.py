@@ -469,6 +469,210 @@ class TokenizationMixin:
         data = response.json()
         return data['prompt']
 
+    def generate(
+        self,
+        input_context: str | list[int],
+        *,
+        max_tokens: int = 512,
+        temperature: float = 1.0,
+        top_p: float = 1.0,
+        top_k: int = -1,
+        min_p: float = 0.0,
+        repetition_penalty: float = 1.0,
+        presence_penalty: float = 0.0,
+        frequency_penalty: float = 0.0,
+        n: int = 1,
+        stop: str | list[str] | None = None,
+        stop_token_ids: list[int] | None = None,
+        ignore_eos: bool = False,
+        min_tokens: int = 0,
+        skip_special_tokens: bool = True,
+        spaces_between_special_tokens: bool = True,
+        logprobs: int | None = None,
+        prompt_logprobs: int | None = None,
+        seed: int | None = None,
+        return_token_ids: bool = False,
+        return_text: bool = True,
+        stream: bool = False,
+        **kwargs,
+    ) -> dict[str, Any] | list[dict[str, Any]]:
+        """
+        Generate text using HuggingFace Transformers-style interface.
+
+        This method provides a low-level generation interface similar to
+        HuggingFace's model.generate(), working directly with token IDs
+        and the /inference/v1/generate endpoint.
+
+        Args:
+            input_context: Input as text (str) or token IDs (list[int])
+            max_tokens: Maximum number of tokens to generate
+            temperature: Sampling temperature (higher = more random)
+            top_p: Nucleus sampling probability threshold
+            top_k: Top-k sampling parameter (-1 to disable)
+            min_p: Minimum probability threshold
+            repetition_penalty: Penalty for repeating tokens
+            presence_penalty: Presence penalty for token diversity
+            frequency_penalty: Frequency penalty for token diversity
+            n: Number of sequences to generate
+            stop: Stop sequences (string or list of strings)
+            stop_token_ids: Token IDs to stop generation
+            ignore_eos: Whether to ignore EOS token
+            min_tokens: Minimum number of tokens to generate
+            skip_special_tokens: Skip special tokens in output
+            spaces_between_special_tokens: Add spaces between special tokens
+            logprobs: Number of top logprobs to return
+            prompt_logprobs: Number of prompt logprobs to return
+            seed: Random seed for reproducibility
+            return_token_ids: If True, include token IDs in output
+            return_text: If True, include decoded text in output
+            stream: If True, stream the response (not fully implemented)
+            **kwargs: Additional parameters passed to the API
+
+        Returns:
+            Dictionary with generation results containing:
+            - 'text': Generated text (if return_text=True)
+            - 'token_ids': Generated token IDs (if return_token_ids=True)
+            - 'logprobs': Log probabilities (if logprobs is set)
+            If n > 1, returns list of result dictionaries
+        """
+        import requests
+
+        # Convert text input to token IDs if needed
+        if isinstance(input_context, str):
+            token_ids = self.encode(input_context, add_special_tokens=True)
+        else:
+            token_ids = input_context
+
+        # Get base_url (generate endpoint is at root level like /inference/v1/generate)
+        base_url = str(self.client.base_url).rstrip('/')
+        if base_url.endswith('/v1'):
+            base_url = base_url[:-3]  # Remove '/v1'
+
+        # Build sampling params matching the API schema
+        sampling_params = {
+            'max_tokens': max_tokens,
+            'temperature': temperature,
+            'top_p': top_p,
+            'top_k': top_k,
+            'min_p': min_p,
+            'repetition_penalty': repetition_penalty,
+            'presence_penalty': presence_penalty,
+            'frequency_penalty': frequency_penalty,
+            'n': n,
+            'stop': stop or [],
+            'stop_token_ids': stop_token_ids or [],
+            'ignore_eos': ignore_eos,
+            'min_tokens': min_tokens,
+            'skip_special_tokens': skip_special_tokens,
+            'spaces_between_special_tokens': spaces_between_special_tokens,
+            'logprobs': logprobs,
+            'prompt_logprobs': prompt_logprobs,
+        }
+
+        if seed is not None:
+            sampling_params['seed'] = seed
+
+        # Build request payload
+        request_data = {
+            'token_ids': token_ids,
+            'sampling_params': sampling_params,
+            'stream': stream,
+        }
+
+        # Add any additional kwargs
+        request_data.update(kwargs)
+
+        # Make API request
+        response = requests.post(
+            f'{base_url}/inference/v1/generate',
+            json=request_data,
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        # Process response
+        # The API may return different structures, handle common cases
+        if n == 1:
+            result = {}
+            
+            # Extract from choices format
+            if 'choices' in data and len(data['choices']) > 0:
+                choice = data['choices'][0]
+                
+                # Get token IDs first
+                generated_token_ids = None
+                if 'token_ids' in choice:
+                    generated_token_ids = choice['token_ids']
+                    if return_token_ids:
+                        result['token_ids'] = generated_token_ids
+                
+                # Decode to text if requested
+                if return_text:
+                    if 'text' in choice:
+                        result['text'] = choice['text']
+                    elif generated_token_ids is not None:
+                        # Decode token IDs to text
+                        result['text'] = self.decode(generated_token_ids)
+                    elif 'message' in choice and 'content' in choice['message']:
+                        result['text'] = choice['message']['content']
+                
+                # Include logprobs if requested
+                if logprobs is not None and 'logprobs' in choice:
+                    result['logprobs'] = choice['logprobs']
+                
+                # Include finish reason
+                if 'finish_reason' in choice:
+                    result['finish_reason'] = choice['finish_reason']
+            
+            # Fallback to direct fields
+            elif 'text' in data and return_text:
+                result['text'] = data['text']
+            elif 'token_ids' in data:
+                if return_token_ids:
+                    result['token_ids'] = data['token_ids']
+                if return_text:
+                    result['text'] = self.decode(data['token_ids'])
+
+            # Store raw response for debugging
+            result['_raw_response'] = data
+
+            return result
+        else:
+            # Multiple generations (n > 1)
+            results = []
+            choices = data.get('choices', [])
+
+            for i in range(min(n, len(choices))):
+                choice = choices[i]
+                result = {}
+
+                # Get token IDs
+                generated_token_ids = None
+                if 'token_ids' in choice:
+                    generated_token_ids = choice['token_ids']
+                    if return_token_ids:
+                        result['token_ids'] = generated_token_ids
+
+                # Decode to text if requested
+                if return_text:
+                    if 'text' in choice:
+                        result['text'] = choice['text']
+                    elif generated_token_ids is not None:
+                        result['text'] = self.decode(generated_token_ids)
+                    elif 'message' in choice and 'content' in choice['message']:
+                        result['text'] = choice['message']['content']
+
+                if logprobs is not None and 'logprobs' in choice:
+                    result['logprobs'] = choice['logprobs']
+                
+                if 'finish_reason' in choice:
+                    result['finish_reason'] = choice['finish_reason']
+
+                result['_raw_response'] = choice
+                results.append(result)
+
+            return results
+
 
 class ModelUtilsMixin:
     """Mixin for model utility methods."""
