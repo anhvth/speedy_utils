@@ -396,6 +396,80 @@ class VLLMMixin:
         return _kill_vllm_on_port(port)
 
 
+class TokenizationMixin:
+    """Mixin for tokenization operations (encode/decode)."""
+
+    def encode(
+        self,
+        text: str,
+        *,
+        add_special_tokens: bool = True,
+        return_token_strs: bool = False,
+    ) -> list[int] | tuple[list[int], list[str]]:
+        """
+        Encode text to token IDs using the model's tokenizer.
+
+        Args:
+            text: Text to tokenize
+            add_special_tokens: Whether to add special tokens (e.g., BOS)
+            return_token_strs: If True, also return token strings
+
+        Returns:
+            List of token IDs, or tuple of (token IDs, token strings)
+        """
+        import requests
+
+        # Get base_url from client and remove /v1 suffix if present
+        # (tokenize endpoint is at root level, not under /v1)
+        base_url = str(self.client.base_url).rstrip('/')
+        if base_url.endswith('/v1'):
+            base_url = base_url[:-3]  # Remove '/v1'
+
+        response = requests.post(
+            f'{base_url}/tokenize',
+            json={
+                'prompt': text,
+                'add_special_tokens': add_special_tokens,
+                'return_token_strs': return_token_strs,
+            },
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        if return_token_strs:
+            return data['tokens'], data.get('token_strs', [])
+        return data['tokens']
+
+    def decode(
+        self,
+        token_ids: list[int],
+    ) -> str:
+        """
+        Decode token IDs to text using the model's tokenizer.
+
+        Args:
+            token_ids: List of token IDs to decode
+
+        Returns:
+            Decoded text string
+        """
+        import requests
+
+        # Get base_url from client and remove /v1 suffix if present
+        # (detokenize endpoint is at root level, not under /v1)
+        base_url = str(self.client.base_url).rstrip('/')
+        if base_url.endswith('/v1'):
+            base_url = base_url[:-3]  # Remove '/v1'
+
+        response = requests.post(
+            f'{base_url}/detokenize',
+            json={'tokens': token_ids},
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data['prompt']
+
+
 class ModelUtilsMixin:
     """Mixin for model utility methods."""
 

@@ -20,6 +20,7 @@ from .base_prompt_builder import BasePromptBuilder
 from .mixins import (
     ModelUtilsMixin,
     TemperatureRangeMixin,
+    TokenizationMixin,
     TwoStepPydanticMixin,
     VLLMMixin,
 )
@@ -47,6 +48,7 @@ class LLM(
     TwoStepPydanticMixin,
     VLLMMixin,
     ModelUtilsMixin,
+    TokenizationMixin,
 ):
     """LLM task with structured input/output handling."""
 

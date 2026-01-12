@@ -7,6 +7,7 @@ from .lm_base import LMBase, get_model_name
 from .mixins import (
     ModelUtilsMixin,
     TemperatureRangeMixin,
+    TokenizationMixin,
     TwoStepPydanticMixin,
     VLLMMixin,
 )
@@ -14,19 +15,20 @@ from .signature import Input, InputField, Output, OutputField, Signature
 
 
 __all__ = [
-    "LMBase",
-    "LLM",
-    "AsyncLM",
-    "AsyncLLMTask",
-    "BasePromptBuilder",
-    "LLMSignature",
-    "Signature",
-    "InputField",
-    "OutputField",
-    "Input",
-    "Output",
-    "TemperatureRangeMixin",
-    "TwoStepPydanticMixin",
-    "VLLMMixin",
-    "ModelUtilsMixin",
+    'LMBase',
+    'LLM',
+    'AsyncLM',
+    'AsyncLLMTask',
+    'BasePromptBuilder',
+    'LLMSignature',
+    'Signature',
+    'InputField',
+    'OutputField',
+    'Input',
+    'Output',
+    'TemperatureRangeMixin',
+    'TwoStepPydanticMixin',
+    'VLLMMixin',
+    'ModelUtilsMixin',
+    'TokenizationMixin',
 ]
