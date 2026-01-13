@@ -1,6 +1,6 @@
 [project]
 name = "speedy-utils"
-version = "1.1.35"
+version = "1.1.36"
 description = "Fast and easy-to-use package for data science"
 authors = [{ name = "AnhVTH", email = "anhvth.226@gmail.com" }]
 readme = "README.md"
@@ -60,6 +60,7 @@ mpython = "speedy_utils.scripts.mpython:main"
 svllm = "llm_utils.scripts.vllm_serve:main"
 svllm-lb = "llm_utils.scripts.vllm_load_balancer:run_load_balancer"
 openapi_client_codegen = "speedy_utils.scripts.openapi_client_codegen:main"
+fast-vllm = "llm_utils.scripts.fast_vllm:main"
 
 [build-system]
 requires = ["hatchling"]
