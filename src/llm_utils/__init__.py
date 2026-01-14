@@ -12,6 +12,7 @@ from llm_utils.lm import (
 from llm_utils.lm.base_prompt_builder import BasePromptBuilder
 from llm_utils.lm.lm_base import get_model_name
 from llm_utils.lm.openai_memoize import MOpenAI
+from llm_utils.llm_ray import LLMRay
 from llm_utils.vector_cache import VectorCache
 
 
@@ -57,6 +58,7 @@ __all__ = [
     "AsyncLM",
     "AsyncLLMTask",
     "LLM",
+    "LLMRay",
     "MOpenAI",
     "get_model_name",
     "VectorCache",

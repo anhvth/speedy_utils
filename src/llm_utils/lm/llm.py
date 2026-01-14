@@ -521,3 +521,4 @@ class LLM_NEMOTRON3(LLM):
             res['reasoning_content'] = reasoning_content
             
         return results
+

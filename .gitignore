@@ -122,3 +122,4 @@ dmypy.json
 .copilot
 .vscode/settings.json
 .codegen
+edu_results.json
