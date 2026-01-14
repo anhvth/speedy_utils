@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 # from llm_utils.lm.async_lm.async_llm_task import OutputModelType
 from llm_utils.lm.async_lm.async_lm_base import AsyncLMBase
-from speedy_utils import jloads
+from json_repair import jloads
 
 from ._utils import (
     LegacyMsgs,
