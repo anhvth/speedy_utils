@@ -126,12 +126,24 @@ def wrap_dump(func: Callable, cache_dir: Path | None, dump_in_thread: bool = Tru
 RAY_WORKER = None
 
 
-def ensure_ray(workers: int, pbar: tqdm | None = None):
-    """Initialize or reinitialize Ray with a given worker count, log to bar postfix."""
+def ensure_ray(workers: int, pbar: tqdm | None = None, ray_metrics_port: int | None = None):
+    """Initialize or reinitialize Ray with a given worker count, log to bar postfix.
+    
+    Args:
+        workers: Number of CPU workers for Ray
+        pbar: Optional tqdm progress bar for logging
+        ray_metrics_port: Optional port for Ray metrics export. Set to 0 to disable metrics.
+                         If None, uses Ray's default behavior.
+    """
     import ray as _ray_module
     import logging
 
     global RAY_WORKER
+    
+    # Set RAY_metrics_export_port if specified
+    if ray_metrics_port is not None:
+        os.environ['RAY_metrics_export_port'] = str(ray_metrics_port)
+    
     # shutdown when worker count changes or if Ray not initialized
     if not _ray_module.is_initialized() or workers != RAY_WORKER:
         if _ray_module.is_initialized() and pbar:
@@ -163,6 +175,7 @@ def multi_process(
     desc: str | None = None,
     shared_kwargs: list[str] | None = None,
     dump_in_thread: bool = True,
+    ray_metrics_port: int | None = None,
     **func_kwargs: Any,
 ) -> list[Any]:
     """
@@ -184,6 +197,11 @@ def multi_process(
     dump_in_thread:
         - Whether to dump results to disk in a separate thread (default: True)
         - If False, dumping is done synchronously, which may block but ensures data is saved before returning
+
+    ray_metrics_port:
+        - Optional port for Ray metrics export (Ray backend only)
+        - Set to 0 to disable Ray metrics
+        - If None, uses Ray's default behavior
 
     If lazy_output=True, every result is saved to .pkl and
     the returned list contains file paths.
@@ -261,7 +279,7 @@ def multi_process(
         if backend == 'ray':
             import ray as _ray_module
 
-            ensure_ray(workers, pbar)
+            ensure_ray(workers, pbar, ray_metrics_port)
             shared_refs = {}
             regular_kwargs = {}
 
