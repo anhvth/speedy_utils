@@ -1,4 +1,6 @@
 from ..__imports import *
+import warnings
+import tempfile
 
 
 SPEEDY_RUNNING_PROCESSES: list[psutil.Process] = []
@@ -121,6 +123,114 @@ def wrap_dump(func: Callable, cache_dir: Path | None, dump_in_thread: bool = Tru
     return wrapped
 
 
+_LOG_GATE_CACHE: dict[str, bool] = {}
+
+
+def _should_allow_worker_logs(mode: Literal['all', 'zero', 'first'], gate_path: Path | None) -> bool:
+    """Determine if current worker should emit logs for the given mode."""
+    if mode == 'all':
+        return True
+    if mode == 'zero':
+        return False
+    if mode == 'first':
+        if gate_path is None:
+            return True
+        key = str(gate_path)
+        cached = _LOG_GATE_CACHE.get(key)
+        if cached is not None:
+            return cached
+        gate_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            fd = os.open(key, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            allowed = False
+        else:
+            os.close(fd)
+            allowed = True
+        _LOG_GATE_CACHE[key] = allowed
+        return allowed
+    raise ValueError(f'Unsupported log mode: {mode!r}')
+
+
+def _cleanup_log_gate(gate_path: Path | None):
+    if gate_path is None:
+        return
+    try:
+        gate_path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+@contextlib.contextmanager
+def _patch_fastcore_progress_bar(*, leave: bool = True):
+    """Temporarily force fastcore.progress_bar to keep the bar on screen."""
+    try:
+        import fastcore.parallel as _fp
+    except ImportError:
+        yield False
+        return
+
+    orig = getattr(_fp, 'progress_bar', None)
+    if orig is None:
+        yield False
+        return
+
+    def _wrapped(*args, **kwargs):
+        kwargs.setdefault('leave', leave)
+        return orig(*args, **kwargs)
+
+    _fp.progress_bar = _wrapped
+    try:
+        yield True
+    finally:
+        _fp.progress_bar = orig
+
+
+class _PrefixedWriter:
+    """Stream wrapper that prefixes each line with worker id."""
+
+    def __init__(self, stream, prefix: str):
+        self._stream = stream
+        self._prefix = prefix
+        self._at_line_start = True
+
+    def write(self, s):
+        if not s:
+            return 0
+        total = 0
+        for chunk in s.splitlines(True):
+            if self._at_line_start:
+                self._stream.write(self._prefix)
+                total += len(self._prefix)
+            self._stream.write(chunk)
+            total += len(chunk)
+            self._at_line_start = chunk.endswith('\n')
+        return total
+
+    def flush(self):
+        self._stream.flush()
+
+
+def _call_with_log_control(
+    func: Callable,
+    x: Any,
+    func_kwargs: dict[str, Any],
+    log_mode: Literal['all', 'zero', 'first'],
+    gate_path: Path | None,
+):
+    """Call a function, silencing stdout/stderr based on log mode."""
+    allow_logs = _should_allow_worker_logs(log_mode, gate_path)
+    if allow_logs:
+        prefix = f"[worker-{os.getpid()}] "
+        # Route worker logs to stderr to reduce clobbering tqdm/progress output on stdout
+        out = _PrefixedWriter(sys.stderr, prefix)
+        err = out
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            return func(x, **func_kwargs)
+    with open(os.devnull, 'w') as devnull, contextlib.redirect_stdout(devnull), contextlib.redirect_stderr(devnull):
+        return func(x, **func_kwargs)
+
+
 # ─── ray management ─────────────────────────────────────────
 
 RAY_WORKER = None
@@ -162,6 +272,8 @@ def ensure_ray(workers: int, pbar: tqdm | None = None, ray_metrics_port: int | N
             pbar.set_postfix_str(f'ray.init {workers} took {took:.2f}s')
         RAY_WORKER = workers
 
+
+# TODO: make smarter backend selection, when shared_kwargs is used, and backend != 'ray', do not raise error but change to ray and warning user about this
 def multi_process(
     func: Callable[[Any], Any],
     items: Iterable[Any] | None = None,
@@ -176,6 +288,7 @@ def multi_process(
     shared_kwargs: list[str] | None = None,
     dump_in_thread: bool = True,
     ray_metrics_port: int | None = None,
+    log_worker: Literal['zero', 'first', 'all'] = 'first',
     **func_kwargs: Any,
 ) -> list[Any]:
     """
@@ -202,6 +315,12 @@ def multi_process(
         - Optional port for Ray metrics export (Ray backend only)
         - Set to 0 to disable Ray metrics
         - If None, uses Ray's default behavior
+
+    log_worker:
+        - Control worker stdout/stderr noise
+        - 'first': only first worker emits logs, others are silenced (default)
+        - 'all': allow worker prints (may overlap tqdm)
+        - 'zero': silence worker stdout/stderr to keep progress bar clean
 
     If lazy_output=True, every result is saved to .pkl and
     the returned list contains file paths.
@@ -237,11 +356,13 @@ def multi_process(
                     f"Valid parameters: {valid_params}"
                 )
 
-        # Only allow shared_kwargs with Ray backend
-        if backend != 'ray':
-            raise ValueError(
-                f"shared_kwargs only supported with 'ray' backend, got '{backend}'"
-            )
+    # Prefer Ray backend when shared kwargs are requested
+    if backend != 'ray':
+        warnings.warn(
+            "shared_kwargs only supported with 'ray' backend, switching backend to 'ray'",
+            UserWarning,
+        )
+        backend = 'ray'
 
     # unify items
     # unify items and coerce to concrete list so we can use len() and
@@ -260,25 +381,43 @@ def multi_process(
     cache_dir = _build_cache_dir(func, items) if lazy_output else None
     f_wrapped = wrap_dump(func, cache_dir, dump_in_thread)
 
+    log_gate_path: Path | None = None
+    if log_worker == 'first':
+        log_gate_path = Path(tempfile.gettempdir()) / f'speedy_utils_log_gate_{os.getpid()}_{uuid.uuid4().hex}.gate'
+    elif log_worker not in ('zero', 'all'):
+        raise ValueError(f'Unsupported log_worker: {log_worker!r}')
+
     total = len(items)
     if desc:
         desc = desc.strip() + f'[{backend}]'
     else:
         desc = f'Multi-process [{backend}]'
-    with tqdm(
-        total=total, desc=desc , disable=not progress
-    ) as pbar:
-        # ---- sequential backend ----
-        if backend == 'seq':
+
+    # ---- sequential backend ----
+    if backend == 'seq':
+        results: list[Any] = []
+        with tqdm(total=total, desc=desc, disable=not progress, file=sys.stdout) as pbar:
             for x in items:
-                results.append(f_wrapped(x, **func_kwargs))
+                results.append(
+                    _call_with_log_control(
+                        f_wrapped,
+                        x,
+                        func_kwargs,
+                        log_worker,
+                        log_gate_path,
+                    )
+                )
                 pbar.update(1)
-            return results
+        _cleanup_log_gate(log_gate_path)
+        return results
 
-        # ---- ray backend ----
-        if backend == 'ray':
-            import ray as _ray_module
+    # ---- ray backend ----
+    if backend == 'ray':
+        import ray as _ray_module
 
+        results = []
+        gate_path_str = str(log_gate_path) if log_gate_path else None
+        with tqdm(total=total, desc=desc, disable=not progress, file=sys.stdout) as pbar:
             ensure_ray(workers, pbar, ray_metrics_port)
             shared_refs = {}
             regular_kwargs = {}
@@ -301,60 +440,102 @@ def multi_process(
             def _task(x, shared_refs_dict, regular_kwargs_dict):
                 # Dereference shared objects (zero-copy for numpy arrays)
                 import ray as _ray_in_task
+                gate = Path(gate_path_str) if gate_path_str else None
                 dereferenced = {k: _ray_in_task.get(v) for k, v in shared_refs_dict.items()}
                 # Merge with regular kwargs
                 all_kwargs = {**dereferenced, **regular_kwargs_dict}
-                return f_wrapped(x, **all_kwargs)
+                return _call_with_log_control(
+                    f_wrapped,
+                    x,
+                    all_kwargs,
+                    log_worker,
+                    gate,
+                )
 
             refs = [
                 _task.remote(x, shared_refs, regular_kwargs) for x in items
             ]
 
-            results = []
             t_start = time.time()
             for r in refs:
                 results.append(_ray_module.get(r))
                 pbar.update(1)
             t_end = time.time()
             print(f"Ray processing took {t_end - t_start:.2f}s for {total} items")
-            return results
+        _cleanup_log_gate(log_gate_path)
+        return results
 
-        # ---- fastcore backend ----
-        if backend == 'mp':
-            results = parallel(
-                f_wrapped, items, n_workers=workers, progress=progress, threadpool=False
+    # ---- fastcore backend ----
+    if backend == 'mp':
+        worker_func = functools.partial(
+            _call_with_log_control,
+            f_wrapped,
+            func_kwargs=func_kwargs,
+            log_mode=log_worker,
+            gate_path=log_gate_path,
+        )
+        with _patch_fastcore_progress_bar(leave=True):
+            results = list(parallel(
+                worker_func, items, n_workers=workers, progress=progress, threadpool=False
+            ))
+        _track_multiprocessing_processes()  # Track multiprocessing workers
+        _prune_dead_processes()  # Clean up dead processes
+        _cleanup_log_gate(log_gate_path)
+        return results
+
+    if backend == 'threadpool':
+        worker_func = functools.partial(
+            _call_with_log_control,
+            f_wrapped,
+            func_kwargs=func_kwargs,
+            log_mode=log_worker,
+            gate_path=log_gate_path,
+        )
+        with _patch_fastcore_progress_bar(leave=True):
+            results = list(parallel(
+                worker_func, items, n_workers=workers, progress=progress, threadpool=True
+            ))
+        _cleanup_log_gate(log_gate_path)
+        return results
+
+    if backend == 'safe':
+        # Completely safe backend for tests - no multiprocessing, no external progress bars
+        import concurrent.futures
+
+        # Import thread tracking from thread module
+        try:
+            from .thread import _prune_dead_threads, _track_executor_threads
+
+            worker_func = functools.partial(
+                _call_with_log_control,
+                f_wrapped,
+                func_kwargs=func_kwargs,
+                log_mode=log_worker,
+                gate_path=log_gate_path,
             )
-            _track_multiprocessing_processes()  # Track multiprocessing workers
-            _prune_dead_processes()  # Clean up dead processes
-            return list(results)
-        if backend == 'threadpool':
-            results = parallel(
-                f_wrapped, items, n_workers=workers, progress=progress, threadpool=True
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=workers
+            ) as executor:
+                _track_executor_threads(executor)  # Track threads
+                results = list(executor.map(worker_func, items))
+            _prune_dead_threads()  # Clean up dead threads
+        except ImportError:
+            # Fallback if thread module not available
+            worker_func = functools.partial(
+                _call_with_log_control,
+                f_wrapped,
+                func_kwargs=func_kwargs,
+                log_mode=log_worker,
+                gate_path=log_gate_path,
             )
-            return list(results)
-        if backend == 'safe':
-            # Completely safe backend for tests - no multiprocessing, no external progress bars
-            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=workers
+            ) as executor:
+                results = list(executor.map(worker_func, items))
+        _cleanup_log_gate(log_gate_path)
+        return results
 
-            # Import thread tracking from thread module
-            try:
-                from .thread import _prune_dead_threads, _track_executor_threads
-
-                with concurrent.futures.ThreadPoolExecutor(
-                    max_workers=workers
-                ) as executor:
-                    _track_executor_threads(executor)  # Track threads
-                    results = list(executor.map(f_wrapped, items))
-                _prune_dead_threads()  # Clean up dead threads
-            except ImportError:
-                # Fallback if thread module not available
-                with concurrent.futures.ThreadPoolExecutor(
-                    max_workers=workers
-                ) as executor:
-                    results = list(executor.map(f_wrapped, items))
-            return results
-
-        raise ValueError(f'Unsupported backend: {backend!r}')
+    raise ValueError(f'Unsupported backend: {backend!r}')
 
 
 def cleanup_phantom_workers():
