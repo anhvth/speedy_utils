@@ -7,6 +7,19 @@ import re
 import shlex  # To properly escape command line arguments
 import shutil
 import subprocess
+import sys
+
+try:
+    from rich.console import Console, Group
+    from rich.panel import Panel
+    from rich.text import Text
+    from rich.syntax import Syntax
+except ImportError:
+    Console = None
+    Group = None
+    Panel = None
+    Text = None
+    Syntax = None
 
 
 taskset_path = shutil.which('taskset')
@@ -60,18 +73,34 @@ def assert_script(python_path):
     with open(python_path) as f:
         code_str = f.read()
     if 'MP_ID' not in code_str or 'MP_TOTAL' not in code_str:
-        example_code = (
-            'import os; MP_TOTAL = int(os.environ.get("MP_TOTAL"));MP_ID = int(os.environ.get("MP_ID"))\n'
+        helper_code = (
+            'import os\n'
+            'MP_ID = int(os.getenv("MP_ID", "0"))\n'
+            'MP_TOTAL = int(os.getenv("MP_TOTAL", "1"))\n'
             'inputs = list(inputs[MP_ID::MP_TOTAL])'
         )
-        # ANSI escape codes for coloring
-        YELLOW = '\033[93m'
-        RESET = '\033[0m'
-        raise_msg = (
-            f'MP_ID and MP_TOTAL not found in {python_path}, please add them.\n\n'
-            f'Example:\n{YELLOW}{example_code}{RESET}'
-        )
-        raise Exception(raise_msg)
+        if Console and Panel and Text and Syntax and Group:
+            console = Console(stderr=True, force_terminal=True)
+            syntax = Syntax(helper_code, "python", theme="monokai", line_numbers=False)
+            console.print()
+            console.print(
+                Panel(
+                    f'Your script {python_path} is missing MP_ID and/or MP_TOTAL variables.\n\n'
+                    f'Add the following code to enable multi-process sharding:',
+                    title='[bold yellow]Warning: Missing Multi-Process Variables[/bold yellow]',
+                    border_style='yellow',
+                    expand=False,
+                )
+            )
+            console.print()
+            console.print("```python")
+            console.print(syntax)
+            console.print("```")
+            console.print("-"*80)
+        else:
+            # Fallback to plain text
+            print(f'Warning: MP_ID and MP_TOTAL not found in {python_path}, please add them.', file=sys.stderr)
+            print(f'Example:\n{helper_code}', file=sys.stderr)
 
 
 def run_in_tmux(commands_to_run, tmux_name, num_windows):
@@ -96,7 +125,18 @@ def run_in_tmux(commands_to_run, tmux_name, num_windows):
 def main():
     # Assert that MP_ID and MP_TOTAL are not already set
 
-    parser = argparse.ArgumentParser(description='Process fold arguments')
+    helper_code = (
+        'import os\n'
+        'MP_ID = int(os.getenv("MP_ID", "0"))\n'
+        'MP_TOTAL = int(os.getenv("MP_TOTAL", "1"))\n'
+        'inputs = list(inputs[MP_ID::MP_TOTAL])'
+    )
+
+    parser = argparse.ArgumentParser(
+        description='Process fold arguments',
+        epilog=f'Helper code for multi-process sharding:\n{helper_code}',
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument(
         '--total_fold', '-t', default=16, type=int, help='total number of folds'
     )
