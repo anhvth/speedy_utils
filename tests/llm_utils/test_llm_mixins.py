@@ -189,5 +189,27 @@ class TestMixinIntegration(unittest.TestCase):
         self.assertTrue(callable(llm.two_step_pydantic_parse))
 
 
+class TestLLMTimeout(unittest.TestCase):
+    """Verify LLM respects configured OpenAI timeout defaults."""
+
+    @patch('llm_utils.lm.llm.get_base_client')
+    def test_timeout_applied_to_completion(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_model = MagicMock(id='test-model')
+        mock_client.models.list.return_value = MagicMock(data=[mock_model])
+        mock_choice = MagicMock()
+        mock_choice.message.content = 'hello'
+        mock_completion = MagicMock(choices=[mock_choice])
+        mock_client.chat.completions.create.return_value = mock_completion
+        mock_get_client.return_value = mock_client
+
+        llm = LLM(timeout=1.0)
+        llm.text_completion('prompt')
+
+        _, kwargs = mock_client.chat.completions.create.call_args
+        self.assertIn('timeout', kwargs)
+        self.assertEqual(kwargs['timeout'], 1.0)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -87,10 +87,12 @@ def load_json_or_pickle(fname: str, counter=0) -> Any:
         # EOFError: Ran out of input
         except EOFError:
             time.sleep(1)
+
             if counter > 5:
                 # Keep message concise and actionable
                 print(
-                    f'Corrupted cache file {fname} removed; it will be regenerated on next access'
+                    f"[load_json_or_pickle] EOFError reading cache file='{fname}' (attempt={counter}). "
+                    f"Assuming partial write/corruption; deleted file and will regenerate on next access."
                 )
                 os.remove(fname)
                 raise

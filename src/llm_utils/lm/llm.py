@@ -9,6 +9,7 @@ import subprocess
 from typing import Any, Dict, List, Optional, Type, Union, cast
 
 import requests
+from httpx import Timeout
 from loguru import logger
 from openai import AuthenticationError, BadRequestError, OpenAI, RateLimitError
 from openai.types.chat import ChatCompletionMessageParam
@@ -66,6 +67,7 @@ class LLM(
         vllm_timeout: int = 1200,
         vllm_reuse: bool = True,
         verbose=False,
+        timeout: float | Timeout | None = None,
         **model_kwargs,
     ):
         """Initialize LLMTask."""
@@ -83,6 +85,7 @@ class LLM(
         self.vllm_timeout = vllm_timeout
         self.vllm_reuse = vllm_reuse
         self.vllm_process: subprocess.Popen | None = None
+        self.timeout = timeout
         self.last_ai_response = None  # Store raw response from client
         self.cache = cache
 
@@ -165,6 +168,9 @@ class LLM(
         # Extract model name from kwargs for API call
         api_kwargs = {k: v for k, v in effective_kwargs.items() if k != 'model'}
 
+        if 'timeout' not in api_kwargs and self.timeout is not None:
+            api_kwargs['timeout'] = self.timeout
+
         try:
             completion = self.client.chat.completions.create(
                 model=model_name, messages=messages, **api_kwargs
@@ -219,6 +225,9 @@ class LLM(
 
         # Extract model name from kwargs for API call
         api_kwargs = {k: v for k, v in effective_kwargs.items() if k != 'model'}
+
+        if 'timeout' not in api_kwargs and self.timeout is not None:
+            api_kwargs['timeout'] = self.timeout
 
         pydantic_model_to_use_opt = response_model or self.output_model
         if pydantic_model_to_use_opt is None:
@@ -398,6 +407,7 @@ class LLM(
         vllm_cmd: str | None = None,
         vllm_timeout: int = 120,
         vllm_reuse: bool = True,
+        timeout: float | Timeout | None = None,
         **model_kwargs,
     ) -> 'LLM':
         """
@@ -415,6 +425,7 @@ class LLM(
             vllm_cmd: Optional VLLM command to start server automatically
             vllm_timeout: Timeout in seconds to wait for VLLM server (default 120)
             vllm_reuse: If True (default), reuse existing server on target port
+            timeout: Optional OpenAI client timeout in seconds
             **model_kwargs: Additional model parameters
         """
         instruction = cls.get_instruction()
@@ -433,10 +444,14 @@ class LLM(
             vllm_cmd=vllm_cmd,
             vllm_timeout=vllm_timeout,
             vllm_reuse=vllm_reuse,
+            timeout=timeout,
             **model_kwargs,
         )
-from typing import Any, Dict, List, Optional, Type, Union
+
+from typing import Any
+
 from pydantic import BaseModel
+
 from .llm import LLM, Messages
 
 class LLM_NEMOTRON3(LLM):
@@ -521,4 +536,3 @@ class LLM_NEMOTRON3(LLM):
             res['reasoning_content'] = reasoning_content
             
         return results
-
