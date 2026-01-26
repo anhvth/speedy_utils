@@ -12,7 +12,7 @@ import subprocess
 taskset_path = shutil.which('taskset')
 
 
-def get_existing_tmux_sessions():
+def get_existing_tmux_sessions() -> list[str]:
     """Get list of existing tmux session names."""
     try:
         result = subprocess.run(
@@ -20,7 +20,7 @@ def get_existing_tmux_sessions():
             capture_output=True,
             text=True,
         )
-        if result.returncode == 0:
+        if result.returncode == 0 and result.stdout.strip():
             return result.stdout.strip().split('\n')
         return []
     except FileNotFoundError:
@@ -28,7 +28,7 @@ def get_existing_tmux_sessions():
         return []
 
 
-def get_next_session_name(base_name='mpython'):
+def get_next_session_name(base_name: str = 'mpython') -> str:
     """Get next available session name.
 
     If 'mpython' doesn't exist, return 'mpython'.
@@ -56,25 +56,30 @@ def get_next_session_name(base_name='mpython'):
     return f'{base_name}-{next_num}'
 
 
-def assert_script(python_path):
+def assert_script(python_path: str) -> None:
     with open(python_path) as f:
         code_str = f.read()
     if 'MP_ID' not in code_str or 'MP_TOTAL' not in code_str:
         example_code = (
-            'import os; MP_TOTAL = int(os.environ.get("MP_TOTAL"));MP_ID = int(os.environ.get("MP_ID"))\n'
+            'import os; '
+            'MP_TOTAL = int(os.environ.get("MP_TOTAL"));'
+            'MP_ID = int(os.environ.get("MP_ID"))\n'
             'inputs = list(inputs[MP_ID::MP_TOTAL])'
         )
         # ANSI escape codes for coloring
         YELLOW = '\033[93m'
         RESET = '\033[0m'
         raise_msg = (
-            f'MP_ID and MP_TOTAL not found in {python_path}, please add them.\n\n'
+            f'MP_ID and MP_TOTAL not found in {python_path}, '
+            f'please add them.\n\n'
             f'Example:\n{YELLOW}{example_code}{RESET}'
         )
         raise Exception(raise_msg)
 
 
-def run_in_tmux(commands_to_run, tmux_name, num_windows):
+def run_in_tmux(
+    commands_to_run: list[str], tmux_name: str, num_windows: int
+) -> None:
     with open('/tmp/start_multirun_tmux.sh', 'w') as script_file:
         script_file.write('#!/bin/bash\n\n')
         script_file.write(f'tmux new-session -d -s {tmux_name}\n')
@@ -83,22 +88,30 @@ def run_in_tmux(commands_to_run, tmux_name, num_windows):
                 break
             window_name = f'{tmux_name}:{i}'
             if i == 0:
-                script_file.write(f"tmux send-keys -t {window_name} '{cmd}' C-m\n")
+                script_file.write(
+                    f"tmux send-keys -t {window_name} '{cmd}' C-m\n"
+                )
             else:
                 script_file.write(f'tmux new-window -t {tmux_name}\n')
-                script_file.write(f"tmux send-keys -t {window_name} '{cmd}' C-m\n")
+                script_file.write(
+                    f"tmux send-keys -t {window_name} '{cmd}' C-m\n"
+                )
 
         # Make the script executable
         script_file.write('chmod +x /tmp/start_multirun_tmux.sh\n')
         print('Run /tmp/start_multirun_tmux.sh')
 
 
-def main():
+def main() -> None:
     # Assert that MP_ID and MP_TOTAL are not already set
 
     parser = argparse.ArgumentParser(description='Process fold arguments')
     parser.add_argument(
-        '--total_fold', '-t', default=16, type=int, help='total number of folds'
+        '--total_fold',
+        '-t',
+        default=16,
+        type=int,
+        help='total number of folds',
     )
     parser.add_argument('--gpus', type=str, default='0,1,2,3,4,5,6,7')
     parser.add_argument('--ignore_gpus', '-ig', type=str, default='')
@@ -134,9 +147,15 @@ def main():
         gpu = gpus[i % num_gpus]
         cpu_start = (i * cpu_per_process) % args.total_cpu
         cpu_end = ((i + 1) * cpu_per_process - 1) % args.total_cpu
-        ENV = f'CUDA_VISIBLE_DEVICES={gpu} MP_ID={i} MP_TOTAL={args.total_fold}'
+        ENV = (
+            f'CUDA_VISIBLE_DEVICES={gpu} '
+            f'MP_ID={i} MP_TOTAL={args.total_fold}'
+        )
         if taskset_path:
-            fold_cmd = f'{ENV} {taskset_path} -c {cpu_start}-{cpu_end}  {path_python} {cmd_str}'
+            fold_cmd = (
+                f'{ENV} {taskset_path} -c {cpu_start}-{cpu_end}  '
+                f'{path_python} {cmd_str}'
+            )
         else:
             fold_cmd = f'{ENV} {path_python} {cmd_str}'
 
@@ -144,8 +163,8 @@ def main():
 
     session_name = get_next_session_name('mpython')
     run_in_tmux(cmds, session_name, args.total_fold)
-    os.chmod('/tmp/start_multirun_tmux.sh', 0o755)  # Make the script executable
-    os.system('/tmp/start_multirun_tmux.sh')
+    os.chmod('/tmp/start_multirun_tmux.sh', 0o755)
+    subprocess.run(['/tmp/start_multirun_tmux.sh'], check=False)
     print(f'Started tmux session: {session_name}')
 
 
