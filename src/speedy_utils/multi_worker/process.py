@@ -115,32 +115,39 @@ class ErrorStats:
         func_name: str,
     ) -> str:
         """Write error details to a log file."""
+        from io import StringIO
+        from rich.console import Console
+        
         log_path = self._error_log_dir / f'{idx}.log'
+        
+        output = StringIO()
+        console = Console(file=output, width=120, no_color=False)
         
         # Format traceback
         tb_lines = self._format_traceback(error)
         
-        content = []
-        content.append(f'{"=" * 60}')
-        content.append(f'Error at index: {idx}')
-        content.append(f'Function: {func_name}')
-        content.append(f'Error Type: {type(error).__name__}')
-        content.append(f'Error Message: {error}')
-        content.append(f'{"=" * 60}')
-        content.append('')
-        content.append('Input:')
-        content.append('-' * 40)
+        console.print(f'{"=" * 60}')
+        console.print(f'Error at index: {idx}')
+        console.print(f'Function: {func_name}')
+        console.print(f'Error Type: {type(error).__name__}')
+        console.print(f'Error Message: {error}')
+        console.print(f'{"=" * 60}')
+        console.print('')
+        console.print('Input:')
+        console.print('-' * 40)
         try:
-            content.append(repr(input_value))
+            import json
+            console.print(json.dumps(input_value, indent=2))
         except Exception:
-            content.append('<unable to repr input>')
-        content.append('')
-        content.append('Traceback:')
-        content.append('-' * 40)
-        content.extend(tb_lines)
+            console.print(repr(input_value))
+        console.print('')
+        console.print('Traceback:')
+        console.print('-' * 40)
+        for line in tb_lines:
+            console.print(line)
         
         with open(log_path, 'w') as f:
-            f.write('\n'.join(content))
+            f.write(output.getvalue())
         
         return str(log_path)
 
