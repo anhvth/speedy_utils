@@ -58,6 +58,9 @@ from .common.utils_print import (
     fprint,
 )
 
+# Error handling utilities
+from .common.utils_error import clean_traceback, handle_exceptions_with_clean_traceback
+
 # Multi-worker processing
 from .multi_worker.process import multi_process
 from .multi_worker.thread import kill_all_thread, multi_thread
@@ -156,6 +159,9 @@ __all__ = [
     'print_table',
     'setup_logger',
     'log',
+    # Error handling utilities
+    'clean_traceback',
+    'handle_exceptions_with_clean_traceback',
     # Multi-worker processing
     'multi_process',
     'multi_thread',

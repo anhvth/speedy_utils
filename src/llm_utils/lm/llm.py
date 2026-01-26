@@ -16,6 +16,7 @@ from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
 
 from speedy_utils.common.utils_io import jdumps
+from speedy_utils import clean_traceback
 
 from .base_prompt_builder import BasePromptBuilder
 from .mixins import (
@@ -159,6 +160,7 @@ class LLM(
         messages.append({'role': 'user', 'content': user_content})
         return cast(Messages, messages)
 
+    @clean_traceback
     def text_completion(
         self, input_data: str | BaseModel | list[dict], **runtime_kwargs
     ) -> list[dict[str, Any]]:
@@ -214,6 +216,7 @@ class LLM(
             results.append(result_dict)
         return results
 
+    @clean_traceback
     def pydantic_parse(
         self,
         input_data: str | BaseModel | list[dict],
