@@ -20,8 +20,10 @@ def get_existing_tmux_sessions() -> list[str]:
             capture_output=True,
             text=True,
         )
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip().split('\n')
+        if result.returncode == 0:
+            if result.stdout.strip():
+                return result.stdout.strip().split('\n')
+            return []
         return []
     except FileNotFoundError:
         # tmux not installed
@@ -97,8 +99,6 @@ def run_in_tmux(
                     f"tmux send-keys -t {window_name} '{cmd}' C-m\n"
                 )
 
-        # Make the script executable
-        script_file.write('chmod +x /tmp/start_multirun_tmux.sh\n')
         print('Run /tmp/start_multirun_tmux.sh')
 
 
