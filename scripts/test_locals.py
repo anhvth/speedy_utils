@@ -15,5 +15,4 @@ def process_data(item):
 
 if __name__ == '__main__':
     inputs = range(5)
-    ret = multi_process(process_data, inputs, backend='mp', error_handler='log')
-    print(ret)
+    multi_process(process_data, inputs, backend='mp')
