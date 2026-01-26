@@ -824,7 +824,7 @@ def multi_process(
     log_worker: Literal['zero', 'first', 'all'] = 'first',
     total_items: int | None = None,
     poll_interval: float = 0.3,
-    error_handler: ErrorHandlerType = 'raise',
+    error_handler: ErrorHandlerType = 'log',
     max_error_files: int = 100,
     **func_kwargs: Any,
 ) -> list[Any]:
