@@ -9,6 +9,7 @@
 ## 🚀 Recent Updates (January 27, 2026)
 
 **Enhanced Error Handling in Parallel Processing:**
+
 - Rich-formatted error tracebacks with code context and syntax highlighting
 - Three error handling modes: 'raise', 'ignore', and 'log'
 - Filtered tracebacks focusing on user code (hiding infrastructure)
@@ -209,6 +210,7 @@ print(results)  # [0, 1, 4, 9, 16, None, 36, 49, 64, 81, None, 121]
 #### Rich Error Tracebacks
 
 When errors occur, you'll see beautifully formatted tracebacks with:
+
 - **Code context**: Lines of code around the error location
 - **Caller information**: Shows where the parallel function was invoked
 - **Filtered frames**: Focuses on user code, hiding infrastructure details
@@ -230,7 +232,7 @@ When using `error_handler='log'`, errors are automatically saved to timestamped 
 
 Progress bars now show real-time error and success counts:
 
-```
+```bash
 Multi-thread [8/10] [00:02<00:00, 3.45it/s, success=8, errors=2, pending=0]
 ```
 
