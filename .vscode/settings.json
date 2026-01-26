@@ -13,5 +13,6 @@
     "python.analysis.diagnosticSeverityOverrides": {
         "reportAttributeAccessIssue": "none"
     },
-    "python.defaultInterpreterPath": "/mnt/data/anhvth/venvs/VI-COT/bin/python"
+    "python.defaultInterpreterPath": "/mnt/data/anhvth/venvs/VI-COT/bin/python",
+    "chatgpt.openOnStartup": true
 }

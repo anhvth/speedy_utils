@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${SKIP_TAG_HOOK:-}" == "1" ]]; then
+  exit 0
+fi
+
+remote_name="${1:-}"
+remote_url="${2:-}"
+
+# Only tag for GitHub remotes.
+if [[ -z "$remote_url" || "$remote_url" != *"github.com"* ]]; then
+  exit 0
+fi
+
+today="$(date +%y%m%d)"
+
+max_suffix="$(git tag -l "${today}.*" | awk -F. 'NF==2 && $1 ~ /^[0-9]{6}$/ && $2 ~ /^[0-9]+$/ {print $2}' | sort -n | tail -n 1)"
+if [[ -z "${max_suffix}" ]]; then
+  next_suffix=1
+else
+  next_suffix=$((max_suffix + 1))
+fi
+
+tag="${today}.${next_suffix}"
+
+if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+  exit 0
+fi
+
+git tag "${tag}"
+SKIP_TAG_HOOK=1 git push "${remote_name}" "refs/tags/${tag}"
