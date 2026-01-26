@@ -1,10 +1,24 @@
 from ..__imports import *
+import linecache
+
+from .process import ErrorStats, ErrorHandlerType
 
 
 try:
     from tqdm import tqdm
 except ImportError:  # pragma: no cover
     tqdm = None  # type: ignore[assignment]
+
+try:
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.syntax import Syntax
+    from rich.text import Text
+except ImportError:  # pragma: no cover
+    Console = None  # type: ignore[assignment, misc]
+    Panel = None  # type: ignore[assignment, misc]
+    Syntax = None  # type: ignore[assignment, misc]
+    Text = None  # type: ignore[assignment, misc]
 
 # Sensible defaults
 DEFAULT_WORKERS = (os.cpu_count() or 4) * 2
@@ -25,11 +39,13 @@ class UserFunctionError(Exception):
         func_name: str,
         input_value: Any,
         user_traceback: list[traceback.FrameSummary],
+        caller_frame: traceback.FrameSummary | None = None,
     ) -> None:
         self.original_exception = original_exception
         self.func_name = func_name
         self.input_value = input_value
         self.user_traceback = user_traceback
+        self.caller_frame = caller_frame
 
         # Create a focused error message
         tb_str = ''.join(traceback.format_list(user_traceback))
@@ -44,6 +60,95 @@ class UserFunctionError(Exception):
         # Return focused error without infrastructure frames
         return super().__str__()
 
+    def format_rich(self) -> None:
+        """Format and print error with rich panels and code context."""
+        if Console is None or Panel is None or Text is None:
+            # Fallback to plain text
+            print(str(self), file=sys.stderr)
+            return
+
+        console = Console(stderr=True, force_terminal=True)
+
+        # Build traceback display with code context
+        tb_parts: list[str] = []
+
+        # Show caller frame first if available
+        if self.caller_frame and self.caller_frame.lineno is not None:
+            tb_parts.append(
+                f'[cyan]{self.caller_frame.filename}[/cyan]:[yellow]{self.caller_frame.lineno}[/yellow] '
+                f'in [green]{self.caller_frame.name}[/green]'
+            )
+            tb_parts.append('')
+            context = _get_code_context_rich(self.caller_frame.filename, self.caller_frame.lineno, 3)
+            tb_parts.extend(context)
+            tb_parts.append('')
+
+        # Show user code frames with context
+        for frame in self.user_traceback:
+            if frame.lineno is not None:
+                tb_parts.append(
+                    f'[cyan]{frame.filename}[/cyan]:[yellow]{frame.lineno}[/yellow] '
+                    f'in [green]{frame.name}[/green]'
+                )
+                tb_parts.append('')
+                context = _get_code_context_rich(frame.filename, frame.lineno, 3)
+                tb_parts.extend(context)
+                tb_parts.append('')
+
+        # Print with rich Panel
+        console.print()
+        console.print(
+            Panel(
+                '\n'.join(tb_parts),
+                title='[bold red]Traceback (most recent call last)[/bold red]',
+                border_style='red',
+                expand=False,
+            )
+        )
+        console.print(
+            f'[bold red]{type(self.original_exception).__name__}[/bold red]: '
+            f'{self.original_exception}'
+        )
+        console.print()
+
+
+def _get_code_context(filename: str, lineno: int, context_lines: int = 3) -> list[str]:
+    """Get code context around a line with line numbers and highlighting."""
+    lines: list[str] = []
+    start = max(1, lineno - context_lines)
+    end = lineno + context_lines
+
+    for i in range(start, end + 1):
+        line = linecache.getline(filename, i)
+        if not line:
+            continue
+        line = line.rstrip()
+        marker = '❱' if i == lineno else ' '
+        lines.append(f'  {i:4d} {marker} {line}')
+
+    return lines
+
+def _get_code_context_rich(filename: str, lineno: int, context_lines: int = 3) -> list[str]:
+    """Get code context with rich formatting (colors)."""
+    lines: list[str] = []
+    start = max(1, lineno - context_lines)
+    end = lineno + context_lines
+
+    for i in range(start, end + 1):
+        line = linecache.getline(filename, i)
+        if not line:
+            continue
+        line = line.rstrip()
+        num_str = f'{i:4d}'
+        
+        if i == lineno:
+            # Highlight error line
+            lines.append(f'[dim]{num_str}[/dim] [red]❱[/red] {line}')
+        else:
+            # Normal context line
+            lines.append(f'[dim]{num_str} │[/dim] {line}')
+
+    return lines
 
 _PY_SET_ASYNC_EXC = ctypes.pythonapi.PyThreadState_SetAsyncExc
 try:
@@ -90,6 +195,7 @@ def _worker(
     item: T,
     func: Callable[[T], R],
     fixed_kwargs: Mapping[str, Any],
+    caller_frame: traceback.FrameSummary | None = None,
 ) -> R:
     """Execute the function with an item and fixed kwargs."""
     # Validate func is callable before attempting to call it
@@ -102,7 +208,7 @@ def _worker(
         )
 
     try:
-        return func(item, **fixed_kwargs)
+        return func(item)
     except Exception as exc:
         # Extract user code traceback (filter out infrastructure)
         exc_tb = sys.exc_info()[2]
@@ -114,8 +220,11 @@ def _worker(
             user_frames = []
             skip_patterns = [
                 'multi_worker/thread.py',
+                'multi_worker/process.py',
                 'concurrent/futures/',
                 'threading.py',
+                'multiprocessing/',
+                'site-packages/ray/',
             ]
 
             for frame in tb_list:
@@ -130,6 +239,7 @@ def _worker(
                     func_name,
                     item,
                     user_frames,
+                    caller_frame,
                 ) from exc
 
         # Fallback: re-raise original if we couldn't extract frames
@@ -140,8 +250,9 @@ def _run_batch(
     items: Sequence[T],
     func: Callable[[T], R],
     fixed_kwargs: Mapping[str, Any],
+    caller_frame: traceback.FrameSummary | None = None,
 ) -> list[R]:
-    return [_worker(item, func, fixed_kwargs) for item in items]
+    return [_worker(item, func, fixed_kwargs, caller_frame) for item in items]
 
 
 def _attach_metadata(fut: Future[Any], idx: int, logical_size: int) -> None:
@@ -242,7 +353,9 @@ def multi_thread(
     progress_update: int = 10,
     prefetch_factor: int = 4,
     timeout: float | None = None,
-    stop_on_error: bool = True,
+    stop_on_error: bool | None = None,
+    error_handler: ErrorHandlerType = 'raise',
+    max_error_files: int = 100,
     n_proc: int = 0,
     store_output_pkl_file: str | None = None,
     **fixed_kwargs: Any,
@@ -272,8 +385,16 @@ def multi_thread(
         Multiplier controlling in-flight items (``workers * prefetch_factor``).
     timeout : float | None, optional
         Overall wall-clock timeout in seconds.
-    stop_on_error : bool, optional
-        Abort immediately on the first exception when ``True``.
+    stop_on_error : bool | None, optional
+        Deprecated. Use error_handler instead.
+        When True -> error_handler='raise', when False -> error_handler='log'.
+    error_handler : 'raise' | 'ignore' | 'log', optional
+        - 'raise': raise exception on first error (default)
+        - 'ignore': continue, return None for failed items
+        - 'log': same as ignore, but logs errors to files
+    max_error_files : int, optional
+        Maximum number of error log files to write (default: 100).
+        Error logs are written to .cache/speedy_utils/error_logs/{idx}.log
     n_proc : int, optional
         Optional process-level fan-out; ``>1`` shards work across processes.
     store_output_pkl_file : str | None, optional
@@ -285,9 +406,19 @@ def multi_thread(
     -------
     list[R | None]
         Collected results, preserving order when requested. Failed tasks yield
-        ``None`` entries if ``stop_on_error`` is ``False``.
+        ``None`` entries if ``error_handler`` is not 'raise'.
     """
     from speedy_utils import dump_json_or_pickle, load_by_ext
+
+    # Handle deprecated stop_on_error parameter
+    if stop_on_error is not None:
+        import warnings
+        warnings.warn(
+            "stop_on_error is deprecated, use error_handler instead",
+            DeprecationWarning,
+            stacklevel=2
+        )
+        error_handler = 'raise' if stop_on_error else 'log'
 
     if n_proc > 1:
         import tempfile
@@ -319,7 +450,8 @@ def multi_thread(
                 progress_update=progress_update,
                 prefetch_factor=prefetch_factor,
                 timeout=timeout,
-                stop_on_error=stop_on_error,
+                error_handler=error_handler,
+                max_error_files=max_error_files,
                 n_proc=0,
                 store_output_pkl_file=file_pkl,
                 **fixed_kwargs,
@@ -363,11 +495,29 @@ def multi_thread(
     if batch == 1 and logical_total and logical_total / max(workers_val, 1) > 20_000:
         batch = 32
 
-    src_iter: Iterable[Any] = iter(inputs)
+    src_iter: Iterator[Any] = iter(inputs)
     if batch > 1:
-        src_iter = _group_iter(src_iter, batch)
-    src_iter = iter(src_iter)
+        src_iter = iter(_group_iter(src_iter, batch))
     collector: _ResultCollector[Any] = _ResultCollector(ordered, logical_total)
+
+    # Initialize error stats for error handling
+    func_name = getattr(func, '__name__', repr(func))
+    error_stats = ErrorStats(
+        func_name=func_name,
+        max_error_files=max_error_files,
+        write_logs=error_handler == 'log'
+    )
+
+    # Convert inputs to list for index access in error logging
+    items_list: list[Any] | None = None
+    if error_handler != 'raise':
+        try:
+            items_list = list(inputs)
+            src_iter = iter(items_list)
+            if batch > 1:
+                src_iter = iter(_group_iter(src_iter, batch))
+        except Exception:
+            items_list = None
 
     bar = None
     last_bar_update = 0
@@ -382,8 +532,20 @@ def multi_thread(
             ncols=128,
             colour='green',
             bar_format=(
-                '{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}{postfix}]'
+                '{l_bar}{bar}| {n_fmt}/{total_fmt} '
+                '[{elapsed}<{remaining}, {rate_fmt}{postfix}]'
             ),
+        )
+
+    # Capture caller context for error reporting
+    caller_frame_obj = inspect.currentframe()
+    caller_context: traceback.FrameSummary | None = None
+    if caller_frame_obj and caller_frame_obj.f_back:
+        caller_info = inspect.getframeinfo(caller_frame_obj.f_back)
+        caller_context = traceback.FrameSummary(
+            caller_info.filename,
+            caller_info.lineno,
+            caller_info.function,
         )
 
     deadline = time.monotonic() + timeout if timeout is not None else None
@@ -409,10 +571,10 @@ def multi_thread(
                 batch_items = list(arg)
                 if not batch_items:
                     return
-                fut = pool.submit(_run_batch, batch_items, func, fixed_kwargs_map)
+                fut = pool.submit(_run_batch, batch_items, func, fixed_kwargs_map, caller_context)
                 logical_size = len(batch_items)
             else:
-                fut = pool.submit(_worker, arg, func, fixed_kwargs_map)
+                fut = pool.submit(_worker, arg, func, fixed_kwargs_map, caller_context)
                 logical_size = 1
             _attach_metadata(fut, next_logical_idx, logical_size)
             next_logical_idx += logical_size
@@ -453,37 +615,37 @@ def multi_thread(
                 idx, logical_size = _future_meta(fut)
                 try:
                     result = fut.result()
+                    # Record success for each item in the batch
+                    for _ in range(logical_size):
+                        error_stats.record_success()
                 except UserFunctionError as exc:
-                    # User function error - already has clean traceback
-                    logger.error(str(exc))
-
-                    if stop_on_error:
+                    # User function error
+                    if error_handler == 'raise':
+                        sys.stderr.flush()
+                        sys.stdout.flush()
+                        exc.format_rich()
+                        sys.stderr.flush()
                         _cancel_futures(inflight)
-                        # Create a clean exception without infrastructure frames
-                        # by re-creating the traceback
-                        orig_exc = exc.original_exception
-
-                        # Build new traceback from user frames only
-                        tb_str = ''.join(traceback.format_list(exc.user_traceback))
-                        clean_msg = (
-                            f'\nError in "{exc.func_name}" '
-                            f'with input: {exc.input_value!r}\n\n{tb_str}'
-                            f'{type(orig_exc).__name__}: {orig_exc}'
-                        )
-
-                        # Raise a new instance of the original exception type
-                        # with our clean message
-                        new_exc = type(orig_exc)(clean_msg)
-                        # Suppress the "from" chain to avoid showing infrastructure
-                        raise new_exc from None
-
+                        sys.exit(1)
+                    
+                    # Log error with ErrorStats
+                    input_val = None
+                    if items_list is not None and idx < len(items_list):
+                        input_val = items_list[idx]
+                    error_stats.record_error(
+                        idx, exc.original_exception, input_val, func_name
+                    )
                     out_items = [None] * logical_size
                 except Exception as exc:
                     # Other errors (infrastructure, batching, etc.)
-                    if stop_on_error:
+                    if error_handler == 'raise':
                         _cancel_futures(inflight)
                         raise
-                    logger.exception('multi_thread task failed', exc_info=exc)
+                    
+                    input_val = None
+                    if items_list is not None and idx < len(items_list):
+                        input_val = items_list[idx]
+                    error_stats.record_error(idx, exc, input_val, func_name)
                     out_items = [None] * logical_size
                 else:
                     try:
@@ -503,15 +665,13 @@ def multi_thread(
                         bar.update(delta)
                         last_bar_update = completed_items
                         submitted = next_logical_idx
-                        pending = (
+                        pending: int | str = (
                             max(logical_total - submitted, 0)
                             if logical_total is not None
                             else '-'
                         )
-                        postfix = {
-                            'processing': min(len(inflight), workers_val),
-                            'pending': pending,
-                        }
+                        postfix: dict[str, Any] = error_stats.get_postfix_dict()
+                        postfix['pending'] = pending
                         bar.set_postfix(postfix)
 
             try:

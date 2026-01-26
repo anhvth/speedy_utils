@@ -7,6 +7,13 @@ t = time.time()
 
 from .__imports import *
 
+# Install rich traceback for better error messages
+try:
+    from rich.traceback import install
+    install(show_locals=os.getenv('TRACEBACK_SHOW_LOCALS', 'True') == 'True')
+except ImportError:
+    pass  # rich is optional
+
 # Clock module
 from .common.clock import Clock, speedy_timer, timef
 
