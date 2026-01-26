@@ -1,15 +1,21 @@
+import warnings
+import os
+# Suppress Ray FutureWarnings before any imports
+warnings.filterwarnings("ignore", category=FutureWarning, module="ray.*")
+warnings.filterwarnings("ignore", message=".*pynvml.*deprecated.*", category=FutureWarning)
+
+# Set environment variables before Ray is imported anywhere
+os.environ["RAY_ACCEL_ENV_VAR_OVERRI" \
+"DE_ON_ZERO"] = "0"
+os.environ["RAY_DEDUP_LOGS"] = "1"
+os.environ["RAY_LOG_TO_STDERR"] = "0"
+
 from ..__imports import *
+from .progress import create_progress_tracker, ProgressPoller, get_ray_progress_actor
 
 
 SPEEDY_RUNNING_PROCESSES: list[psutil.Process] = []
 _SPEEDY_PROCESSES_LOCK = threading.Lock()
-
-
-# /mnt/data/anhvth8/venvs/Megatron-Bridge-Host/lib/python3.12/site-packages/ray/_private/worker.py:2046: FutureWarning: Tip: In future versions of Ray, Ray will no longer override accelerator visible devices env var if num_gpus=0 or num_gpus=None (default). To enable this behavior and turn off this error message, set RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO=0
-# turn off future warning and verbose task logs
-os.environ["RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO"] = "0"
-os.environ["RAY_DEDUP_LOGS"] = "0"
-os.environ["RAY_LOG_TO_STDERR"] = "0"
 
 def _prune_dead_processes() -> None:
     """Remove dead processes from tracking list."""
@@ -126,29 +132,98 @@ def wrap_dump(func: Callable, cache_dir: Path | None, dump_in_thread: bool = Tru
 RAY_WORKER = None
 
 
-def ensure_ray(workers: int, pbar: tqdm | None = None):
-    """Initialize or reinitialize Ray with a given worker count, log to bar postfix."""
+def ensure_ray(workers: int | None, pbar: tqdm | None = None):
+    """
+    Initialize or reinitialize Ray safely for both local and cluster environments.
+
+    1. Tries to connect to an existing cluster (address='auto') first.
+    2. If no cluster is found, starts a local Ray instance with 'workers' CPUs.
+    """
     import ray as _ray_module
     import logging
 
     global RAY_WORKER
-    # shutdown when worker count changes or if Ray not initialized
-    if not _ray_module.is_initialized() or workers != RAY_WORKER:
-        if _ray_module.is_initialized() and pbar:
-            pbar.set_postfix_str(f'Restarting Ray {workers} workers')
+    requested_workers = workers
+    if workers is None and backend != 'ray':
+        workers = os.cpu_count() or 1
+    
+    # Check environment variable to skip restart logic
+    allow_restart = os.environ.get("RESTART_RAY", "0").lower() in ("1", "true")
+    
+    # Detect if we are in a cluster environment
+    is_cluster_env = "RAY_ADDRESS" in os.environ or os.environ.get("RAY_CLUSTER") == "1"
+
+    # 1. Handle existing session
+    if _ray_module.is_initialized():
+        if not allow_restart:
+            if pbar:
+                pbar.set_postfix_str("Using existing Ray session")
+            return
+        
+        # If we are in a cluster, we generally should NOT call shutdown() 
+        # as it can disrupt the head node connection for other tasks.
+        if is_cluster_env:
+            if pbar:
+                pbar.set_postfix_str("Cluster active: skipping restart to protect connection")
+            return
+
+        # Local restart: only if worker count changed
+        if workers != RAY_WORKER:
+            if pbar:
+                pbar.set_postfix_str(f'Restarting local Ray with {workers} workers')
             _ray_module.shutdown()
-        t0 = time.time()
+        else:
+            return
+
+    # 2. Initialization logic
+    t0 = time.time()
+    
+    # Try to connect to existing cluster FIRST (address="auto")
+    try:
+        if pbar:
+            pbar.set_postfix_str("Searching for Ray cluster...")
+        
+        # MUST NOT pass num_cpus/num_gpus here to avoid ValueError on existing clusters
+        _ray_module.init(
+            address="auto", 
+            ignore_reinit_error=True, 
+            logging_level=logging.ERROR,
+            log_to_driver=False
+        )
+        
+        if pbar:
+            resources = _ray_module.cluster_resources()
+            cpus = resources.get("CPU", 0)
+            pbar.set_postfix_str(f"Connected to Ray Cluster ({int(cpus)} CPUs)")
+            
+    except Exception:
+        # 3. Fallback: Start a local Ray session
+        if pbar:
+            pbar.set_postfix_str(f"No cluster found. Starting local Ray ({workers} CPUs)...")
+            
         _ray_module.init(
             num_cpus=workers,
             ignore_reinit_error=True,
             logging_level=logging.ERROR,
             log_to_driver=False,
         )
-        took = time.time() - t0
-        _track_ray_processes()  # Track Ray worker processes
+        
         if pbar:
-            pbar.set_postfix_str(f'ray.init {workers} took {took:.2f}s')
-        RAY_WORKER = workers
+            took = time.time() - t0
+            pbar.set_postfix_str(f'ray.init local {workers} took {took:.2f}s')
+
+    _track_ray_processes()
+
+    if requested_workers is None:
+        try:
+            resources = _ray_module.cluster_resources()
+            total_cpus = int(resources.get("CPU", 0))
+            if total_cpus > 0:
+                workers = total_cpus
+        except Exception:
+            pass
+
+    RAY_WORKER = workers
 
 def multi_process(
     func: Callable[[Any], Any],
@@ -163,6 +238,8 @@ def multi_process(
     desc: str | None = None,
     shared_kwargs: list[str] | None = None,
     dump_in_thread: bool = True,
+    total_items: int | None = None,
+    poll_interval: float = 0.3,
     **func_kwargs: Any,
 ) -> list[Any]:
     """
@@ -235,7 +312,7 @@ def multi_process(
     if items is None:
         raise ValueError("'items' or 'inputs' must be provided")
 
-    if workers is None:
+    if workers is None and backend != 'ray':
         workers = os.cpu_count() or 1
 
     # build cache dir + wrap func
@@ -264,6 +341,13 @@ def multi_process(
             ensure_ray(workers, pbar)
             shared_refs = {}
             regular_kwargs = {}
+            
+            # Create progress actor for item-level tracking if total_items specified
+            progress_actor = None
+            progress_poller = None
+            if total_items is not None:
+                progress_actor = create_progress_tracker(total_items, desc or "Items")
+                shared_refs['progress_actor'] = progress_actor  # Pass actor handle directly (not via put)
 
             if shared_kwargs:
                 for kw in shared_kwargs:
@@ -283,7 +367,13 @@ def multi_process(
             def _task(x, shared_refs_dict, regular_kwargs_dict):
                 # Dereference shared objects (zero-copy for numpy arrays)
                 import ray as _ray_in_task
-                dereferenced = {k: _ray_in_task.get(v) for k, v in shared_refs_dict.items()}
+                dereferenced = {}
+                for k, v in shared_refs_dict.items():
+                    if k == 'progress_actor':
+                        # Pass actor handle directly (don't dereference)
+                        dereferenced[k] = v
+                    else:
+                        dereferenced[k] = _ray_in_task.get(v)
                 # Merge with regular kwargs
                 all_kwargs = {**dereferenced, **regular_kwargs_dict}
                 return f_wrapped(x, **all_kwargs)
@@ -294,11 +384,28 @@ def multi_process(
 
             results = []
             t_start = time.time()
+            
+            # Start progress poller if using item-level progress
+            if progress_actor is not None:
+                # Update pbar total to show items instead of tasks
+                pbar.total = total_items
+                pbar.refresh()
+                progress_poller = ProgressPoller(progress_actor, pbar, poll_interval)
+                progress_poller.start()
+            
             for r in refs:
                 results.append(_ray_module.get(r))
-                pbar.update(1)
+                if progress_actor is None:
+                    # Only update task-level progress if not using item-level
+                    pbar.update(1)
+            
+            # Stop progress poller
+            if progress_poller is not None:
+                progress_poller.stop()
+                
             t_end = time.time()
-            print(f"Ray processing took {t_end - t_start:.2f}s for {total} items")
+            item_desc = f"{total_items:,} items" if total_items else f"{total} tasks"
+            print(f"Ray processing took {t_end - t_start:.2f}s for {item_desc}")
             return results
 
         # ---- fastcore backend ----
@@ -396,4 +503,6 @@ __all__ = [
     'SPEEDY_RUNNING_PROCESSES',
     'multi_process',
     'cleanup_phantom_workers',
+    'create_progress_tracker',
+    'get_ray_progress_actor',
 ]
