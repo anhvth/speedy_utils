@@ -3,11 +3,57 @@ import argparse
 import itertools
 import multiprocessing  # Import multiprocessing module
 import os
+import re
 import shlex  # To properly escape command line arguments
 import shutil
+import subprocess
 
 
 taskset_path = shutil.which('taskset')
+
+
+def get_existing_tmux_sessions():
+    """Get list of existing tmux session names."""
+    try:
+        result = subprocess.run(
+            ['tmux', 'list-sessions', '-F', '#{session_name}'],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip().split('\n')
+        return []
+    except FileNotFoundError:
+        # tmux not installed
+        return []
+
+
+def get_next_session_name(base_name='mpython'):
+    """Get next available session name.
+
+    If 'mpython' doesn't exist, return 'mpython'.
+    If 'mpython' exists, return 'mpython-1', 'mpython-2', etc.
+    """
+    existing_sessions = get_existing_tmux_sessions()
+
+    if base_name not in existing_sessions:
+        return base_name
+
+    # Find all existing mpython-N sessions
+    pattern = re.compile(rf'^{re.escape(base_name)}-(\d+)$')
+    existing_numbers = []
+
+    for session in existing_sessions:
+        match = pattern.match(session)
+        if match:
+            existing_numbers.append(int(match.group(1)))
+
+    # Find the next available number
+    next_num = 1
+    if existing_numbers:
+        next_num = max(existing_numbers) + 1
+
+    return f'{base_name}-{next_num}'
 
 
 def assert_script(python_path):
@@ -30,10 +76,7 @@ def assert_script(python_path):
 
 def run_in_tmux(commands_to_run, tmux_name, num_windows):
     with open('/tmp/start_multirun_tmux.sh', 'w') as script_file:
-        # first cmd is to kill the session if it exists
-
         script_file.write('#!/bin/bash\n\n')
-        script_file.write(f'tmux kill-session -t {tmux_name}\nsleep .1\n')
         script_file.write(f'tmux new-session -d -s {tmux_name}\n')
         for i, cmd in enumerate(itertools.cycle(commands_to_run)):
             if i >= num_windows:
@@ -99,9 +142,11 @@ def main():
 
         cmds.append(fold_cmd)
 
-    run_in_tmux(cmds, 'mpython', args.total_fold)
+    session_name = get_next_session_name('mpython')
+    run_in_tmux(cmds, session_name, args.total_fold)
     os.chmod('/tmp/start_multirun_tmux.sh', 0o755)  # Make the script executable
     os.system('/tmp/start_multirun_tmux.sh')
+    print(f'Started tmux session: {session_name}')
 
 
 if __name__ == '__main__':
