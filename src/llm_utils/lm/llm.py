@@ -85,6 +85,7 @@ class LLM(
         self.vllm_process: subprocess.Popen | None = None
         self.last_ai_response = None  # Store raw response from client
         self.cache = cache
+        self.api_key = client.api_key if isinstance(client, OpenAI) else 'abc'
 
         # Handle VLLM server startup if vllm_cmd is provided
         if self.vllm_cmd:
@@ -96,7 +97,11 @@ class LLM(
                 client = port
 
         self.client = get_base_client(
-            client, cache=cache, vllm_cmd=self.vllm_cmd, vllm_process=self.vllm_process
+            client,
+            cache=cache,
+            api_key=self.api_key,
+            vllm_cmd=self.vllm_cmd,
+            vllm_process=self.vllm_process,
         )
         # check connection of client
         try:
@@ -435,9 +440,14 @@ class LLM(
             vllm_reuse=vllm_reuse,
             **model_kwargs,
         )
-from typing import Any, Dict, List, Optional, Type, Union
+
+
+from typing import Any
+
 from pydantic import BaseModel
+
 from .llm import LLM, Messages
+
 
 class LLM_NEMOTRON3(LLM):
     """
@@ -447,15 +457,15 @@ class LLM_NEMOTRON3(LLM):
 
     def __init__(
         self,
-        model: str = "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+        model: str = 'nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16',
         thinking_budget: int = 1024,
         enable_thinking: bool = True,
-        **kwargs
+        **kwargs,
     ):
         # Force reasoning_model to True to enable reasoning_content extraction
         kwargs['is_reasoning_model'] = True
         super().__init__(**kwargs)
-        
+
         self.model_kwargs['model'] = model
         self.thinking_budget = thinking_budget
         self.enable_thinking = enable_thinking
@@ -469,56 +479,48 @@ class LLM_NEMOTRON3(LLM):
         self,
         input_data: str | BaseModel | list[dict],
         thinking_budget: Optional[int] = None,
-        **kwargs
+        **kwargs,
     ) -> List[Dict[str, Any]]:
         budget = thinking_budget or self.thinking_budget
-        
+
         if not self.enable_thinking:
             # Simple pass with thinking disabled in template
             return super().__call__(
-                input_data, 
-                chat_template_kwargs={"enable_thinking": False}, 
-                **kwargs
+                input_data, chat_template_kwargs={'enable_thinking': False}, **kwargs
             )
 
         # --- STEP 1: Generate Thinking Trace ---
         # We manually append <think> to force the reasoning MoE layers
         messages = self._prepare_input(input_data)
-        
+
         # We use the raw text completion for the budget phase
         # Stop at the closing tag or budget limit
         thinking_response = self.text_completion(
-            input_data,
-            max_tokens=budget,
-            stop=["</think>"],
-            **kwargs
+            input_data, max_tokens=budget, stop=['</think>'], **kwargs
         )[0]
 
         reasoning_content = thinking_response['parsed']
-        
+
         # Ensure proper tag closing for the second pass
-        if "</think>" not in reasoning_content:
-            reasoning_content = f"{reasoning_content}\n</think>"
-        elif not reasoning_content.endswith("</think>"):
+        if '</think>' not in reasoning_content:
+            reasoning_content = f'{reasoning_content}\n</think>'
+        elif not reasoning_content.endswith('</think>'):
             # Ensure it ends exactly with the tag for continuity
-            reasoning_content = reasoning_content.split("</think>")[0] + "</think>"
+            reasoning_content = reasoning_content.split('</think>')[0] + '</think>'
 
         # --- STEP 2: Generate Final Answer ---
         # Append the thought to the assistant role and continue
         final_messages = messages + [
-            {"role": "assistant", "content": f"<think>\n{reasoning_content}\n"}
+            {'role': 'assistant', 'content': f'<think>\n{reasoning_content}\n'}
         ]
-        
+
         # Use continue_final_message to prevent the model from repeating the header
         results = super().__call__(
-            final_messages,
-            extra_body={"continue_final_message": True},
-            **kwargs
+            final_messages, extra_body={'continue_final_message': True}, **kwargs
         )
 
         # Inject the reasoning back into the result for the UI/API
         for res in results:
             res['reasoning_content'] = reasoning_content
-            
-        return results
 
+        return results
