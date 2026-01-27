@@ -1,12 +1,16 @@
 import llm_utils
 from speedy_utils import multi_process
-
-llm = llm_utils.LLM(client=8666, timeout=3)
+from fastcore.all import call_parse
 
 def f(x):
-    return llm('hello world')
+    y = 1
+    if x%3 == 0:
+        1/0
+    return 
 
 
-# multi_process(f, range(10), backend='mp', error_handler='ignore')
+def test(backend) -> None:
+    multi_process(f, range(1000), backend=backend, error_handler='log')
 
-f(0)
+test('ray')
+test('mp')
