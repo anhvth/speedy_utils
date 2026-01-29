@@ -9,11 +9,12 @@ import shutil
 import subprocess
 import sys
 
+
 try:
     from rich.console import Console, Group
     from rich.panel import Panel
-    from rich.text import Text
     from rich.syntax import Syntax
+    from rich.text import Text
 except ImportError:
     Console = None
     Group = None
@@ -81,7 +82,7 @@ def assert_script(python_path):
         )
         if Console and Panel and Text and Syntax and Group:
             console = Console(stderr=True, force_terminal=True)
-            syntax = Syntax(helper_code, "python", theme="monokai", line_numbers=False)
+            syntax = Syntax(helper_code, 'python', theme='monokai', line_numbers=False)
             console.print()
             console.print(
                 Panel(
@@ -93,29 +94,35 @@ def assert_script(python_path):
                 )
             )
             console.print()
-            console.print("```python")
+            console.print('```python')
             console.print(syntax)
-            console.print("```")
-            console.print("-"*80)
+            console.print('```')
+            console.print('-' * 80)
         else:
             # Fallback to plain text
-            print(f'Warning: MP_ID and MP_TOTAL not found in {python_path}, please add them.', file=sys.stderr)
+            print(
+                f'Warning: MP_ID and MP_TOTAL not found in {python_path}, please add them.',
+                file=sys.stderr,
+            )
             print(f'Example:\n{helper_code}', file=sys.stderr)
 
 
 def run_in_tmux(commands_to_run, tmux_name, num_windows):
     with open('/tmp/start_multirun_tmux.sh', 'w') as script_file:
         script_file.write('#!/bin/bash\n\n')
-        script_file.write(f'tmux new-session -d -s {tmux_name}\n')
+        # Use -n to name the first window explicitly (avoids base-index issues)
+        script_file.write(f'tmux new-session -d -s {tmux_name} -n w0\n')
         for i, cmd in enumerate(itertools.cycle(commands_to_run)):
             if i >= num_windows:
                 break
-            window_name = f'{tmux_name}:{i}'
+            window_name = f'w{i}'
+            target = f'{tmux_name}:{window_name}'
             if i == 0:
-                script_file.write(f"tmux send-keys -t {window_name} '{cmd}' C-m\n")
+                script_file.write(f"tmux send-keys -t {target} '{cmd}' C-m\n")
             else:
-                script_file.write(f'tmux new-window -t {tmux_name}\n')
-                script_file.write(f"tmux send-keys -t {window_name} '{cmd}' C-m\n")
+                # Create window with explicit name, then send keys to it
+                script_file.write(f'tmux new-window -t {tmux_name} -n {window_name}\n')
+                script_file.write(f"tmux send-keys -t {target} '{cmd}' C-m\n")
 
         # Make the script executable
         script_file.write('chmod +x /tmp/start_multirun_tmux.sh\n')
@@ -135,7 +142,7 @@ def main():
     parser = argparse.ArgumentParser(
         description='Process fold arguments',
         epilog=f'Helper code for multi-process sharding:\n{helper_code}',
-        formatter_class=argparse.RawDescriptionHelpFormatter
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         '--total_fold', '-t', default=16, type=int, help='total number of folds'
