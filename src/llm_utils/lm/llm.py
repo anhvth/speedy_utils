@@ -220,7 +220,7 @@ class LLM(
     ) -> list[dict[str, Any]]:
         """
         Generate text and format output as:
-        <think>reasoning</think>\n\n<response>
+        <think>reasoning</think>
         """
         results = self.text_completion(input_data, **runtime_kwargs)
 

@@ -436,6 +436,44 @@ batches = [items[i:i+10] for i in range(0, len(items), 10)]
 results = multi_thread(run_async_tasks, batches, workers=4)
 ```
 
+## Large-Scale Dataset Processing
+
+For processing large HuggingFace datasets or other big data, `multi_process` particularly shines when combined with **data sharding** patterns. See the dedicated **`dataset-processing-multiprocessing`** skill for:
+
+- Distributing datasets across workers via row ranges
+- Worker function architecture (imports, setup, cleanup)
+- Temporary file management during transformation
+- Integration with tokenizers, Megatron, format converters
+- Error resilience and graceful degradation
+- Merging partial results after parallel processing
+
+**Quick Example:**
+```python
+from speedy_utils import multi_process
+from datasets import load_from_disk
+
+def process_shard(args):
+    shard_id, start_idx, end_idx, dataset_path = args
+    ds = load_from_disk(dataset_path)
+    # Process slice [start_idx:end_idx]
+    transformed = [transform(ds[i]) for i in range(start_idx, end_idx)]
+    # Save result to temp location
+    return save_shard(transformed, shard_id)
+
+# Distribute 100k rows across 4 workers
+num_records = 100000
+num_workers = 4
+rows_per_worker = num_records // num_workers
+
+worker_args = [
+    (i, i*rows_per_worker, (i+1)*rows_per_worker, 'path/to/dataset')
+    for i in range(num_workers)
+]
+
+shard_results = multi_process(process_shard, worker_args, workers=num_workers)
+# Merge shard_results to get final dataset
+```
+
 ## References
 
 This skill leverages the `speedy_utils` library's multi-worker implementations:
