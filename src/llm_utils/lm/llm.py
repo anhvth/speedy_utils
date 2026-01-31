@@ -4,11 +4,9 @@
 Simplified LLM Task module for handling language model interactions with structured input/output.
 """
 
-import os
 import subprocess
-from typing import Any, Dict, List, Optional, Type, Union, cast
+from typing import Any, Dict, List, Optional, cast
 
-import requests
 from httpx import Timeout
 from loguru import logger
 from openai import AuthenticationError, BadRequestError, OpenAI, RateLimitError
@@ -28,16 +26,7 @@ from .mixins import (
 )
 from .utils import (
     _extract_port_from_vllm_cmd,
-    _get_port_from_client,
-    _is_lora_path,
-    _is_server_running,
-    _kill_vllm_on_port,
-    _load_lora_adapter,
-    _start_vllm_server,
-    _unload_lora_adapter,
     get_base_client,
-    kill_all_vllm_processes,
-    stop_vllm_process,
 )
 
 
@@ -214,6 +203,46 @@ class LLM(
                 result_dict['reasoning_content'] = choice.message.reasoning_content
 
             results.append(result_dict)
+        return results
+
+    @staticmethod
+    def _strip_think_tags(text: str) -> str:
+        """Remove <think> tags if present, returning only the reasoning body."""
+        cleaned = text.strip()
+        if cleaned.startswith('<think>'):
+            cleaned = cleaned[len('<think>') :].lstrip()
+        if '</think>' in cleaned:
+            cleaned = cleaned.split('</think>', 1)[0].rstrip()
+        return cleaned
+
+    def generate_with_think_prefix(
+        self, input_data: str | BaseModel | list[dict], **runtime_kwargs
+    ) -> list[dict[str, Any]]:
+        """
+        Generate text and format output as:
+        <think>reasoning</think>\n\n<response>
+        """
+        results = self.text_completion(input_data, **runtime_kwargs)
+
+        for result in results:
+            content = result.get('parsed') or ''
+            reasoning = result.get('reasoning_content') or ''
+
+            if not reasoning and str(content).lstrip().startswith('<think>'):
+                formatted = str(content)
+            else:
+                reasoning_body = self._strip_think_tags(str(reasoning))
+                formatted = (
+                    f'<think>\n{reasoning_body}\n</think>\n\n{str(content).lstrip()}'
+                )
+
+            result['parsed'] = formatted
+            messages = result.get('messages')
+            if isinstance(messages, list) and messages:
+                last_msg = messages[-1]
+                if isinstance(last_msg, dict) and last_msg.get('role') == 'assistant':
+                    last_msg['content'] = formatted
+
         return results
 
     @clean_traceback
