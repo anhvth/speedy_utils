@@ -184,11 +184,17 @@ def run_ray_backend(
     results = []
     gate_path_str = str(log_gate_path) if log_gate_path else None
 
+    # Determine if we're doing item-level or task-level tracking
+    use_item_tracking = total_items is not None
+    pbar_total = total_items if use_item_tracking else total
+    pbar_desc = desc if use_item_tracking else desc
+
     with tqdm(
-        total=total,
-        desc=desc,
+        total=pbar_total,
+        desc=pbar_desc,
         disable=not progress,
         file=sys.stdout,
+        unit='items' if use_item_tracking else 'tasks',
     ) as pbar:
         ensure_ray(workers, pbar, ray_metrics_port)
         
@@ -198,8 +204,8 @@ def run_ray_backend(
         # Create progress actor for item-level tracking if total_items specified
         progress_actor = None
         progress_poller = None
-        if total_items is not None:
-            progress_actor = create_progress_tracker(total_items, desc or 'Items')
+        if use_item_tracking:
+            progress_actor = create_progress_tracker(total_items, pbar_desc or 'Items')
             shared_refs['progress_actor'] = progress_actor
 
         if shared_kwargs:
@@ -220,13 +226,24 @@ def run_ray_backend(
         def _task(x, shared_refs_dict, regular_kwargs_dict):
             # Dereference shared objects (zero-copy for numpy arrays)
             import ray as _ray_in_task
+            from .progress import set_progress_context
+            
             gate = Path(gate_path_str) if gate_path_str else None
             dereferenced = {}
+            progress_actor_ref = None
+            
             for k, v in shared_refs_dict.items():
                 if k == 'progress_actor':
-                    dereferenced[k] = v
+                    progress_actor_ref = v
+                    # Don't add progress_actor to kwargs - it's for context only
                 else:
                     dereferenced[k] = _ray_in_task.get(v)
+            
+            # Set progress context for this worker thread
+            # This allows user code to call report_progress() directly
+            if progress_actor_ref is not None:
+                set_progress_context(progress_actor_ref)
+            
             all_kwargs = {**dereferenced, **regular_kwargs_dict}
             return _call_with_log_control(
                 f_wrapped,
@@ -242,9 +259,8 @@ def run_ray_backend(
 
         t_start = time.time()
         
-        if progress_actor is not None:
-            pbar.total = total_items
-            pbar.refresh()
+        # Start progress poller if item-level tracking enabled
+        if use_item_tracking and progress_actor is not None:
             progress_poller = ProgressPoller(progress_actor, pbar, poll_interval)
             progress_poller.start()
         
@@ -268,7 +284,9 @@ def run_ray_backend(
                 )
                 results.append(None)
             
-            if progress_actor is None:
+            # Only update progress bar for task-level tracking
+            # Item-level tracking is handled by progress_poller
+            if not use_item_tracking:
                 pbar.update(1)
             # Update pbar with success/error counts
             postfix = error_stats.get_postfix_dict()

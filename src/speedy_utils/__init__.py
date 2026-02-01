@@ -65,6 +65,8 @@ from .common.utils_error import clean_traceback, handle_exceptions_with_clean_tr
 from .multi_worker.process import multi_process
 from .multi_worker.thread import kill_all_thread, multi_thread
 from .multi_worker.dataset_ray import multi_process_dataset_ray, WorkerResources
+from .multi_worker.dataset_sharding import multi_process_dataset
+from .multi_worker.progress import report_progress
 
 
 __all__ = [
@@ -167,7 +169,9 @@ __all__ = [
     'multi_thread',
     'kill_all_thread',
     'multi_process_dataset_ray',
+    'multi_process_dataset',
     'WorkerResources',
+    'report_progress',
     # Notebook utilities
     'change_dir',
 ]

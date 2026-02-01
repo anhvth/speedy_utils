@@ -4,12 +4,15 @@ Real-time progress tracking for distributed Ray tasks.
 This module provides a ProgressActor that allows workers to report item-level
 progress in real-time, giving users visibility into actual items processed
 rather than just task completion.
+
+Users can simply call report_progress(n) from within their worker functions,
+and speedy_utils will automatically route it to the centralized tracker.
 """
 import time
 import threading
 from typing import Optional, Callable
 
-__all__ = ['ProgressActor', 'create_progress_tracker', 'get_ray_progress_actor']
+__all__ = ['ProgressActor', 'create_progress_tracker', 'get_ray_progress_actor', 'report_progress', 'set_progress_context']
 
 
 def get_ray_progress_actor():
@@ -119,6 +122,73 @@ class ProgressPoller:
         if self._thread:
             self._thread.join(timeout=2.0)
     
+    def _poll_loop(self):
+        """Background loop that polls progress and updates tqdm bar."""
+        while not self._stop_event.is_set():
+            try:
+                stats = self._ray.get(self.progress_actor.get_progress.remote())
+                self.pbar.n = stats["processed"]
+                self.pbar.refresh()
+            except Exception:
+                pass
+            self._stop_event.wait(self.poll_interval)
+        
+        # Final update
+        try:
+            stats = self._ray.get(self.progress_actor.get_progress.remote())
+            self.pbar.n = stats["processed"]
+            self.pbar.refresh()
+        except Exception:
+            pass
+
+
+# Thread-local storage for progress context
+_progress_context = threading.local()
+
+
+def set_progress_context(progress_actor):
+    """
+    Set the progress actor in thread-local storage.
+    
+    This is called automatically by speedy_utils when setting up worker context.
+    Users don't need to call this directly.
+    
+    Args:
+        progress_actor: Ray actor handle for progress tracking
+    """
+    _progress_context.actor = progress_actor
+
+
+def report_progress(n: int = 1):
+    """
+    Report progress to the centralized tracker.
+    
+    This is a simple helper that workers can call to report items processed.
+    Works automatically when called from within multi_process with Ray backend.
+    Safe to call even when no progress tracking is active (no-op).
+    
+    Args:
+        n: Number of items processed
+        
+    Example:
+        def process_data(items):
+            for i, item in enumerate(items):
+                result = expensive_operation(item)
+                
+                # Report progress every 100 items
+                if i % 100 == 0:
+                    report_progress(100)
+            
+            return results
+    """
+    actor = getattr(_progress_context, 'actor', None)
+    if actor is not None:
+        try:
+            import ray
+            ray.get(actor.update.remote(n))
+        except Exception:
+            # Silently ignore progress reporting errors
+            pass
     def _poll_loop(self):
         """Poll the progress actor and update tqdm."""
         while not self._stop_event.is_set():

@@ -26,6 +26,9 @@ DEFAULT_WORKERS = (os.cpu_count() or 4) * 2
 T = TypeVar('T')
 R = TypeVar('R')
 
+if TYPE_CHECKING:
+    from typing import Literal, overload
+
 SPEEDY_RUNNING_THREADS: list[threading.Thread] = []  # cooperative shutdown tracking
 _SPEEDY_THREADS_LOCK = threading.Lock()
 
@@ -342,6 +345,48 @@ def _cancel_futures(inflight: set[Future[Any]]) -> None:
 # ────────────────────────────────────────────────────────────
 # main API
 # ────────────────────────────────────────────────────────────
+if TYPE_CHECKING:
+    @overload
+    def multi_thread(
+        func: Callable[[T], R],
+        inputs: Iterable[T],
+        *,
+        workers: int | None = ...,
+        batch: int = ...,
+        ordered: bool = ...,
+        progress: bool = ...,
+        progress_update: int = ...,
+        prefetch_factor: int = ...,
+        timeout: float | None = ...,
+        stop_on_error: bool | None = ...,
+        error_handler: Literal['raise'] = ...,
+        max_error_files: int = ...,
+        n_proc: int = ...,
+        store_output_pkl_file: str | None = ...,
+        **fixed_kwargs: Any,
+    ) -> list[R]: ...
+
+    @overload
+    def multi_thread(
+        func: Callable[[T], R],
+        inputs: Iterable[T],
+        *,
+        workers: int | None = ...,
+        batch: int = ...,
+        ordered: bool = ...,
+        progress: bool = ...,
+        progress_update: int = ...,
+        prefetch_factor: int = ...,
+        timeout: float | None = ...,
+        stop_on_error: bool | None = ...,
+        error_handler: Literal['ignore', 'log'] = ...,
+        max_error_files: int = ...,
+        n_proc: int = ...,
+        store_output_pkl_file: str | None = ...,
+        **fixed_kwargs: Any,
+    ) -> list[R | None]: ...
+
+
 def multi_thread(
     func: Callable[[T], R],
     inputs: Iterable[T],
