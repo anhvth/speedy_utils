@@ -3,12 +3,19 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 
 from speedy_utils.multi_worker.process import multi_process
+
+try:
+    import ray
+    RAY_AVAILABLE = True
+except ImportError:
+    RAY_AVAILABLE = False
 
 
 def process_with_large_array(x, large_array=None, multiplier=1):
@@ -30,6 +37,7 @@ def process_with_kwargs(x, **kwargs):
     return result
 
 
+@pytest.mark.skipif(not RAY_AVAILABLE, reason="Ray not available")
 def test_shared_kwargs_basic():
     """Test basic shared_kwargs functionality."""
     print('\n=== Test 1: Basic shared_kwargs ===')
@@ -64,6 +72,7 @@ def test_shared_kwargs_basic():
         traceback.print_exc()
 
 
+@pytest.mark.skipif(not RAY_AVAILABLE, reason="Ray not available")
 def test_shared_kwargs_validation():
     """Test validation of shared_kwargs."""
     print('\n=== Test 2: Validation ===')
@@ -111,6 +120,7 @@ def test_shared_kwargs_validation():
         print(f'✅ Correctly raised error: {e}')
 
 
+@pytest.mark.skipif(not RAY_AVAILABLE, reason="Ray not available")
 def test_shared_kwargs_with_var_keyword():
     """Test shared_kwargs with **kwargs functions."""
     print('\n=== Test 3: Functions with **kwargs ===')
@@ -143,6 +153,7 @@ def test_shared_kwargs_with_var_keyword():
         traceback.print_exc()
 
 
+@pytest.mark.skipif(not RAY_AVAILABLE, reason="Ray not available")
 def test_without_shared_kwargs():
     """Test that existing behavior still works without shared_kwargs."""
     print('\n=== Test 4: Backward compatibility (no shared_kwargs) ===')

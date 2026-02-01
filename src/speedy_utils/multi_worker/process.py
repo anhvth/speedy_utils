@@ -46,6 +46,9 @@ except ImportError:
 # Re-export progress utilities
 from .progress import create_progress_tracker, get_ray_progress_actor
 
+# Re-export tqdm for backward compatibility
+from tqdm import tqdm
+
 
 __all__ = [
     'SPEEDY_RUNNING_PROCESSES',
@@ -57,6 +60,7 @@ __all__ = [
     'get_ray_progress_actor',
     'ensure_ray',
     'RAY_WORKER',
+    'tqdm',
 ]
 
 

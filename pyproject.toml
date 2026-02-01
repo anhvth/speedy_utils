@@ -139,3 +139,11 @@ extend-select = ["F"] # keep all pyflakes rules
 quote-style = "double"
 line-ending = "lf"
 docstring-code-format = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+# Exclude debug and example directories from test discovery
+norecursedirs = ["debug", "examples", "experiments", "notebooks", "scripts", ".git", "__pycache__"]

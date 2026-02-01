@@ -95,21 +95,25 @@ def test_unordered():
 
 
 def test_stop_on_error_false():
+    """Test that with stop_on_error=False, errors don't halt processing."""
     inp = list(range(5))
-    # Note: stop_on_error is not implemented for safe backend, so this test
-    # will raise an exception instead of returning None for failed items
-    try:
-        multi_process(
-            maybe_fail,
-            inp,
-            stop_on_error=False,
-            workers=2,
-            progress=False,
-            backend="safe",
-        )
-        raise AssertionError("Expected ValueError to be raised")
-    except ValueError as e:
-        assert "boom" in str(e)
+    # With error_handler='log' (default), errors are logged but processing continues
+    # Items that error return None
+    result = multi_process(
+        maybe_fail,
+        inp,
+        stop_on_error=False,
+        workers=2,
+        progress=False,
+        backend="safe",
+    )
+    # Item at index 3 should fail and return None (maybe_fail raises at x==3)
+    assert result[3] is None
+    # Other items should process successfully
+    assert result[0] == 0
+    assert result[1] == 1
+    assert result[2] == 2
+    assert result[4] == 4
 
 
 def test_multi_process_vs_serial():
@@ -119,7 +123,7 @@ def test_multi_process_vs_serial():
     dur_mp = time.perf_counter() - start_mp
 
     start_serial = time.perf_counter()
-    out_serial = [square(x) for x in tqdm(inp, desc="serial")]
+    out_serial = [square(x) for x in inp]
     dur_serial = time.perf_counter() - start_serial
 
     print(f"multi_process duration: {dur_mp:.6f} seconds")

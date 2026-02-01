@@ -6,11 +6,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 
+import pytest
 from typing import Any, Protocol
 
-from openai import AsyncOpenAI, OpenAI
+try:
+    from openai import AsyncOpenAI, OpenAI
+    from llm_utils.lm.openai_memoize import MAsyncOpenAI, MOpenAI
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
 
-from llm_utils.lm.openai_memoize import MAsyncOpenAI, MOpenAI
 from speedy_utils.common.utils_cache import memoize
 
 
@@ -41,6 +46,7 @@ def test_method_memoize_typing():
     assert isinstance(result, int)
 
 
+@pytest.mark.skipif(not OPENAI_AVAILABLE, reason="OpenAI not available")
 def test_openai_memoize_no_cast():
     """Test that MOpenAI works without needing cast."""
 
@@ -58,6 +64,7 @@ def test_openai_memoize_no_cast():
         raise
 
 
+@pytest.mark.skipif(not OPENAI_AVAILABLE, reason="OpenAI not available")
 def test_async_openai_memoize_no_cast():
     """Test that MAsyncOpenAI works without needing cast."""
 

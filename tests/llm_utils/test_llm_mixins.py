@@ -3,10 +3,21 @@
 import unittest
 from unittest.mock import MagicMock, Mock, patch
 
+import pytest
 from pydantic import BaseModel
 
-from llm_utils.lm.llm import LLM
-from llm_utils.lm.mixins import TemperatureRangeMixin, TwoStepPydanticMixin
+try:
+    from llm_utils.lm.llm import LLM
+    from llm_utils.lm.mixins import TemperatureRangeMixin, TwoStepPydanticMixin
+    LLM_AVAILABLE = True
+except ImportError:
+    LLM_AVAILABLE = False
+    LLM = None
+    TemperatureRangeMixin = None
+    TwoStepPydanticMixin = None
+
+
+pytestmark = pytest.mark.skipif(not LLM_AVAILABLE, reason="LLM not available")
 
 
 class OutputModel(BaseModel):

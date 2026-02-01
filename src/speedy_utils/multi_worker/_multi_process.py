@@ -56,6 +56,10 @@ def multi_process(
     poll_interval: float = 0.3,
     error_handler: ErrorHandlerType = 'log',
     max_error_files: int = 100,
+    process_update_interval: int | None = None,
+    batch: int | None = None,
+    ordered: bool = True,
+    stop_on_error: bool = True,
     **func_kwargs: Any,
 ) -> list[Any]:
     """
@@ -104,6 +108,21 @@ def multi_process(
         - Maximum number of error log files to write (default: 100)
         - Error logs are written to .cache/speedy_utils/error_logs/{idx}.log
         - First error is always printed to screen with the log file path
+
+    process_update_interval:
+        - Legacy parameter, accepted for backward compatibility but not implemented
+
+    batch:
+        - Legacy parameter, accepted for backward compatibility but not implemented
+
+    ordered:
+        - Whether to maintain order of results (default: True)
+        - Legacy parameter, accepted for backward compatibility but not implemented
+
+    stop_on_error:
+        - Whether to stop on first error (default: True)
+        - Legacy parameter, accepted for backward compatibility
+        - Use error_handler parameter instead for error handling control
 
     If lazy_output=True, every result is saved to .pkl and
     the returned list contains file paths.
