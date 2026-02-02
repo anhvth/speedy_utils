@@ -1,3 +1,4 @@
+from llm_utils.llm_ray import LLMRay
 from llm_utils.lm import (
     LLM,
     AsyncLLMTask,
@@ -12,7 +13,6 @@ from llm_utils.lm import (
 from llm_utils.lm.base_prompt_builder import BasePromptBuilder
 from llm_utils.lm.lm_base import get_model_name
 from llm_utils.lm.openai_memoize import MOpenAI
-from llm_utils.llm_ray import LLMRay
 from llm_utils.vector_cache import VectorCache
 
 
@@ -37,7 +37,6 @@ from llm_utils.chat_format import (
     format_msgs,
     get_conversation_one_turn,
     show_chat,
-    show_chat_v2,
     show_string_diff,
     transform_messages,
     transform_messages_to_chatml,
@@ -54,7 +53,6 @@ __all__ = [
     "build_chatml_input",
     "format_msgs",
     "display_chat_messages_as_html",
-    "show_chat_v2",
     "AsyncLM",
     "AsyncLLMTask",
     "LLM",

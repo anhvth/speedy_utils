@@ -13,8 +13,8 @@ from openai import AuthenticationError, BadRequestError, OpenAI, RateLimitError
 from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
 
-from speedy_utils.common.utils_io import jdumps
 from speedy_utils import clean_traceback
+from speedy_utils.common.utils_io import jdumps
 
 from .base_prompt_builder import BasePromptBuilder
 from .mixins import (
@@ -189,18 +189,23 @@ class LLM(
 
         results: list[dict[str, Any]] = []
         for choice in completion.choices:
+            assistant_message = [{'role': 'assistant', 'content': choice.message.content}]
+            try:
+                reasoning_content = choice.message.reasoning
+            except AttributeError:
+                reasoning_content = None
+            if reasoning_content:
+                assistant_message[0]['reasoning_content'] = reasoning_content
+
             choice_messages = cast(
                 Messages,
-                messages + [{'role': 'assistant', 'content': choice.message.content}],
+                messages + assistant_message,
             )
             result_dict = {
                 'parsed': choice.message.content,
                 'messages': choice_messages,
             }
 
-            # Add reasoning content if this is a reasoning model
-            if self.is_reasoning_model and hasattr(choice.message, 'reasoning_content'):
-                result_dict['reasoning_content'] = choice.message.reasoning_content
 
             results.append(result_dict)
         return results
@@ -394,12 +399,12 @@ class LLM(
     ) -> list[dict[str, Any]]:
         """Inspect the message history of a specific response choice."""
         if hasattr(self, '_last_conversations'):
-            from llm_utils import show_chat_v2
+            from llm_utils import show_chat
 
             conv = self._last_conversations[idx]
             if k_last_messages > 0:
                 conv = conv[-k_last_messages:]
-            return show_chat_v2(conv)
+            return show_chat(conv)
         raise ValueError('No message history available. Make a call first.')
 
     def __inner_call__(

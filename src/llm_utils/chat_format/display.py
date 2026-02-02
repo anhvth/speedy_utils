@@ -2,248 +2,279 @@ from __future__ import annotations
 
 import json
 from difflib import SequenceMatcher
-from typing import Any, Optional
+from typing import Any
 
 from IPython.display import HTML, display
 
 
 def _preprocess_as_json(content: str) -> str:
-    """
-    Preprocess content as JSON with proper formatting and syntax highlighting.
-    """
+    """Preprocess content as JSON with proper formatting."""
     try:
-        # Try to parse and reformat JSON
         parsed = json.loads(content)
         return json.dumps(parsed, indent=2, ensure_ascii=False)
     except (json.JSONDecodeError, TypeError):
-        # If not valid JSON, return as-is
         return content
 
 
 def _preprocess_as_markdown(content: str) -> str:
-    """
-    Preprocess content as markdown with proper formatting.
-    """
-    # Basic markdown preprocessing - convert common patterns
-    lines = content.split("\n")
+    """Preprocess content as markdown with proper formatting."""
+    lines = content.split('\n')
     processed_lines = []
 
     for line in lines:
         # Convert **bold** to span with bold styling
-        while "**" in line:
-            first_pos = line.find("**")
-            if first_pos != -1:
-                second_pos = line.find("**", first_pos + 2)
-                if second_pos != -1:
-                    before = line[:first_pos]
-                    bold_text = line[first_pos + 2 : second_pos]
-                    after = line[second_pos + 2 :]
-                    line = f'{before}<span style="font-weight: bold;">{bold_text}</span>{after}'
-                else:
-                    break
-            else:
+        while '**' in line:
+            first_pos = line.find('**')
+            if first_pos == -1:
                 break
+            second_pos = line.find('**', first_pos + 2)
+            if second_pos == -1:
+                break
+            before = line[:first_pos]
+            bold_text = line[first_pos + 2 : second_pos]
+            after = line[second_pos + 2 :]
+            line = f'{before}<span style="font-weight: bold;">{bold_text}</span>{after}'
 
         # Convert *italic* to span with italic styling
-        while "*" in line and line.count("*") >= 2:
-            first_pos = line.find("*")
-            if first_pos != -1:
-                second_pos = line.find("*", first_pos + 1)
-                if second_pos != -1:
-                    before = line[:first_pos]
-                    italic_text = line[first_pos + 1 : second_pos]
-                    after = line[second_pos + 1 :]
-                    line = f'{before}<span style="font-style: italic;">{italic_text}</span>{after}'
-                else:
-                    break
-            else:
+        while '*' in line and line.count('*') >= 2:
+            first_pos = line.find('*')
+            if first_pos == -1:
                 break
+            second_pos = line.find('*', first_pos + 1)
+            if second_pos == -1:
+                break
+            before = line[:first_pos]
+            italic_text = line[first_pos + 1 : second_pos]
+            after = line[second_pos + 1 :]
+            line = (
+                f'{before}<span style="font-style: italic;">{italic_text}</span>{after}'
+            )
 
         # Convert # headers to bold headers
-        if line.strip().startswith("#"):
-            level = len(line) - len(line.lstrip("#"))
-            header_text = line.lstrip("# ").strip()
+        if line.strip().startswith('#'):
+            level = len(line) - len(line.lstrip('#'))
+            header_text = line.lstrip('# ').strip()
             line = f'<span style="font-weight: bold; font-size: 1.{min(4, level)}em;">{header_text}</span>'
 
         processed_lines.append(line)
 
-    return "\n".join(processed_lines)
+    return '\n'.join(processed_lines)
+
+
+def _truncate_text(text: str, max_length: int, head_ratio: float = 0.3) -> str:
+    """
+    Truncate text if it exceeds max_length, showing head and tail with skip indicator.
+
+    Args:
+        text: Text to truncate
+        max_length: Maximum length before truncation
+        head_ratio: Ratio of max_length to show at the head (default 0.3)
+
+    Returns:
+        Original text if within limit, otherwise truncated with [SKIP n chars] indicator
+    """
+    if len(text) <= max_length:
+        return text
+
+    head_len = int(max_length * head_ratio)
+    tail_len = max_length - head_len
+    skip_len = len(text) - head_len - tail_len
+
+    return f'{text[:head_len]}\n...[SKIP {skip_len} chars]...\n{text[-tail_len:]}'
+
+
+def _format_reasoning_content(
+    reasoning: str, max_reasoning_length: int | None = None
+) -> str:
+    """
+    Format reasoning content with <think> tags.
+
+    Args:
+        reasoning: The reasoning content
+        max_reasoning_length: Max length before truncation (None = no truncation)
+
+    Returns:
+        Formatted reasoning with <think> tags
+    """
+    if max_reasoning_length is not None:
+        reasoning = _truncate_text(reasoning, max_reasoning_length)
+    return f'<think>\n{reasoning}\n</think>'
+
+
+def _escape_html(content: str) -> str:
+    """Escape HTML special characters and convert whitespace for display."""
+    return (
+        content.replace('&', '&amp;')
+        .replace('<', '&lt;')
+        .replace('>', '&gt;')
+        .replace('\n', '<br>')
+        .replace('\t', '&nbsp;&nbsp;&nbsp;&nbsp;')
+        .replace('  ', '&nbsp;&nbsp;')
+    )
+
+
+def _is_notebook() -> bool:
+    """Detect if running in a notebook environment."""
+    try:
+        from IPython.core.getipython import get_ipython
+
+        ipython = get_ipython()
+        return ipython is not None and 'IPKernelApp' in ipython.config
+    except (ImportError, AttributeError):
+        return False
+
+
+# Color configurations
+ROLE_COLORS_HTML = {
+    'system': 'red',
+    'user': 'darkorange',
+    'assistant': 'green',
+}
+
+ROLE_COLORS_TERMINAL = {
+    'system': '\033[91m',  # Red
+    'user': '\033[38;5;208m',  # Orange
+    'assistant': '\033[92m',  # Green
+}
+
+ROLE_LABELS = {
+    'system': 'System Instruction:',
+    'user': 'User:',
+    'assistant': 'Assistant:',
+}
+
+TERMINAL_RESET = '\033[0m'
+TERMINAL_BOLD = '\033[1m'
+TERMINAL_GRAY = '\033[90m'
+TERMINAL_DIM = '\033[2m'  # Dim text for reasoning
+
+# HTML colors
+HTML_REASONING_COLOR = '#AAAAAA'  # Lighter gray for better readability
+
+
+def _build_assistant_content_parts(
+    msg: dict[str, Any], max_reasoning_length: int | None
+) -> tuple[str | None, str]:
+    """
+    Build display content parts for assistant message.
+
+    Returns:
+        Tuple of (reasoning_formatted, answer_content)
+        reasoning_formatted is None if no reasoning present
+    """
+    content = msg.get('content', '')
+    reasoning = msg.get('reasoning_content')
+
+    if reasoning:
+        formatted_reasoning = _format_reasoning_content(reasoning, max_reasoning_length)
+        return formatted_reasoning, content
+
+    return None, content
+
+
+def _show_chat_html(
+    messages: list[dict[str, Any]], max_reasoning_length: int | None
+) -> None:
+    """Display chat messages as HTML in notebook."""
+    html_parts = [
+        "<div style='font-family:monospace; line-height:1.6em; white-space:pre-wrap;'>"
+    ]
+    separator = "<div style='color:#888; margin:0.5em 0;'>───────────────────────────────────────────────────</div>"
+
+    for i, msg in enumerate(messages):
+        role = msg.get('role', 'unknown').lower()
+        color = ROLE_COLORS_HTML.get(role, 'black')
+        label = ROLE_LABELS.get(role, f'{role.capitalize()}:')
+
+        if role == 'assistant':
+            reasoning, answer = _build_assistant_content_parts(
+                msg, max_reasoning_length
+            )
+            html_parts.append(
+                f"<div><strong style='color:{color}'>{label}</strong><br>"
+            )
+            if reasoning:
+                escaped_reasoning = _escape_html(reasoning)
+                html_parts.append(
+                    f"<span style='color:{HTML_REASONING_COLOR}'>{escaped_reasoning}</span><br><br>"
+                )
+            if answer:
+                escaped_answer = _escape_html(answer)
+                html_parts.append(
+                    f"<span style='color:{color}'>{escaped_answer}</span>"
+                )
+            html_parts.append('</div>')
+        else:
+            content = msg.get('content', '')
+            escaped_content = _escape_html(content)
+            html_parts.append(
+                f"<div style='color:{color}'><strong>{label}</strong><br>{escaped_content}</div>"
+            )
+
+        if i < len(messages) - 1:
+            html_parts.append(separator)
+
+    html_parts.append('</div>')
+    display(HTML(''.join(html_parts)))
+
+
+def _show_chat_terminal(
+    messages: list[dict[str, Any]], max_reasoning_length: int | None
+) -> None:
+    """Display chat messages with ANSI colors in terminal."""
+    separator = f'{TERMINAL_GRAY}─────────────────────────────────────────────────────────{TERMINAL_RESET}'
+
+    for i, msg in enumerate(messages):
+        role = msg.get('role', 'unknown').lower()
+        color = ROLE_COLORS_TERMINAL.get(role, '')
+        label = ROLE_LABELS.get(role, f'{role.capitalize()}:')
+
+        print(f'{color}{TERMINAL_BOLD}{label}{TERMINAL_RESET}')
+
+        if role == 'assistant':
+            reasoning, answer = _build_assistant_content_parts(
+                msg, max_reasoning_length
+            )
+            if reasoning:
+                # Use lighter gray without dim for better readability
+                print(f'\033[38;5;246m{reasoning}{TERMINAL_RESET}')
+                if answer:
+                    print()  # Blank line between reasoning and answer
+            if answer:
+                print(f'{color}{answer}{TERMINAL_RESET}')
+        else:
+            content = msg.get('content', '')
+            print(f'{color}{content}{TERMINAL_RESET}')
+
+        if i < len(messages) - 1:
+            print(separator)
 
 
 def show_chat(
-    msgs: Any,
-    return_html: bool = False,
-    file: str = "/tmp/conversation.html",
-    theme: str = "default",
-    as_markdown: bool = False,
-    as_json: bool = False,
-) -> str | None:
+    messages: list[dict[str, Any]], max_reasoning_length: int | None = 2000
+) -> None:
     """
-    Display chat messages as HTML.
+    Display chat messages with colored formatting.
+
+    Automatically detects notebook vs terminal environment and formats accordingly.
+    Handles reasoning_content in assistant messages, formatting it with <think> tags.
 
     Args:
-        msgs: Chat messages in various formats
-        return_html: If True, return HTML string instead of displaying
-        file: Path to save HTML file
-        theme: Color theme ('default', 'light', 'dark')
-        as_markdown: If True, preprocess content as markdown
-        as_json: If True, preprocess content as JSON
+        messages: List of message dicts with 'role', 'content', and optionally 'reasoning_content'
+        max_reasoning_length: Max chars for reasoning before truncation (None = no limit)
+
+    Example:
+        >>> messages = [
+        ...     {"role": "system", "content": "You are helpful."},
+        ...     {"role": "user", "content": "Hello!"},
+        ...     {"role": "assistant", "content": "Hi!", "reasoning_content": "User greeted me..."},
+        ... ]
+        >>> show_chat(messages)
     """
-    if isinstance(msgs, dict) and "messages" in msgs:
-        msgs = msgs["messages"]
-    assert isinstance(msgs, list) and all(
-        isinstance(msg, dict) and "role" in msg and "content" in msg for msg in msgs
-    ), "The input format is not recognized. Please specify the input format."
-
-    if isinstance(msgs[-1], dict) and "choices" in msgs[-1]:
-        message = msgs[-1]["choices"][0]["message"]
-        reasoning_content = message.get("reasoning_content")
-        content = message.get("content", "")
-        if reasoning_content:
-            content = reasoning_content + "\n" + content
-        msgs[-1] = {
-            "role": message["role"],
-            "content": content,
-        }
-
-    themes: dict[str, dict[str, dict[str, str]]] = {
-        "default": {
-            "system": {"background": "#ffaaaa", "text": "#222222"},  # More red
-            "user": {"background": "#f8c57e", "text": "#222222"},  # More orange
-            "assistant": {"background": "#9dfebd", "text": "#222222"},  # More green
-            "function": {"background": "#eafde7", "text": "#222222"},
-            "tool": {"background": "#fde7fa", "text": "#222222"},
-            "default": {"background": "#ffffff", "text": "#222222"},
-        },
-        "light": {
-            "system": {"background": "#ff6666", "text": "#000000"},  # More red
-            "user": {"background": "#ffd580", "text": "#000000"},  # More orange
-            "assistant": {"background": "#80ffb3", "text": "#000000"},  # More green
-            "function": {"background": "#AFFFFF", "text": "#000000"},
-            "tool": {"background": "#FFAAFF", "text": "#000000"},
-            "default": {"background": "#FFFFFF", "text": "#000000"},
-        },
-        "dark": {
-            "system": {"background": "#b22222", "text": "#fffbe7"},  # More red
-            "user": {"background": "#ff8800", "text": "#18181b"},  # More orange
-            "assistant": {"background": "#22c55e", "text": "#e0ffe0"},  # More green
-            "function": {"background": "#134e4a", "text": "#e0fff7"},
-            "tool": {"background": "#701a75", "text": "#ffe0fa"},
-            "default": {"background": "#18181b", "text": "#f4f4f5"},
-        },
-    }
-
-    color_scheme = themes.get(theme, themes["default"])
-
-    conversation_html = ""
-    for i, message in enumerate(msgs):
-        role = message["role"]
-        content = message.get("content", "")
-        if not content:
-            content = ""
-        tool_calls = message.get("tool_calls")
-        if not content and tool_calls:
-            for tool_call in tool_calls:
-                tool_call = tool_call["function"]
-                name = tool_call["name"]
-                args = tool_call["arguments"]
-                content += f"Tool: {name}\nArguments: {args}"
-
-        # Preprocess content based on format options
-        if as_json:
-            content = _preprocess_as_json(content)
-        elif as_markdown:
-            content = _preprocess_as_markdown(content)
-
-        # Handle HTML escaping differently for markdown vs regular content
-        if as_markdown:
-            # For markdown, preserve HTML tags but escape other characters carefully
-            content = content.replace("\n", "<br>")
-            content = content.replace("\t", "&nbsp;&nbsp;&nbsp;&nbsp;")
-            content = content.replace("  ", "&nbsp;&nbsp;")
-            # Don't escape < and > for markdown since we want to preserve our span tags
-        else:
-            # Regular escaping for non-markdown content
-            content = content.replace("\n", "<br>")
-            content = content.replace("\t", "&nbsp;&nbsp;&nbsp;&nbsp;")
-            content = content.replace("  ", "&nbsp;&nbsp;")
-            content = (
-                content.replace("<br>", "TEMP_BR")
-                .replace("<", "&lt;")
-                .replace(">", "&gt;")
-                .replace("TEMP_BR", "<br>")
-            )
-        if role in color_scheme:
-            background_color = color_scheme[role]["background"]
-            text_color = color_scheme[role]["text"]
-        else:
-            background_color = color_scheme["default"]["background"]
-            text_color = color_scheme["default"]["text"]
-
-        # Choose container based on whether we have markdown formatting
-        content_container = "div" if as_markdown else "pre"
-        container_style = 'style="white-space: pre-wrap;"' if as_markdown else ""
-
-        if role == "system":
-            conversation_html += (
-                f'<div style="background-color: {background_color}; color: {text_color}; padding: 10px; margin-bottom: 10px;">'
-                f'<strong>System:</strong><br><{content_container} id="system-{i}" {container_style}>{content}</{content_container}></div>'
-            )
-        elif role == "user":
-            conversation_html += (
-                f'<div style="background-color: {background_color}; color: {text_color}; padding: 10px; margin-bottom: 10px;">'
-                f'<strong>User:</strong><br><{content_container} id="user-{i}" {container_style}>{content}</{content_container}></div>'
-            )
-        elif role == "assistant":
-            conversation_html += (
-                f'<div style="background-color: {background_color}; color: {text_color}; padding: 10px; margin-bottom: 10px;">'
-                f'<strong>Assistant:</strong><br><{content_container} id="assistant-{i}" {container_style}>{content}</{content_container}></div>'
-            )
-        elif role == "function":
-            conversation_html += (
-                f'<div style="background-color: {background_color}; color: {text_color}; padding: 10px; margin-bottom: 10px;">'
-                f'<strong>Function:</strong><br><{content_container} id="function-{i}" {container_style}>{content}</{content_container}></div>'
-            )
-        else:
-            conversation_html += (
-                f'<div style="background-color: {background_color}; color: {text_color}; padding: 10px; margin-bottom: 10px;">'
-                f'<strong>{role}:</strong><br><{content_container} id="{role}-{i}" {container_style}>{content}</{content_container}><br>'
-                f"<button onclick=\"copyContent('{role}-{i}')\">Copy</button></div>"
-            )
-    html: str = f"""
-    <html>
-    <head>
-        <style>
-            pre {{
-                white-space: pre-wrap;
-            }}
-        </style>
-    </head>
-    <body>
-        {conversation_html}
-        <script>
-            function copyContent(elementId) {{
-                var element = document.getElementById(elementId);
-                var text = element.innerText;
-                navigator.clipboard.writeText(text)
-                    .then(function() {{
-                        alert("Content copied to clipboard!");
-                    }})
-                    .catch(function(error) {{
-                        console.error("Error copying content: ", error);
-                    }});
-            }}
-        </script>
-    </body>
-    </html>
-    """
-    if file:
-        with open(file, "w") as f:
-            f.write(html)
-    if return_html:
-        return html
-    display(HTML(html))
-    return None
+    if _is_notebook():
+        _show_chat_html(messages, max_reasoning_length)
+    else:
+        _show_chat_terminal(messages, max_reasoning_length)
 
 
 def get_conversation_one_turn(
@@ -251,204 +282,92 @@ def get_conversation_one_turn(
     user_msg: str | None = None,
     assistant_msg: str | None = None,
     assistant_prefix: str | None = None,
-    return_format: str = "chatml",
+    return_format: str = 'chatml',
 ) -> Any:
-    """
-    Build a one-turn conversation.
-    """
+    """Build a one-turn conversation."""
     messages: list[dict[str, str]] = []
+
     if system_msg is not None:
-        messages.append({"role": "system", "content": system_msg})
+        messages.append({'role': 'system', 'content': system_msg})
     if user_msg is not None:
-        messages.append({"role": "user", "content": user_msg})
+        messages.append({'role': 'user', 'content': user_msg})
     if assistant_msg is not None:
-        messages.append({"role": "assistant", "content": assistant_msg})
+        messages.append({'role': 'assistant', 'content': assistant_msg})
+
     if assistant_prefix is not None:
-        assert (
-            return_format != "chatml"
-        ), 'Change return_format to "text" if you want to use assistant_prefix'
-        assert messages[-1]["role"] == "user"
+        if return_format == 'chatml':
+            raise ValueError('Change return_format to "text" to use assistant_prefix')
+        if not messages or messages[-1]['role'] != 'user':
+            raise ValueError(
+                'Last message must be from user when using assistant_prefix'
+            )
+
         from .transform import transform_messages
 
-        msg = transform_messages(messages, "chatml", "text", add_generation_prompt=True)
-        if not isinstance(msg, str):
-            msg = str(msg)
-        msg += assistant_prefix
-        return msg
-    assert return_format in ["chatml"]
+        msg = transform_messages(messages, 'chatml', 'text', add_generation_prompt=True)
+        return str(msg) + assistant_prefix
+
+    if return_format != 'chatml':
+        raise ValueError(f'Unsupported return_format: {return_format}')
+
     return messages
 
 
 def highlight_diff_chars(text1: str, text2: str) -> str:
-    """
-    Return a string with deletions in red and additions in green.
-    """
+    """Return a string with deletions in red and additions in green."""
     matcher = SequenceMatcher(None, text1, text2)
-    html: list[str] = []
+    html_parts: list[str] = []
+
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-        if tag == "equal":
-            html.append(text1[i1:i2])
-        elif tag == "replace":
+        if tag == 'equal':
+            html_parts.append(text1[i1:i2])
+        elif tag == 'replace':
             if i1 != i2:
-                html.append(
+                html_parts.append(
                     f'<span style="background-color:#ffd6d6; color:#b20000;">{text1[i1:i2]}</span>'
                 )
             if j1 != j2:
-                html.append(
+                html_parts.append(
                     f'<span style="background-color:#d6ffd6; color:#006600;">{text2[j1:j2]}</span>'
                 )
-        elif tag == "delete":
-            html.append(
+        elif tag == 'delete':
+            html_parts.append(
                 f'<span style="background-color:#ffd6d6; color:#b20000;">{text1[i1:i2]}</span>'
             )
-        elif tag == "insert":
-            html.append(
+        elif tag == 'insert':
+            html_parts.append(
                 f'<span style="background-color:#d6ffd6; color:#006600;">{text2[j1:j2]}</span>'
             )
-    return "".join(html)
+
+    return ''.join(html_parts)
 
 
 def show_string_diff(old: str, new: str) -> None:
-    """
-    Display a one-line visual diff between two strings (old -> new).
-    """
-    html1 = highlight_diff_chars(old, new)
-    display(HTML(html1))
+    """Display a visual diff between two strings (old -> new)."""
+    display(HTML(highlight_diff_chars(old, new)))
 
 
-def show_chat_v2(messages: list[dict[str, str]]):
-    """
-    Print only content of messages in different colors:
-    system -> red, user -> orange, assistant -> green.
-    Automatically detects notebook environment and uses appropriate display.
-    """
-    # Detect if running in a notebook environment
-    try:
-        from IPython.core.getipython import get_ipython
-
-        ipython = get_ipython()
-        is_notebook = ipython is not None and "IPKernelApp" in ipython.config
-    except (ImportError, AttributeError):
-        is_notebook = False
-
-    if is_notebook:
-        # Use HTML display in notebook
-        from IPython.display import HTML, display
-
-        role_colors = {
-            "system": "red",
-            "user": "darkorange",
-            "assistant": "green",
-        }
-
-        role_labels = {
-            "system": "System Instruction:",
-            "user": "User:",
-            "assistant": "Assistant:",
-        }
-
-        html = "<div style='font-family:monospace; line-height:1.6em; white-space:pre-wrap;'>"
-        for i, msg in enumerate(messages):
-            role = msg.get("role", "unknown").lower()
-            content = msg.get("content", "")
-            # Escape HTML characters
-            content = (
-                content.replace("&", "&amp;")
-                .replace("<", "&lt;")
-                .replace(">", "&gt;")
-                .replace("\n", "<br>")
-                .replace("\t", "&nbsp;&nbsp;&nbsp;&nbsp;")
-                .replace("  ", "&nbsp;&nbsp;")
-            )
-            color = role_colors.get(role, "black")
-            label = role_labels.get(role, f"{role.capitalize()}:")
-            html += f"<div style='color:{color}'><strong>{label}</strong><br>{content}</div>"
-            # Add separator except after last message
-            if i < len(messages) - 1:
-                html += "<div style='color:#888; margin:0.5em 0;'>───────────────────────────────────────────────────</div>"
-        html += "</div>"
-
-        display(HTML(html))
-    else:
-        # Use normal terminal printing with ANSI colors
-        role_colors = {
-            "system": "\033[91m",  # Red
-            "user": "\033[38;5;208m",  # Orange
-            "assistant": "\033[92m",  # Green
-        }
-        reset = "\033[0m"
-        separator_color = "\033[90m"  # Gray
-        bold = "\033[1m"
-
-        role_labels = {
-            "system": "System Instruction:",
-            "user": "User:",
-            "assistant": "Assistant:",
-        }
-
-        for i, msg in enumerate(messages):
-            role = msg.get("role", "unknown").lower()
-            content = msg.get("content", "")
-            color = role_colors.get(role, "")
-            label = role_labels.get(role, f"{role.capitalize()}:")
-            print(f"{color}{bold}{label}{reset}")
-            print(f"{color}{content}{reset}")
-            # Add separator except after last message
-            if i < len(messages) - 1:
-                print(
-                    f"{separator_color}─────────────────────────────────────────────────────────{reset}"
-                )
-
-
-def display_conversations(data1: Any, data2: Any, theme: str = "light") -> None:
-    """
-    Display two conversations side by side.
-    """
+def display_conversations(data1: Any, data2: Any) -> None:
+    """Display two conversations side by side. Deprecated."""
     import warnings
 
     warnings.warn(
-        "display_conversations will be deprecated in the next version.",
+        'display_conversations is deprecated and will be removed.',
         DeprecationWarning,
         stacklevel=2,
     )
-    html1 = show_chat(data1, return_html=True, theme=theme)
-    html2 = show_chat(data2, return_html=True, theme=theme)
-    html = f"""
-    <html>
-    <head>
-        <style>
-            table {{
-                width: 100%;
-                border-collapse: collapse;
-            }}
-            td {{
-                width: 50%;
-                vertical-align: top;
-                padding: 10px;
-            }}
-        </style>
-    </head>
-    <body>
-        <table>
-            <tr>
-                <td>{html1}</td>
-                <td>{html2}</td>
-            </tr>
-        </table>
-    </body>
-    </html>
-    """
-    display(HTML(html))
+    print('=== Conversation 1 ===')
+    show_chat(data1)
+    print('\n=== Conversation 2 ===')
+    show_chat(data2)
 
 
 def display_chat_messages_as_html(*args, **kwargs):
-    """
-    Use as show_chat and warn about the deprecated function.
-    """
+    """Deprecated alias for show_chat."""
     import warnings
 
     warnings.warn(
-        "display_chat_messages_as_html is deprecated, use show_chat instead.",
+        'display_chat_messages_as_html is deprecated, use show_chat instead.',
         DeprecationWarning,
         stacklevel=2,
     )
@@ -456,10 +375,10 @@ def display_chat_messages_as_html(*args, **kwargs):
 
 
 __all__ = [
-    "show_chat",
-    "get_conversation_one_turn",
-    "highlight_diff_chars",
-    "show_string_diff",
-    "display_conversations",
-    "display_chat_messages_as_html",
+    'show_chat',
+    'get_conversation_one_turn',
+    'highlight_diff_chars',
+    'show_string_diff',
+    'display_conversations',
+    'display_chat_messages_as_html',
 ]

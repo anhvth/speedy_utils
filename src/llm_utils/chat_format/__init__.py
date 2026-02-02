@@ -4,7 +4,6 @@ from .display import (
     get_conversation_one_turn,
     highlight_diff_chars,
     show_chat,
-    show_chat_v2,
     show_string_diff,
 )
 from .transform import (
@@ -32,5 +31,4 @@ __all__ = [
     "show_string_diff",
     "display_conversations",
     "display_chat_messages_as_html",
-    "show_chat_v2",
 ]
