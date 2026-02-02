@@ -177,13 +177,14 @@ class LLM(
             error_msg = f'OpenAI API error ({type(exc).__name__}): {exc}'
             logger.error(error_msg)
             raise
+        except ValueError:
+            raise
         except Exception as e:
             is_length_error = 'Length' in str(e) or 'maximum context length' in str(e)
             if is_length_error:
                 raise ValueError(
                     f'Input too long for model {model_name}. Error: {str(e)[:100]}...'
                 ) from e
-            # Re-raise all other exceptions
             raise
         # print(completion)
 
@@ -192,7 +193,7 @@ class LLM(
             assistant_message = [{'role': 'assistant', 'content': choice.message.content}]
             try:
                 reasoning_content = choice.message.reasoning
-            except AttributeError:
+            except:
                 reasoning_content = None
             if reasoning_content:
                 assistant_message[0]['reasoning_content'] = reasoning_content
