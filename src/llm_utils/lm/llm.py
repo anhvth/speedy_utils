@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, cast
 
 from httpx import Timeout
 from loguru import logger
-from openai import AuthenticationError, BadRequestError, OpenAI, RateLimitError
+from openai import AuthenticationError, BadRequestError, OpenAI, RateLimitError, APITimeoutError
 from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
 
@@ -173,11 +173,16 @@ class LLM(
             )
             # Store raw response from client
             self.last_ai_response = completion
+        except APITimeoutError as exc:
+            error_msg = f'OpenAI API timeout ({api_kwargs['timeout']}) error: {exc} for model {model_name}'
+            logger.error(error_msg)
+            raise
         except (AuthenticationError, RateLimitError, BadRequestError) as exc:
             error_msg = f'OpenAI API error ({type(exc).__name__}): {exc}'
             logger.error(error_msg)
             raise
-        except ValueError:
+        except ValueError as exc:
+            logger.error(f'ValueError during API call: {exc}')
             raise
         except Exception as e:
             is_length_error = 'Length' in str(e) or 'maximum context length' in str(e)
@@ -448,7 +453,7 @@ class LLM(
         is_reasoning_model: bool = False,
         lora_path: str | None = None,
         vllm_cmd: str | None = None,
-        vllm_timeout: int = 120,
+        vllm_timeout: int = 0.1,
         vllm_reuse: bool = True,
         timeout: float | Timeout | None = None,
         **model_kwargs,
