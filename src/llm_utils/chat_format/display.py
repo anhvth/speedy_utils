@@ -237,11 +237,11 @@ def _show_chat_terminal(
             )
             if reasoning:
                 # Use lighter gray without dim for better readability
-                print(f'\033[38;5;246m{reasoning}{TERMINAL_RESET}')
+                print(f'\033[38;5;246m{reasoning.strip()}{TERMINAL_RESET}')
                 if answer:
                     print()  # Blank line between reasoning and answer
             if answer:
-                print(f'{color}{answer}{TERMINAL_RESET}')
+                print(f'{color}{answer.strip()}{TERMINAL_RESET}')
         else:
             content = msg.get('content', '')
             print(f'{color}{content}{TERMINAL_RESET}')
