@@ -91,11 +91,15 @@ if tests <= 0:
     print("pytest reported 0 tests; aborting.", file=sys.stderr)
     raise SystemExit(2)
 
+if executed <= 0:
+    print(f"pytest executed 0 tests (skipped={skipped}); aborting.", file=sys.stderr)
+    raise SystemExit(2)
+
 if errors > 0:
     print(f"pytest reported errors={errors}; aborting.", file=sys.stderr)
     raise SystemExit(1)
 
-pass_rate = passed / tests
+pass_rate = passed / executed
 print(
     "pytest summary: "
     f"total={tests}, executed={executed}, passed={passed}, failures={failures}, skipped={skipped}, "
