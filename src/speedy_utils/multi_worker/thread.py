@@ -22,6 +22,10 @@ except ImportError:  # pragma: no cover
 
 # Sensible defaults
 DEFAULT_WORKERS = (os.cpu_count() or 4) * 2
+_SAFE_WORKER_LIMIT_ENV = 'SPEEDY_UTILS_MAX_WORKERS'
+_SAFE_WORKER_LIMIT_MIN = 64
+_SAFE_WORKER_LIMIT_MAX = 512
+_SAFE_WORKER_LIMIT_FACTOR = 16
 
 T = TypeVar('T')
 R = TypeVar('R')
@@ -316,11 +320,44 @@ class _ResultCollector(Generic[R]):
         return self._results
 
 
+def _safe_worker_limit() -> int | None:
+    raw_limit = os.getenv(_SAFE_WORKER_LIMIT_ENV)
+    if raw_limit is not None:
+        raw_limit = raw_limit.strip()
+        if not raw_limit:
+            return None
+        raw_lower = raw_limit.lower()
+        if raw_lower in {'none', 'unlimited', 'disable', 'off', '0'}:
+            return None
+        try:
+            limit = int(raw_limit)
+        except ValueError as exc:
+            raise ValueError(
+                f'{_SAFE_WORKER_LIMIT_ENV} must be an integer or one of '
+                f'{{none, unlimited, disable, off, 0}}; got {raw_limit!r}.'
+            ) from exc
+        if limit <= 0:
+            return None
+        return limit
+
+    cpu_count = os.cpu_count() or 1
+    return min(
+        _SAFE_WORKER_LIMIT_MAX,
+        max(_SAFE_WORKER_LIMIT_MIN, cpu_count * _SAFE_WORKER_LIMIT_FACTOR),
+    )
+
+
 def _resolve_worker_count(workers: int | None) -> int:
     if workers is None:
         return DEFAULT_WORKERS
     if workers <= 0:
         raise ValueError('workers must be a positive integer')
+    safe_limit = _safe_worker_limit()
+    if safe_limit is not None and workers > safe_limit:
+        raise ValueError(
+            f'workers={workers} exceeds safe limit ({safe_limit}). '
+            f'Lower workers or set {_SAFE_WORKER_LIMIT_ENV} to override.'
+        )
     return workers
 
 
@@ -434,7 +471,9 @@ def multi_thread(
     progress_update : int, optional
         Minimum logical items between progress refreshes.
     prefetch_factor : int, optional
-        Multiplier controlling in-flight items (``workers * prefetch_factor``).
+        Multiplier controlling in-flight work (``workers * prefetch_factor``).
+        When batching, this targets that many active futures, so logical
+        in-flight items scale by ``batch``.
     timeout : float | None, optional
         Overall wall-clock timeout in seconds.
     stop_on_error : bool | None, optional
@@ -603,6 +642,10 @@ def multi_thread(
 
     deadline = time.monotonic() + timeout if timeout is not None else None
     max_inflight = max(workers_val * prefetch_factor, 1)
+    if batch > 1:
+        # Scale in-flight logical items so we still keep
+        # ~workers*prefetch_factor futures active when batching.
+        max_inflight *= batch
     completed_items = 0
     next_logical_idx = 0
 
@@ -727,14 +770,14 @@ def multi_thread(
                     last_bar_update = completed_items
                     postfix: dict[str, Any] = error_stats.get_postfix_dict()
                     in_progress = min(len(inflight), workers_val)
+                    postfix['in_progress'] = in_progress
                     work_queue = getattr(pool, '_work_queue', None)
                     if work_queue is not None:
                         try:
                             queued = int(work_queue.qsize())
                         except Exception:
                             queued = 0
-                        in_progress = min(max(len(inflight) - queued, 0), workers_val)
-                    postfix['in_progress'] = in_progress
+                        postfix['queued'] = queued
                     bar.set_postfix(postfix)
 
         results = collector.finalize()

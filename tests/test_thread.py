@@ -34,6 +34,12 @@ def test_scalar_single_param():
     assert multi_thread(f, inp, workers=2, progress=False) == [2, 4, 6]
 
 
+def test_workers_safe_limit(monkeypatch):
+    monkeypatch.setenv('SPEEDY_UTILS_MAX_WORKERS', '4')
+    with pytest.raises(ValueError, match='safe limit'):
+        multi_thread(lambda x: x, [1, 2], workers=5, progress=False)
+
+
 # ────────────────────────────────────────────────────────────
 # 2. scalar – extra parameter with default
 # ────────────────────────────────────────────────────────────
