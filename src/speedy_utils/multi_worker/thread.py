@@ -1,7 +1,7 @@
-from ..__imports import *
 import linecache
 
-from .process import ErrorStats, ErrorHandlerType
+from ..__imports import *
+from .process import ErrorHandlerType, ErrorStats
 
 
 try:
@@ -82,7 +82,9 @@ class UserFunctionError(Exception):
                 f'in [green]{self.caller_frame.name}[/green]'
             )
             tb_parts.append('')
-            context = _get_code_context_rich(self.caller_frame.filename, self.caller_frame.lineno, 3)
+            context = _get_code_context_rich(
+                self.caller_frame.filename, self.caller_frame.lineno, 3
+            )
             tb_parts.extend(context)
             tb_parts.append('')
 
@@ -131,7 +133,10 @@ def _get_code_context(filename: str, lineno: int, context_lines: int = 3) -> lis
 
     return lines
 
-def _get_code_context_rich(filename: str, lineno: int, context_lines: int = 3) -> list[str]:
+
+def _get_code_context_rich(
+    filename: str, lineno: int, context_lines: int = 3
+) -> list[str]:
     """Get code context with rich formatting (colors)."""
     lines: list[str] = []
     start = max(1, lineno - context_lines)
@@ -143,7 +148,7 @@ def _get_code_context_rich(filename: str, lineno: int, context_lines: int = 3) -
             continue
         line = line.rstrip()
         num_str = f'{i:4d}'
-        
+
         if i == lineno:
             # Highlight error line
             lines.append(f'[dim]{num_str}[/dim] [red]❱[/red] {line}')
@@ -152,6 +157,7 @@ def _get_code_context_rich(filename: str, lineno: int, context_lines: int = 3) -
             lines.append(f'[dim]{num_str} │[/dim] {line}')
 
     return lines
+
 
 _PY_SET_ASYNC_EXC = ctypes.pythonapi.PyThreadState_SetAsyncExc
 try:
@@ -346,6 +352,7 @@ def _cancel_futures(inflight: set[Future[Any]]) -> None:
 # main API
 # ────────────────────────────────────────────────────────────
 if TYPE_CHECKING:
+
     @overload
     def multi_thread(
         func: Callable[[T], R],
@@ -458,10 +465,11 @@ def multi_thread(
     # Handle deprecated stop_on_error parameter
     if stop_on_error is not None:
         import warnings
+
         warnings.warn(
-            "stop_on_error is deprecated, use error_handler instead",
+            'stop_on_error is deprecated, use error_handler instead',
             DeprecationWarning,
-            stacklevel=2
+            stacklevel=2,
         )
         error_handler = 'raise' if stop_on_error else 'log'
 
@@ -550,7 +558,7 @@ def multi_thread(
     error_stats = ErrorStats(
         func_name=func_name,
         max_error_files=max_error_files,
-        write_logs=error_handler == 'log'
+        write_logs=error_handler == 'log',
     )
 
     # Convert inputs to list for index access in error logging
@@ -616,7 +624,9 @@ def multi_thread(
                 batch_items = list(arg)
                 if not batch_items:
                     return
-                fut = pool.submit(_run_batch, batch_items, func, fixed_kwargs_map, caller_context)
+                fut = pool.submit(
+                    _run_batch, batch_items, func, fixed_kwargs_map, caller_context
+                )
                 logical_size = len(batch_items)
             else:
                 fut = pool.submit(_worker, arg, func, fixed_kwargs_map, caller_context)
@@ -672,7 +682,7 @@ def multi_thread(
                         sys.stderr.flush()
                         _cancel_futures(inflight)
                         sys.exit(1)
-                    
+
                     # Log error with ErrorStats
                     input_val = None
                     if items_list is not None and idx < len(items_list):
@@ -686,7 +696,7 @@ def multi_thread(
                     if error_handler == 'raise':
                         _cancel_futures(inflight)
                         raise
-                    
+
                     input_val = None
                     if items_list is not None and idx < len(items_list):
                         input_val = items_list[idx]
@@ -704,26 +714,28 @@ def multi_thread(
                 collector.add(idx, out_items)
                 completed_items += len(out_items)
 
-                if bar:
-                    delta = completed_items - last_bar_update
-                    if delta >= progress_update:
-                        bar.update(delta)
-                        last_bar_update = completed_items
-                        submitted = next_logical_idx
-                        pending: int | str = (
-                            max(logical_total - submitted, 0)
-                            if logical_total is not None
-                            else '-'
-                        )
-                        postfix: dict[str, Any] = error_stats.get_postfix_dict()
-                        postfix['pending'] = pending
-                        bar.set_postfix(postfix)
-
             try:
                 while items_inflight() < max_inflight:
                     submit_arg(next(src_iter))
             except StopIteration:
                 pass
+
+            if bar:
+                delta = completed_items - last_bar_update
+                if delta >= progress_update:
+                    bar.update(delta)
+                    last_bar_update = completed_items
+                    postfix: dict[str, Any] = error_stats.get_postfix_dict()
+                    in_progress = min(len(inflight), workers_val)
+                    work_queue = getattr(pool, '_work_queue', None)
+                    if work_queue is not None:
+                        try:
+                            queued = int(work_queue.qsize())
+                        except Exception:
+                            queued = 0
+                        in_progress = min(max(len(inflight) - queued, 0), workers_val)
+                    postfix['in_progress'] = in_progress
+                    bar.set_postfix(postfix)
 
         results = collector.finalize()
 
