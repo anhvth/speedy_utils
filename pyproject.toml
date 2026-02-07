@@ -30,7 +30,6 @@ dependencies = [
     "freezegun",
     "packaging",
     "openai",
-    "ray",
     "aiohttp",
     "pytest",
     "rich>=14.3.1",
@@ -72,6 +71,7 @@ svllm-lb = "llm_utils.scripts.vllm_load_balancer:run_load_balancer"
 openapi_client_codegen = "speedy_utils.scripts.openapi_client_codegen:main"
 fast-vllm = "llm_utils.scripts.fast_vllm:main"
 kill-mpython = "speedy_utils.scripts.kill_mpython:main"
+spu-prefetch-large-model = "speedy_utils.scripts.prefetch_large_model:main"
 
 [build-system]
 requires = ["hatchling"]

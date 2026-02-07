@@ -66,19 +66,28 @@ results = multi_thread(process_item, [1, 2, 3, 4, 5], error_handler='log')
 
 ## Installation
 
-You can install **Speedy Utils** via [PyPI](https://pypi.org/project/speedy-utils/) using `pip`:
+You can install **Speedy Utils** via [PyPI](https://pypi.org/project/speedy-utils/):
 
 ```bash
+pip install speedy-utils
+# or
 uv pip install speedy-utils
-
 ```
 
 Alternatively, install directly from the repository:
 
 ```bash
+pip install git+https://github.com/anhvth/speedy
+# or
 uv pip install git+https://github.com/anhvth/speedy
-cd speedy-utils
-pip install .
+```
+
+For local development:
+
+```bash
+git clone https://github.com/anhvth/speedy
+cd speedy
+uv sync
 ```
 
 ### Extras
@@ -87,11 +96,12 @@ Optional dependencies can be installed via extras. For the `ray` backend
 support (requires Python >= 3.9):
 
 ```bash
-# pip
 pip install 'speedy-utils[ray]'
+# or
+uv pip install 'speedy-utils[ray]'
 
-# Poetry (for developing this repo)
-poetry install -E ray
+# developing this repo
+uv sync --extra ray
 ```
 
 ## Updating from previous versions
@@ -103,7 +113,7 @@ packages, then install the latest version:
 pip uninstall speedy_llm_utils speedy_utils
 pip install -e ./  # for local development
 # or
-pip install speedy_utils -U  # for PyPI upgrade
+pip install speedy-utils -U  # for PyPI upgrade
 ```
 
 ## Usage
@@ -385,28 +395,9 @@ clock.log()
 
 ## Testing
 
-The project includes a comprehensive test suite using `unittest`. To run the tests, execute the following command in the project root directory:
+The test suite uses `pytest`:
 
 ```bash
-python test.py
+uv sync
+uv run pytest
 ```
-
-Ensure all dependencies are installed before running tests:
-
-```bash
-pip install -r requirements.txt
-```
-
-Run the script to parse and display the arguments:
-
-```bash
-python speedy_utils/common/dataclass_parser.py
-```
-
-Example output:
-
-| Field     | Value                                 |
-| --------- | ------------------------------------- |
-| from_peft | ./outputs/llm_hn_qw32b/hn_results_r3/ |
-
-Please ensure your code adheres to the project's coding standards and includes appropriate tests.

@@ -47,9 +47,12 @@ if ! command_exists git; then
 fi
 
 # Install/upgrade required packages
-echo_info "Installing/upgrading required packages..."
-python3 -m pip install --upgrade pip
-pip install poetry twine
+echo_info "Checking for uv..."
+if ! command_exists uv; then
+    echo_error "uv is required but not installed"
+    echo_info "Install: curl -LsSf https://astral.sh/uv/install.sh | sh"
+    exit 1
+fi
 
 # Check if we're in a git repository
 if [ ! -d ".git" ]; then
@@ -84,7 +87,7 @@ if [ -z "$PYPI_API_TOKEN" ]; then
 fi
 
 # Get current version from pyproject.toml
-current_version=$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+current_version=$(uv version --short)
 echo_info "Current version: $current_version"
 
 # Ask for new version
@@ -95,7 +98,7 @@ if [ -n "$new_version" ]; then
     echo_info "Bumping version to $new_version..."
     
     # Update version in pyproject.toml
-    sed -i "s/^version = \".*\"/version = \"$new_version\"/" pyproject.toml
+    uv version "$new_version" --frozen
     
     # Commit version bump
     git add pyproject.toml
@@ -124,8 +127,8 @@ echo_info "Cleaning previous builds..."
 rm -rf dist/ build/ *.egg-info
 
 # Build package
-echo_info "Building package with Poetry..."
-poetry build
+echo_info "Building package with uv..."
+uv build --sdist --wheel --out-dir dist --clear
 
 # Check if dist directory was created and contains files
 if [ ! -d "dist" ] || [ -z "$(ls -A dist)" ]; then
@@ -138,10 +141,7 @@ ls -la dist/
 
 # Upload to PyPI
 echo_info "Publishing to PyPI..."
-twine upload dist/* \
-    --username "__token__" \
-    --password "$PYPI_API_TOKEN" \
-    --non-interactive
+uv publish --token "$PYPI_API_TOKEN" dist/*
 
 echo_info "🎉 Package published successfully to PyPI!"
 

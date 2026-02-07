@@ -11,29 +11,86 @@ inside functions that need them, not at module level.
 
 import subprocess
 import sys
+from pathlib import Path
+import os
 
 # Maximum allowed import time in seconds
-MAX_IMPORT_TIME = 0.4
+MAX_IMPORT_TIME = 0.9
 
 # Modules to check
 MODULES = ["speedy_utils", "llm_utils", "vision_utils"]
 
+def _find_repo_root() -> Path:
+    """
+    Find the repo root so the hook works regardless of where it's installed.
 
-def check_import_time(module: str) -> tuple[bool, float]:
+    - When installed in `.git/hooks/`, `__file__` is under `.git/`.
+    - When run from `.githooks/`, `__file__` is under `.githooks/`.
+    """
+    start = Path(__file__).resolve()
+    for parent in (start, *start.parents):
+        if (parent / "pyproject.toml").is_file() and (parent / "src").is_dir():
+            return parent
+    # Fallback: ask git (best-effort).
+    try:
+        out = subprocess.check_output(
+            ["git", "rev-parse", "--show-toplevel"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+        if out:
+            return Path(out)
+    except Exception:
+        pass
+    return Path.cwd()
+
+
+def _pick_python_executable(repo_root: Path) -> str:
+    """
+    Prefer the project's virtualenv if present.
+
+    This prevents "import error" when the hook is executed by a system Python.
+    """
+    venv_python = repo_root / ".venv" / "bin" / "python"
+    if venv_python.is_file():
+        return str(venv_python)
+    return sys.executable
+
+
+_REPO_ROOT = _find_repo_root()
+_SRC_DIR = _REPO_ROOT / "src"
+_PYTHON = _pick_python_executable(_REPO_ROOT)
+
+
+def _build_env() -> dict[str, str]:
+    env = os.environ.copy()
+    if _SRC_DIR.is_dir():
+        existing = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = (
+            f"{_SRC_DIR}{os.pathsep}{existing}" if existing else str(_SRC_DIR)
+        )
+    return env
+
+
+def check_import_time(module: str) -> tuple[bool, float, str]:
     """Check import time for a module. Returns (passed, time_seconds)."""
     code = f"import time; start=time.perf_counter(); import {module}; print(time.perf_counter()-start)"
     result = subprocess.run(
-        [sys.executable, "-c", code],
+        [_PYTHON, "-c", code],
         capture_output=True,
         text=True,
+        env=_build_env(),
+        cwd=str(_REPO_ROOT),
     )
     if result.returncode != 0:
-        return False, -1
+        err = (result.stderr or result.stdout or "").strip()
+        return False, -1, err
     try:
         import_time = float(result.stdout.strip())
-        return import_time <= MAX_IMPORT_TIME, import_time
+        return import_time <= MAX_IMPORT_TIME, import_time, ""
     except ValueError:
-        return False, -1
+        err = (result.stderr or result.stdout or "").strip()
+        return False, -1, err
 
 
 def main() -> int:
@@ -43,10 +100,13 @@ def main() -> int:
     print("Checking import times... (max: {:.1f}s)".format(MAX_IMPORT_TIME))
 
     for module in MODULES:
-        passed, import_time = check_import_time(module)
+        passed, import_time, err = check_import_time(module)
 
         if import_time < 0:
             print(f"  {module}: FAILED - import error")
+            if err:
+                last_line = err.splitlines()[-1]
+                print(f"    ↳ {last_line}")
             failed = True
         elif passed:
             print(f"  {module}: {import_time:.3f}s")

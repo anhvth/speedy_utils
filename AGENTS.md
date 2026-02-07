@@ -10,9 +10,9 @@
 
 ## Build, Test, and Development Commands
 
-- `pip install -e .` installs the package in editable mode.
-- `uv pip install -e .` is a drop-in alternative if you use uv.
-- `python -m pytest` or `pytest tests` runs the test suite.
+- `uv sync` creates/syncs the project virtualenv (recommended).
+- `uv run pytest` (or `python -m pytest`) runs the test suite.
+- `uv pip install -e .` installs in editable mode (optional).
 - `ruff check .` runs lint rules; `ruff format .` formats code.
 
 ## Coding Style & Naming Conventions

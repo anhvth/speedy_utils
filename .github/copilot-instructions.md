@@ -38,8 +38,8 @@
 
 ## Developer Workflows
 
-- **Build/Install**: `uv pip install .` or `pip install -e .` for development.
-- **Test**: `python test.py` (runs unittest suite) or `pytest` for individual tests.
+- **Build/Install**: `uv sync` (recommended) or `uv pip install -e .` for development.
+- **Test**: `uv run pytest` (or `pytest`).
 - **Lint/Format**: `ruff check .` and `ruff format .` (configured in `ruff.toml`).
 - **Type Check**: `mypy` (strict settings in `pyproject.toml`).
 - **Debug**: Use `ipdb` for interactive debugging, `debugpy` for VS Code.
