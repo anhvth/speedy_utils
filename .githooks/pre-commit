@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+"""
+Pre-commit hook to ensure import time is under 0.4 seconds.
+
+This enforces the project's performance requirement that speedy_utils
+must import quickly (< 0.4s). This is critical for user experience.
+
+Strategy: Use lazy imports for heavy modules (torch, ray, matplotlib, pandas)
+inside functions that need them, not at module level.
+"""
+
+import subprocess
+import sys
+
+# Maximum allowed import time in seconds
+MAX_IMPORT_TIME = 0.4
+
+# Modules to check
+MODULES = ["speedy_utils", "llm_utils", "vision_utils"]
+
+
+def check_import_time(module: str) -> tuple[bool, float]:
+    """Check import time for a module. Returns (passed, time_seconds)."""
+    code = f"import time; start=time.perf_counter(); import {module}; print(time.perf_counter()-start)"
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return False, -1
+    try:
+        import_time = float(result.stdout.strip())
+        return import_time <= MAX_IMPORT_TIME, import_time
+    except ValueError:
+        return False, -1
+
+
+def main() -> int:
+    """Run import time checks."""
+    failed = False
+
+    print("Checking import times... (max: {:.1f}s)".format(MAX_IMPORT_TIME))
+
+    for module in MODULES:
+        passed, import_time = check_import_time(module)
+
+        if import_time < 0:
+            print(f"  {module}: FAILED - import error")
+            failed = True
+        elif passed:
+            print(f"  {module}: {import_time:.3f}s")
+        else:
+            print(f"  {module}: FAILED - {import_time:.3f}s exceeds {MAX_IMPORT_TIME:.1f}s")
+            failed = True
+
+    if failed:
+        print("\nImport time check failed! To fix:")
+        print("  1. Use lazy imports for heavy modules inside functions")
+        print("  2. Move heavy imports to function scope, not module level")
+        print("  3. Use the _LazyModule pattern from __imports.py")
+        print("\nHeavy modules to lazy-load: torch, ray, matplotlib, pandas")
+        return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

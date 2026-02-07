@@ -192,17 +192,54 @@ matplotlib = _LazyModule(_get_matplotlib, '_matplotlib_cache')
 plt = _LazyModule(_get_matplotlib_pyplot, '_plt_cache')
 get_ipython = _LazyModule(_get_ipython_core, '_get_ipython_cache')
 
-# Other optional imports (not lazy loaded as they're not in top slow imports)
-try:
-    import torch
-except ImportError:
-    torch = None
+# Other optional imports (lazy loaded)
+def _get_torch():
+    """Lazy import torch."""
+    try:
+        import torch
+        return torch
+    except ImportError:
+        return None
 
-try:
-    from IPython.display import HTML, display
-except ImportError:
-    HTML = None
-    display = None
+
+_torch_cache = None
+torch = _LazyModule(_get_torch, '_torch_cache')
+
+
+def _get_ipython_display():
+    """Lazy import IPython.display."""
+    try:
+        from IPython.display import HTML, display
+        return HTML, display
+    except ImportError:
+        return None, None
+
+
+_ipython_display_cache = None
+_HTML = None
+_display = None
+
+
+def _get_HTML():
+    """Lazy import HTML from IPython.display."""
+    global _HTML, _display, _ipython_display_cache
+    if _ipython_display_cache is None:
+        _ipython_display_cache = _get_ipython_display()
+    _HTML, _display = _ipython_display_cache
+    return _HTML
+
+
+def _get_display():
+    """Lazy import display from IPython.display."""
+    global _HTML, _display, _ipython_display_cache
+    if _ipython_display_cache is None:
+        _ipython_display_cache = _get_ipython_display()
+    _HTML, _display = _ipython_display_cache
+    return _display
+
+
+HTML = _LazyModule(_get_HTML, '_HTML')  # type: ignore
+display = _LazyModule(_get_display, '_display')  # type: ignore
 
 try:
     from PIL import Image

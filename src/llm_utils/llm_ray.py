@@ -13,18 +13,14 @@ Example:
 """
 import os
 import datetime
-import ray
-import numpy as np
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
-from tqdm.auto import tqdm
 
 # Type alias for OpenAI-style messages
 Message = Dict[str, str]  # {'role': str, 'content': str}
 Messages = List[Message]
 
 
-@ray.remote
 class _ProgressTracker:
     """Ray actor for tracking global progress across workers."""
 
@@ -81,6 +77,7 @@ class _VLLMWorkerBase(ABC):
 
     def _print_global_stats(self) -> None:
         """Only used by Worker 0 to print global stats."""
+        import ray
         import time
         import datetime as dt
         if self.tracker is None:
@@ -101,6 +98,7 @@ class _VLLMWorkerBase(ABC):
         self._last_print_time = time.time()
 
     def _run_shard(self, shard: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        from tqdm.auto import tqdm
         self._redirect_output()
         try:
             self.setup()
@@ -261,6 +259,8 @@ class LLMRay:
             ray_address: Ray cluster address ('auto' for existing cluster,
                 None for local, or specific address like 'ray://...')
         """
+        import ray
+
         self.model_name = model_name
         self.dp = dp
         self.tp = tp
@@ -282,6 +282,8 @@ class LLMRay:
 
     def _init_ray(self) -> None:
         """Initialize Ray cluster connection."""
+        import ray
+
         if not ray.is_initialized():
             if self.ray_address:
                 ray.init(address=self.ray_address, ignore_reinit_error=True)
@@ -317,6 +319,9 @@ class LLMRay:
         Returns:
             List of result dictionaries with generated text and metadata
         """
+        import ray
+        import numpy as np
+
         # Normalize inputs to dict format with 'messages' key
         normalized_inputs = []
         for messages in inputs:
@@ -330,7 +335,8 @@ class LLMRay:
         print(f'>>> Spawning {num_workers} workers for {len(inputs)} items.')
 
         # 1. Start the Global Tracker
-        tracker = _ProgressTracker.remote(len(normalized_inputs))
+        ProgressTracker = ray.remote(_ProgressTracker)
+        tracker = ProgressTracker.remote(len(normalized_inputs))
 
         # 2. Prepare Shards
         shards = np.array_split(normalized_inputs, num_workers)

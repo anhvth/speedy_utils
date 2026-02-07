@@ -5,12 +5,10 @@ Simplified LLM Task module for handling language model interactions with structu
 """
 
 import subprocess
-from typing import Any, Dict, List, Optional, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 
 from httpx import Timeout
 from loguru import logger
-from openai import AuthenticationError, BadRequestError, OpenAI, RateLimitError, APITimeoutError
-from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
 
 from speedy_utils import clean_traceback
@@ -29,9 +27,13 @@ from .utils import (
     get_base_client,
 )
 
+# Lazy import openai types for type checking only
+if TYPE_CHECKING:
+    from openai import AuthenticationError, BadRequestError, OpenAI, RateLimitError, APITimeoutError
+    from openai.types.chat import ChatCompletionMessageParam
 
 # Type aliases for better readability
-Messages = list[ChatCompletionMessageParam]
+Messages = list[dict]  # Simplified type, actual type validated at runtime
 
 
 class LLM(
@@ -48,7 +50,7 @@ class LLM(
         instruction: str | None = None,
         input_model: type[BaseModel] | type[str] = str,
         output_model: type[BaseModel] | type[str] = None,
-        client: OpenAI | int | str | None = None,
+        client: 'OpenAI | int | str | None' = None,  # type: ignore[name-defined]
         cache=True,
         is_reasoning_model: bool = False,
         force_lora_unload: bool = False,
@@ -173,24 +175,28 @@ class LLM(
             )
             # Store raw response from client
             self.last_ai_response = completion
-        except APITimeoutError as exc:
-            error_msg = f'OpenAI API timeout ({api_kwargs['timeout']}) error: {exc} for model {model_name}'
-            logger.error(error_msg)
-            raise
-        except (AuthenticationError, RateLimitError, BadRequestError) as exc:
-            error_msg = f'OpenAI API error ({type(exc).__name__}): {exc}'
-            logger.error(error_msg)
-            raise
-        except ValueError as exc:
-            logger.error(f'ValueError during API call: {exc}')
-            raise
-        except Exception as e:
-            is_length_error = 'Length' in str(e) or 'maximum context length' in str(e)
-            if is_length_error:
-                raise ValueError(
-                    f'Input too long for model {model_name}. Error: {str(e)[:100]}...'
-                ) from e
-            raise
+        except Exception as exc:
+            # Import openai exceptions for type checking
+            from openai import APITimeoutError, AuthenticationError, BadRequestError, RateLimitError
+
+            if isinstance(exc, APITimeoutError):
+                error_msg = f'OpenAI API timeout ({api_kwargs['timeout']}) error: {exc} for model {model_name}'
+                logger.error(error_msg)
+                raise
+            elif isinstance(exc, (AuthenticationError, RateLimitError, BadRequestError)):
+                error_msg = f'OpenAI API error ({type(exc).__name__}): {exc}'
+                logger.error(error_msg)
+                raise
+            elif isinstance(exc, ValueError):
+                logger.error(f'ValueError during API call: {exc}')
+                raise
+            else:
+                is_length_error = 'Length' in str(exc) or 'maximum context length' in str(exc)
+                if is_length_error:
+                    raise ValueError(
+                        f'Input too long for model {model_name}. Error: {str(exc)[:100]}...'
+                    ) from exc
+                raise
         # print(completion)
 
         results: list[dict[str, Any]] = []
@@ -294,16 +300,19 @@ class LLM(
             )
             # Store raw response from client
             self.last_ai_response = completion
-        except (AuthenticationError, RateLimitError, BadRequestError) as exc:
-            error_msg = f'OpenAI API error ({type(exc).__name__}): {exc}'
-            logger.error(error_msg)
-            raise
-        except Exception as e:
-            is_length_error = 'Length' in str(e) or 'maximum context length' in str(e)
+        except Exception as exc:
+            # Import openai exceptions for type checking
+            from openai import AuthenticationError, BadRequestError, RateLimitError
+
+            if isinstance(exc, (AuthenticationError, RateLimitError, BadRequestError)):
+                error_msg = f'OpenAI API error ({type(exc).__name__}): {exc}'
+                logger.error(error_msg)
+                raise
+            is_length_error = 'Length' in str(exc) or 'maximum context length' in str(exc)
             if is_length_error:
                 raise ValueError(
-                    f'Input too long for model {model_name}. Error: {str(e)[:100]}...'
-                ) from e
+                    f'Input too long for model {model_name}. Error: {str(exc)[:100]}...'
+                ) from exc
             raise
 
         results: list[dict[str, Any]] = []
@@ -448,7 +457,7 @@ class LLM(
     @classmethod
     def from_prompt_builder(
         cls: BasePromptBuilder,
-        client: OpenAI | int | str | None = None,
+        client: 'OpenAI | int | str | None' = None,  # type: ignore[name-defined]
         cache=True,
         is_reasoning_model: bool = False,
         lora_path: str | None = None,

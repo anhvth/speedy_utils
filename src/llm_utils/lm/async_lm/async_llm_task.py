@@ -7,10 +7,9 @@ import copy
 import pathlib
 from abc import ABC
 from dataclasses import dataclass
-from typing import Any, Dict, Generic, List, Literal, Optional, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, Generic, List, Literal, Optional, TypeVar, Union, cast
 from venv import logger
 
-from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
 
 from llm_utils.chat_format.display import get_conversation_one_turn
@@ -18,10 +17,13 @@ from llm_utils.lm.async_lm._utils import InputModelType, OutputModelType, Parsed
 from llm_utils.lm.async_lm.async_lm import AsyncLM
 from speedy_utils import dump_json_or_pickle, identify
 
+# Lazy import openai types for type checking only
+if TYPE_CHECKING:
+    from openai.types.chat import ChatCompletionMessageParam
 
 # Type aliases for better readability
 TModel = TypeVar('TModel', bound=BaseModel)
-Messages = list[ChatCompletionMessageParam]
+Messages = list[dict]  # Simplified type, actual type validated at runtime
 LegacyMsgs = list[dict[str, str]]
 RawMsgs = Union[Messages, LegacyMsgs]
 

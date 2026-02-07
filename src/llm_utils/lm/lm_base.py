@@ -2,6 +2,7 @@
 import json
 import os
 from typing import (
+    TYPE_CHECKING,
     Any,
     List,
     Optional,
@@ -13,15 +14,6 @@ from typing import (
 
 from httpx import URL
 from loguru import logger
-from openai import OpenAI
-from openai.pagination import SyncPage
-from openai.types.chat import (
-    ChatCompletionAssistantMessageParam,
-    ChatCompletionSystemMessageParam,
-    ChatCompletionToolMessageParam,
-    ChatCompletionUserMessageParam,
-)
-from openai.types.model import Model
 from pydantic import BaseModel
 
 from llm_utils.lm.openai_memoize import MOpenAI
@@ -32,6 +24,18 @@ from .async_lm._utils import (
     RawMsgs,
     TModel,
 )
+
+# Lazy import openai types for type checking only
+if TYPE_CHECKING:
+    from openai import OpenAI
+    from openai.pagination import SyncPage
+    from openai.types.chat import (
+        ChatCompletionAssistantMessageParam,
+        ChatCompletionSystemMessageParam,
+        ChatCompletionToolMessageParam,
+        ChatCompletionUserMessageParam,
+    )
+    from openai.types.model import Model
 
 
 class LMBase:
@@ -112,6 +116,13 @@ class LMBase:
     # ------------------------------------------------------------------ #
     @staticmethod
     def _convert_messages(msgs: LegacyMsgs) -> Messages:
+        from openai.types.chat import (
+            ChatCompletionAssistantMessageParam,
+            ChatCompletionSystemMessageParam,
+            ChatCompletionToolMessageParam,
+            ChatCompletionUserMessageParam,
+        )
+
         converted: Messages = []
         for msg in msgs:
             role = msg['role']
@@ -191,6 +202,10 @@ class LMBase:
 
     @staticmethod
     def list_models(base_url: str | None = None) -> list[str]:
+        from openai import OpenAI
+        from openai.pagination import SyncPage
+        from openai.types.model import Model
+
         try:
             if base_url is None:
                 raise ValueError('base_url must be provided')
@@ -247,7 +262,7 @@ class LMBase:
         """Inspect the history of the LLM calls."""
 
 
-def get_model_name(client: OpenAI | str | int) -> str:
+def get_model_name(client: 'OpenAI | str | int') -> str:
     """
     Get the first available model name from the client.
 
@@ -260,6 +275,8 @@ def get_model_name(client: OpenAI | str | int) -> str:
     Raises:
         ValueError: If no models are available or client is invalid
     """
+    from openai import OpenAI
+
     try:
         if isinstance(client, OpenAI):
             openai_client = client

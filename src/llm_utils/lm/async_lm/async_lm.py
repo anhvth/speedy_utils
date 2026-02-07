@@ -1,16 +1,7 @@
 # from ._utils import *
-from typing import (
-    Any,
-    List,
-    Literal,
-    Optional,
-    Type,
-    Union,
-    cast,
-)
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Type, Union, cast
 
 from loguru import logger
-from openai import AuthenticationError, BadRequestError, OpenAI, RateLimitError
 from pydantic import BaseModel
 
 # from llm_utils.lm.async_lm.async_llm_task import OutputModelType
@@ -30,6 +21,10 @@ from ._utils import (
     ParsedOutput,
     RawMsgs,
 )
+
+# Lazy import openai types for type checking only
+if TYPE_CHECKING:
+    from openai import AuthenticationError, BadRequestError, OpenAI, RateLimitError
 
 
 def jloads_safe(content: str) -> Any:
@@ -139,9 +134,14 @@ class AsyncLM(AsyncLMBase):
             if hasattr(completion, "model_dump"):
                 completion = completion.model_dump()
 
-        except (AuthenticationError, RateLimitError, BadRequestError) as exc:
-            error_msg = f"OpenAI API error ({type(exc).__name__}): {exc}"
-            logger.error(error_msg)
+        except Exception as exc:
+            # Import openai exceptions for type checking
+            from openai import AuthenticationError, BadRequestError, RateLimitError
+
+            if isinstance(exc, (AuthenticationError, RateLimitError, BadRequestError)):
+                error_msg = f"OpenAI API error ({type(exc).__name__}): {exc}"
+                logger.error(error_msg)
+                raise
             raise
 
         return completion
@@ -178,10 +178,12 @@ class AsyncLM(AsyncLMBase):
             parsed = response_model.model_validate(jloads_safe(content))
 
         except Exception as e:
+            # Import openai exceptions for type checking
+            from openai import AuthenticationError, BadRequestError, RateLimitError
+
             # Try fallback to beta mode if regular parsing fails
-            if not isinstance(
-                e, (AuthenticationError, RateLimitError, BadRequestError)
-            ):
+            is_openai_error = isinstance(e, (AuthenticationError, RateLimitError, BadRequestError))
+            if not is_openai_error:
                 content = choice.get("content", "N/A") if choice else "N/A"
                 logger.info(
                     f"Regular parsing failed due to wrong format or content, now falling back to beta mode: {content=}, {e=}"

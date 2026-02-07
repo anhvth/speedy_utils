@@ -1,12 +1,8 @@
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
 
-import matplotlib.pyplot as plt
-import numpy as np
-
-
+# Lazy import heavy modules
 if TYPE_CHECKING:
-
     import matplotlib.pyplot as plt
     import numpy as np
     import torch
@@ -34,8 +30,10 @@ def _check_matplotlib_available():
         return False, None
 
 
-def _to_numpy(img: Any) -> np.ndarray:
+def _to_numpy(img: Any) -> 'np.ndarray':  # type: ignore[name-defined]
     """Convert image to numpy array."""
+    import numpy as np
+
     torch_available, torch = _check_torch_available()
     if torch_available and torch is not None and isinstance(img, torch.Tensor):
         return img.detach().cpu().numpy()
@@ -46,7 +44,7 @@ def _to_numpy(img: Any) -> np.ndarray:
     )
 
 
-def _normalize_image_format(img: np.ndarray) -> np.ndarray:
+def _normalize_image_format(img: 'np.ndarray') -> 'np.ndarray':  # type: ignore[name-defined]
     """
     Normalize image to (H, W, C) format.
 
@@ -55,6 +53,8 @@ def _normalize_image_format(img: np.ndarray) -> np.ndarray:
     - (H, W) grayscale
     - (H, W, C) already correct
     """
+    import numpy as np
+
     if img.ndim == 2:
         # Grayscale (H, W) -> (H, W, 1)
         return img[:, :, np.newaxis]
@@ -69,8 +69,8 @@ def _normalize_image_format(img: np.ndarray) -> np.ndarray:
 
 
 def _normalize_batch(
-    images: Union[np.ndarray, List[np.ndarray], List[Any], Any],
-) -> List[np.ndarray]:
+    images: 'Union[np.ndarray, List[np.ndarray], List[Any], Any]',  # type: ignore[name-defined]
+) -> 'List[np.ndarray]':  # type: ignore[name-defined]
     """
     Normalize batch of images to list of (H, W, C) numpy arrays.
 
@@ -80,6 +80,8 @@ def _normalize_batch(
     - Single numpy array of shape (B, H, W, C) or (B, C, H, W)
     - Single torch tensor of shape (B, H, W, C) or (B, C, H, W)
     """
+    import numpy as np
+
     # Convert to numpy if torch tensor
     torch_available, torch = _check_torch_available()
     if torch_available and torch is not None and isinstance(images, torch.Tensor):
@@ -115,6 +117,8 @@ def _normalize_batch(
         # Bulk load any file paths while preserving order
         loaded_paths = {}
         if path_indices:
+            from .io_utils import read_images
+
             loaded_arrays = read_images([str(images[idx]) for idx in path_indices])
 
             if len(loaded_arrays) != len(path_indices):
@@ -142,7 +146,7 @@ def _normalize_batch(
 
 
 def plot_images_notebook(
-    images: Union[np.ndarray, List[np.ndarray], List[Any], Any, Tuple],
+    images: 'Union[np.ndarray, List[np.ndarray], List[Any], Any, Tuple]',  # type: ignore[name-defined]
     nrows: Optional[int] = None,
     ncols: Optional[int] = None,
     figsize: Optional[Tuple[float, float]] = None,
@@ -196,6 +200,8 @@ def plot_images_notebook(
         ... ]
         >>> plot_images_notebook(images, ncols=2)
     """
+    import numpy as np
+
     if isinstance(images, tuple):
         images = list(images)
     # Check matplotlib availability
@@ -307,6 +313,8 @@ def visualize_tensor(img_tensor, mode='hwc', normalize=True, max_cols=8):
         normalize: scale float tensor to 0–255 uint8 for display
         max_cols: max columns when tiling a batch
     """
+    import numpy as np
+
     # Check matplotlib availability
     mpl_available, plt = _check_matplotlib_available()
     if not mpl_available:

@@ -6,15 +6,18 @@ Simplified LLM Task module for handling language model interactions with structu
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from typing import Any, Dict, List, Optional, Tuple, Type, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type, Union, cast
 
-from openai import OpenAI
-from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel, create_model
+
+# Lazy import openai types for type checking only
+if TYPE_CHECKING:
+    from openai import OpenAI
+    from openai.types.chat import ChatCompletionMessageParam
 
 
 # Type aliases for better readability
-Messages = list[ChatCompletionMessageParam]
+Messages = list[dict]  # Simplified type, actual type validated at runtime
 
 import json
 from typing import TypeVar

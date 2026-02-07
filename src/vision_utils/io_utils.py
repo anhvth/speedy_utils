@@ -7,25 +7,34 @@ from multiprocessing import cpu_count
 from pathlib import Path
 from typing import TYPE_CHECKING, Sequence, Tuple
 
-import numpy as np
 from PIL import Image
 
 from speedy_utils import identify
 
 
-try:
-    from torch.utils.data import Dataset
-except ImportError:
-    Dataset = object
-
-
 if TYPE_CHECKING:
+    import numpy as np
     from nvidia.dali import fn, pipeline_def
     from nvidia.dali import types as dali_types
     from tqdm import tqdm
+    try:
+        from torch.utils.data import Dataset
+    except ImportError:
+        Dataset: object = object  # type: ignore[misc,assignment]
+    else:
+        Dataset: object = object  # type: ignore[misc,assignment]
 
 
 PathLike = str | os.PathLike
+
+
+def _get_Dataset():
+    """Lazy import torch.utils.data.Dataset."""
+    try:
+        from torch.utils.data import Dataset
+        return Dataset
+    except ImportError:
+        return object
 
 
 def _to_str_paths(paths: Sequence[PathLike]) -> list[str]:
@@ -69,6 +78,7 @@ def read_images_cpu(
         paths: Sequence of image file paths.
         hw: Optional (height, width) for resizing.
     """
+    import numpy as np
     import numpy as np
     from PIL import Image
     from tqdm import tqdm
@@ -127,6 +137,7 @@ def read_images_gpu(
         device_id: GPU device id.
         verbose: If True, show progress bar.
     """
+    import numpy as np
     import numpy as np
     from nvidia.dali import fn, pipeline_def
     from nvidia.dali import types as dali_types
@@ -275,7 +286,7 @@ def read_images(
         return read_images_cpu(str_paths, hw=hw, verbose=verbose)
 
 
-class ImageMmap(Dataset):
+class ImageMmap:  # Removed Dataset base class to avoid torch import at module level
     """
     One-time build + read-only mmap dataset.
 
@@ -283,15 +294,21 @@ class ImageMmap(Dataset):
     - Next runs: only read from mmap (no filesystem image reads).
     """
 
+    @property
+    def _torch_dataset_base(self):
+        """Lazy torch.utils.data.Dataset for type checking."""
+        return _get_Dataset()
+
     def __init__(
         self,
         img_paths: Sequence[str | os.PathLike],
         size: Tuple[int, int] = (224, 224),
         mmap_path: str | os.PathLike | None = None,
-        dtype: np.dtype = np.uint8,
+        dtype: "np.dtype | str" = "uint8",
         C=3,
         safe: bool = True,
     ) -> None:
+        import numpy as np
         self.imgpath2idx = {str(p): i for i, p in enumerate(img_paths)}
         self.img_paths = [str(p) for p in img_paths]
         self.H, self.W = size
@@ -491,7 +508,7 @@ class ImageMmap(Dataset):
         return img
 
 
-class ImageMmapDynamic(Dataset):
+class ImageMmapDynamic:  # Removed Dataset base class to avoid torch import at module level
     """
     Dynamic-shape mmap dataset.
 
@@ -502,13 +519,19 @@ class ImageMmapDynamic(Dataset):
     - Next runs: only open mmap + meta and do constant-time slice + reshape.
     """
 
+    @property
+    def _torch_dataset_base(self):
+        """Lazy torch.utils.data.Dataset for type checking."""
+        return _get_Dataset()
+
     def __init__(
         self,
         img_paths: Sequence[str | os.PathLike],
         mmap_path: str | os.PathLike | None = None,
-        dtype: np.dtype | str = np.uint8,
+        dtype: "np.dtype | str" = "uint8",
         safe: bool = True,
     ) -> None:
+        import numpy as np
         self.img_paths = [str(p) for p in img_paths]
         self.imgpath2idx = {p: i for i, p in enumerate(self.img_paths)}
         self.n = len(self.img_paths)

@@ -1,5 +1,6 @@
 from functools import lru_cache
 from typing import (
+    TYPE_CHECKING,
     Any,
     Dict,
     Generic,
@@ -8,10 +9,10 @@ from typing import (
     Union,
 )
 
-# from openai.pagination import AsyncSyncPage
-from openai.types.chat import (
-    ChatCompletionMessageParam,
-)
+# Lazy import openai types for type checking only
+if TYPE_CHECKING:
+    from openai.types.chat import ChatCompletionMessageParam
+
 from pydantic import BaseModel
 from typing_extensions import TypedDict
 
@@ -20,7 +21,7 @@ from typing_extensions import TypedDict
 # type helpers
 # --------------------------------------------------------------------------- #
 TModel = TypeVar("TModel", bound=BaseModel)
-Messages = list[ChatCompletionMessageParam]
+Messages = list[dict]  # Simplified type, actual type validated at runtime
 LegacyMsgs = list[dict[str, str]]
 RawMsgs = Union[Messages, LegacyMsgs]
 

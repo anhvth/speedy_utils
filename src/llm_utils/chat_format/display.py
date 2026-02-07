@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 from difflib import SequenceMatcher
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from IPython.display import HTML, display
+# Lazy import IPython.display
+if TYPE_CHECKING:
+    from IPython.display import HTML, display
 
 
 def _preprocess_as_json(content: str) -> str:
@@ -176,6 +178,8 @@ def _show_chat_html(
     messages: list[dict[str, Any]], max_reasoning_length: int | None
 ) -> None:
     """Display chat messages as HTML in notebook."""
+    from IPython.display import HTML, display
+
     html_parts = [
         "<div style='font-family:monospace; line-height:1.6em; white-space:pre-wrap;'>"
     ]
@@ -344,6 +348,8 @@ def highlight_diff_chars(text1: str, text2: str) -> str:
 
 def show_string_diff(old: str, new: str) -> None:
     """Display a visual diff between two strings (old -> new)."""
+    from IPython.display import HTML, display
+
     display(HTML(highlight_diff_chars(old, new)))
 
 

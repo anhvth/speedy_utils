@@ -2,6 +2,7 @@
 import json
 import os
 from typing import (
+    TYPE_CHECKING,
     Any,
     List,
     Optional,
@@ -13,15 +14,6 @@ from typing import (
 
 from httpx import URL
 from loguru import logger
-from openai import AsyncOpenAI
-from openai.pagination import AsyncPage as AsyncSyncPage
-from openai.types.chat import (
-    ChatCompletionAssistantMessageParam,
-    ChatCompletionSystemMessageParam,
-    ChatCompletionToolMessageParam,
-    ChatCompletionUserMessageParam,
-)
-from openai.types.model import Model
 from pydantic import BaseModel
 
 from llm_utils.lm.openai_memoize import MAsyncOpenAI
@@ -32,6 +24,18 @@ from ._utils import (
     RawMsgs,
     TModel,
 )
+
+# Lazy import openai types for type checking only
+if TYPE_CHECKING:
+    from openai import AsyncOpenAI
+    from openai.pagination import AsyncPage as AsyncSyncPage
+    from openai.types.chat import (
+        ChatCompletionAssistantMessageParam,
+        ChatCompletionSystemMessageParam,
+        ChatCompletionToolMessageParam,
+        ChatCompletionUserMessageParam,
+    )
+    from openai.types.model import Model
 
 
 class AsyncLMBase:
@@ -112,6 +116,13 @@ class AsyncLMBase:
     # ------------------------------------------------------------------ #
     @staticmethod
     def _convert_messages(msgs: LegacyMsgs) -> Messages:
+        from openai.types.chat import (
+            ChatCompletionAssistantMessageParam,
+            ChatCompletionSystemMessageParam,
+            ChatCompletionToolMessageParam,
+            ChatCompletionUserMessageParam,
+        )
+
         converted: Messages = []
         for msg in msgs:
             role = msg['role']
@@ -191,6 +202,9 @@ class AsyncLMBase:
 
     @staticmethod
     async def list_models(base_url: str | None = None) -> list[str]:
+        from openai.pagination import AsyncPage as AsyncSyncPage
+        from openai.types.model import Model
+
         try:
             if base_url is None:
                 raise ValueError('base_url must be provided')

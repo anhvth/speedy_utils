@@ -5,11 +5,14 @@ import re
 import signal
 import subprocess
 import time
-from typing import Any, List, Optional, cast
+from typing import TYPE_CHECKING, Any, List, Optional, cast
 
 import requests
 from loguru import logger
-from openai import OpenAI
+
+# Lazy import OpenAI for type checking
+if TYPE_CHECKING:
+    from openai import OpenAI
 
 
 try:
@@ -270,9 +273,10 @@ def _is_server_running(port: int) -> bool:
 
 def get_base_client(
     client=None, cache: bool = True, api_key="abc", vllm_cmd=None, vllm_process=None
-) -> OpenAI:
+) -> 'OpenAI | Any':  # type: ignore[misc]
     """Get OpenAI client from various inputs."""
     from llm_utils import MOpenAI
+    from openai import OpenAI
 
     if client is None:
         if vllm_cmd is not None:
@@ -308,7 +312,7 @@ def _is_lora_path(path: str) -> bool:
     return os.path.isfile(adapter_config_path)
 
 
-def _get_port_from_client(client: OpenAI) -> int | None:
+def _get_port_from_client(client: 'OpenAI') -> int | None:  # type: ignore[name-defined]
     """Extract port from OpenAI client base_url."""
     if hasattr(client, "base_url") and client.base_url:
         base_url = str(client.base_url)

@@ -10,8 +10,10 @@ import os
 import shutil
 import logging
 from pathlib import Path
-from typing import Callable, Optional, Any, Dict
-from datasets import Dataset, concatenate_datasets, load_from_disk
+from typing import Callable, Optional, Any, Dict, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from datasets import Dataset
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +21,7 @@ __all__ = ['multi_process_dataset']
 
 
 def multi_process_dataset(
-    dataset: Dataset,
+    dataset: 'Dataset',  # type: ignore[name-defined]
     process_func: Callable,
     output_path: str,
     process_func_kwargs: Optional[Dict[str, Any]] = None,
@@ -134,6 +136,8 @@ def multi_process_dataset(
     )
     
     # Concatenate shards
+    from datasets import concatenate_datasets, load_from_disk
+
     logger.info("Merging shards...")
     tmp_shards = [load_from_disk(p) for p in output_paths]
     merged_dataset = concatenate_datasets(tmp_shards)
