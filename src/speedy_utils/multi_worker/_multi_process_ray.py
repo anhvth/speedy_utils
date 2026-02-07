@@ -115,6 +115,7 @@ def ensure_ray(
             )
             
         _ray_module.init(
+            address='local',
             num_cpus=workers,
             ignore_reinit_error=True,
             logging_level=logging.ERROR,

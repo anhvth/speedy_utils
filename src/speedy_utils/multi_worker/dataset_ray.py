@@ -95,7 +95,13 @@ def multi_process_dataset_ray(
             max_length=1024,
         )
     """
-    import ray
+    try:
+        import ray
+    except ImportError as e:
+        raise ImportError(
+            "multi_process_dataset_ray requires optional dependency `ray`. "
+            "Install with `pip install 'speedy-utils[ray]'` (or `uv sync --extra ray`)."
+        ) from e
     from tqdm import tqdm
     import numpy as np
     

@@ -23,14 +23,10 @@ try:
 except ImportError:
     RAY_AVAILABLE = False
 
-try:
-    import torch
-    import torch.nn as nn
-    HAS_TORCH = True
-except ImportError:
-    HAS_TORCH = False
-    print('⚠️  PyTorch not installed. Install with: pip install torch')
-    sys.exit(1)
+torch = pytest.importorskip("torch", reason="PyTorch not installed")
+ray = pytest.importorskip("ray", reason="Ray not installed")
+import torch.nn as nn
+HAS_TORCH = True
 
 
 class SimpleModel(nn.Module):

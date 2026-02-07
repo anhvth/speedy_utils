@@ -80,7 +80,13 @@ class LLM(
         self.timeout = timeout
         self.last_ai_response = None  # Store raw response from client
         self.cache = cache
-        self.api_key = client.api_key if isinstance(client, OpenAI) else 'abc'
+        # Avoid importing OpenAI client class at module import time.
+        # If a client object provides an api_key attribute, use it.
+        self.api_key = 'abc'
+        if client is not None:
+            api_key = getattr(client, 'api_key', None)
+            if isinstance(api_key, str) and api_key:
+                self.api_key = api_key
 
         # Handle VLLM server startup if vllm_cmd is provided
         if self.vllm_cmd:

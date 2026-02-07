@@ -1,11 +1,18 @@
 import os
 import sys
-import ray
 import time
 import datetime
 import numpy as np
 from abc import ABC, abstractmethod
 from tqdm.auto import tqdm
+
+try:
+    import ray
+except ImportError as e:
+    raise ImportError(
+        "speedy_utils.multi_worker.parallel_gpu_pool requires optional dependency "
+        "`ray`. Install with `pip install 'speedy-utils[ray]'` (or `uv sync --extra ray`)."
+    ) from e
 
 # --- 1. Shared Global Counter (Ray Actor) ---
 @ray.remote

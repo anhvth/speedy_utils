@@ -9,13 +9,14 @@ Strategy: Use lazy imports for heavy modules (torch, ray, matplotlib, pandas)
 inside functions that need them, not at module level.
 """
 
+import os
 import subprocess
 import sys
 from pathlib import Path
-import os
+
 
 # Maximum allowed import time in seconds
-MAX_IMPORT_TIME = 0.9
+MAX_IMPORT_TIME = 0.4
 
 # Modules to check
 MODULES = ["speedy_utils", "llm_utils", "vision_utils"]

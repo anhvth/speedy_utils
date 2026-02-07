@@ -20,6 +20,7 @@ from tqdm import tqdm
 from .common import (
     ErrorHandlerType,
     ErrorStats,
+    _ThreadLocalStream,
     _build_cache_dir,
     _call_with_log_control,
     _cleanup_log_gate,
@@ -222,6 +223,14 @@ def multi_process(
 
     # ---- ray backend ----
     if backend == 'ray':
+        try:
+            import ray  # noqa: F401
+        except ImportError as e:
+            raise ImportError(
+                "Ray backend requires optional dependency `ray`. Install with "
+                "`pip install 'speedy-utils[ray]'` (or `uv sync --extra ray`)."
+            ) from e
+
         from ._multi_process_ray import run_ray_backend
         return run_ray_backend(
             f_wrapped=f_wrapped,
@@ -348,6 +357,11 @@ def _run_threadpool_backend(
     update_pbar_postfix,
 ) -> list[Any]:
     """Run ThreadPoolExecutor backend for 'mp' and 'safe' modes."""
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+    sys.stdout = _ThreadLocalStream(original_stdout)
+    sys.stderr = _ThreadLocalStream(original_stderr)
+
     # Capture caller frame for better error reporting
     caller_frame = inspect.currentframe()
     caller_info = None
@@ -369,57 +383,61 @@ def _run_threadpool_backend(
             log_gate_path,
         )
 
-    results: list[Any] = [None] * total
-    with tqdm(
-        total=total,
-        desc=desc,
-        disable=not progress,
-        file=sys.stdout,
-    ) as pbar:
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=workers
-        ) as executor:
-            if _track_executor_threads is not None:
-                _track_executor_threads(executor)
+    try:
+        results: list[Any] = [None] * total
+        with tqdm(
+            total=total,
+            desc=desc,
+            disable=not progress,
+            file=sys.stdout,
+        ) as pbar:
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=workers
+            ) as executor:
+                if _track_executor_threads is not None:
+                    _track_executor_threads(executor)
 
-            # Submit all tasks
-            future_to_idx = {
-                executor.submit(worker_func, x): idx
-                for idx, x in enumerate(items)
-            }
+                # Submit all tasks
+                future_to_idx = {
+                    executor.submit(worker_func, x): idx
+                    for idx, x in enumerate(items)
+                }
 
-            # Process results as they complete
-            for future in concurrent.futures.as_completed(future_to_idx):
-                idx = future_to_idx[future]
-                try:
-                    result = future.result()
-                    error_stats.record_success()
-                    results[idx] = result
-                except Exception as e:
-                    if error_handler == 'raise':
-                        # Cancel remaining futures
-                        for f in future_to_idx:
-                            f.cancel()
-                        _exit_on_worker_error(
-                            e,
-                            pbar,
-                            caller_info,
-                            backend=backend_label,
-                        )
-                    error_stats.record_error(idx, e, items[idx], func_name)
-                    results[idx] = None
-                pbar.update(1)
-                update_pbar_postfix(pbar)
+                # Process results as they complete
+                for future in concurrent.futures.as_completed(future_to_idx):
+                    idx = future_to_idx[future]
+                    try:
+                        result = future.result()
+                        error_stats.record_success()
+                        results[idx] = result
+                    except Exception as e:
+                        if error_handler == 'raise':
+                            # Cancel remaining futures
+                            for f in future_to_idx:
+                                f.cancel()
+                            _exit_on_worker_error(
+                                e,
+                                pbar,
+                                caller_info,
+                                backend=backend_label,
+                            )
+                        error_stats.record_error(idx, e, items[idx], func_name)
+                        results[idx] = None
+                    pbar.update(1)
+                    update_pbar_postfix(pbar)
 
-        if _prune_dead_threads is not None:
-            _prune_dead_threads()
+            if _prune_dead_threads is not None:
+                _prune_dead_threads()
 
-    if track_processes:
-        _track_multiprocessing_processes()
-        _prune_dead_processes()
+        if track_processes:
+            _track_multiprocessing_processes()
+            _prune_dead_processes()
 
-    _cleanup_log_gate(log_gate_path)
-    return results
+        _cleanup_log_gate(log_gate_path)
+        return results
+    finally:
+        sys.stdout = original_stdout
+        sys.stderr = original_stderr
 
 
 __all__ = ['multi_process']

@@ -671,6 +671,43 @@ def _cleanup_log_gate(gate_path: Path | None) -> None:
         pass
 
 
+class _ThreadLocalStream:
+    """
+    Thread-local stream router.
+
+    Used to safely "redirect" stdout/stderr per-thread without mutating the
+    process-global `sys.stdout`/`sys.stderr` references (which is not
+    thread-safe and can break pytest capture).
+    """
+
+    def __init__(self, default_stream):
+        self._default_stream = default_stream
+        self._local = threading.local()
+
+    @property
+    def default_stream(self):
+        return self._default_stream
+
+    def set_target(self, stream) -> None:
+        self._local.stream = stream
+
+    def clear_target(self) -> None:
+        if hasattr(self._local, "stream"):
+            delattr(self._local, "stream")
+
+    def _get_stream(self):
+        return getattr(self._local, "stream", self._default_stream)
+
+    def write(self, s):
+        return self._get_stream().write(s)
+
+    def flush(self):
+        return self._get_stream().flush()
+
+    def __getattr__(self, name: str):
+        return getattr(self._get_stream(), name)
+
+
 class _PrefixedWriter:
     """Stream wrapper that prefixes each line with worker id."""
 
@@ -705,6 +742,37 @@ def _call_with_log_control(
 ):
     """Call a function, silencing stdout/stderr based on log mode."""
     allow_logs = _should_allow_worker_logs(log_mode, gate_path)
+
+    # ThreadPoolExecutor backend uses threads within a single process.
+    # `contextlib.redirect_stdout` is not thread-safe because it mutates the
+    # global `sys.stdout`. In this case we rely on `_ThreadLocalStream`.
+    if isinstance(sys.stdout, _ThreadLocalStream) and isinstance(
+        sys.stderr, _ThreadLocalStream
+    ):
+        stdout = sys.stdout
+        stderr = sys.stderr
+
+        if allow_logs:
+            prefix = f'[worker-{os.getpid()}] '
+            # Route worker logs to stderr to reduce clobbering tqdm on stdout.
+            out = _PrefixedWriter(stderr.default_stream, prefix)
+            stdout.set_target(out)
+            stderr.set_target(out)
+            try:
+                return func(x, **func_kwargs)
+            finally:
+                stdout.clear_target()
+                stderr.clear_target()
+
+        with open(os.devnull, 'w') as devnull:
+            stdout.set_target(devnull)
+            stderr.set_target(devnull)
+            try:
+                return func(x, **func_kwargs)
+            finally:
+                stdout.clear_target()
+                stderr.clear_target()
+
     if allow_logs:
         prefix = f'[worker-{os.getpid()}] '
         # Route worker logs to stderr to reduce clobbering tqdm on stdout
