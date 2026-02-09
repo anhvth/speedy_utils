@@ -27,9 +27,18 @@ from .utils import (
     get_base_client,
 )
 
+# Typing imports
+from collections.abc import Iterator, AsyncIterator
+
 # Lazy import openai types for type checking only
 if TYPE_CHECKING:
-    from openai import AuthenticationError, BadRequestError, OpenAI, RateLimitError, APITimeoutError
+    from openai import (
+        AuthenticationError,
+        BadRequestError,
+        OpenAI,
+        RateLimitError,
+        APITimeoutError,
+    )
     from openai.types.chat import ChatCompletionMessageParam
 
 # Type aliases for better readability
@@ -183,13 +192,20 @@ class LLM(
             self.last_ai_response = completion
         except Exception as exc:
             # Import openai exceptions for type checking
-            from openai import APITimeoutError, AuthenticationError, BadRequestError, RateLimitError
+            from openai import (
+                APITimeoutError,
+                AuthenticationError,
+                BadRequestError,
+                RateLimitError,
+            )
 
             if isinstance(exc, APITimeoutError):
-                error_msg = f'OpenAI API timeout ({api_kwargs['timeout']}) error: {exc} for model {model_name}'
+                error_msg = f'OpenAI API timeout ({api_kwargs["timeout"]}) error: {exc} for model {model_name}'
                 logger.error(error_msg)
                 raise
-            elif isinstance(exc, (AuthenticationError, RateLimitError, BadRequestError)):
+            elif isinstance(
+                exc, (AuthenticationError, RateLimitError, BadRequestError)
+            ):
                 error_msg = f'OpenAI API error ({type(exc).__name__}): {exc}'
                 logger.error(error_msg)
                 raise
@@ -197,7 +213,9 @@ class LLM(
                 logger.error(f'ValueError during API call: {exc}')
                 raise
             else:
-                is_length_error = 'Length' in str(exc) or 'maximum context length' in str(exc)
+                is_length_error = 'Length' in str(
+                    exc
+                ) or 'maximum context length' in str(exc)
                 if is_length_error:
                     raise ValueError(
                         f'Input too long for model {model_name}. Error: {str(exc)[:100]}...'
@@ -207,7 +225,9 @@ class LLM(
 
         results: list[dict[str, Any]] = []
         for choice in completion.choices:
-            assistant_message = [{'role': 'assistant', 'content': choice.message.content}]
+            assistant_message = [
+                {'role': 'assistant', 'content': choice.message.content}
+            ]
             try:
                 reasoning_content = choice.message.reasoning
             except:
@@ -224,9 +244,121 @@ class LLM(
                 'messages': choice_messages,
             }
 
-
             results.append(result_dict)
         return results
+
+    def stream_text_completion(
+        self, input_data: str | BaseModel | list[dict], **runtime_kwargs
+    ) -> Iterator[str]:
+        """
+        Stream text completion with caching support.
+
+        If response is cached, yields tokenized chunks from the cache.
+        If response is not cached, streams directly from the API.
+
+        Args:
+            input_data: Input data (string, BaseModel, or message list)
+            **runtime_kwargs: Additional runtime parameters
+
+        Yields:
+            Token strings from the completion
+        """
+        messages = self._prepare_input(input_data)
+        effective_kwargs = {**self.model_kwargs, **runtime_kwargs}
+        model_name = effective_kwargs.get('model', self.model_kwargs['model'])
+
+        # Remove stream from effective_kwargs if present to avoid conflicts
+        api_kwargs = {
+            k: v for k, v in effective_kwargs.items() if k not in ('model', 'stream')
+        }
+
+        if 'timeout' not in api_kwargs and self.timeout is not None:
+            api_kwargs['timeout'] = self.timeout
+
+        # Try cache first by making a non-streaming call
+        cache_hit = False
+        cached_text = None
+
+        try:
+            # Attempt non-streaming call to check cache
+            cached_completion = self.client.chat.completions.create(
+                model=model_name, messages=messages, **api_kwargs
+            )
+            cache_hit = True
+            cached_text = cached_completion.choices[0].message.content
+            self.last_ai_response = cached_completion
+        except Exception as e:
+            # If cache lookup fails, we'll try streaming from API
+            cache_hit = False
+            logger.debug(f'Cache lookup failed, attempting stream from API: {e}')
+
+        if cache_hit and cached_text:
+            # Stream from cached response by tokenizing
+            yield from self._stream_from_cache(cached_text, model_name)
+        else:
+            # Stream directly from API
+            try:
+                stream_response = self.client.chat.completions.create(
+                    model=model_name, messages=messages, stream=True, **api_kwargs
+                )
+                for chunk in stream_response:
+                    if chunk.choices and len(chunk.choices) > 0:
+                        delta = chunk.choices[0].delta
+                        if hasattr(delta, 'content') and delta.content:
+                            yield delta.content
+            except Exception as exc:
+                from openai import (
+                    APITimeoutError,
+                    AuthenticationError,
+                    BadRequestError,
+                    RateLimitError,
+                )
+
+                if isinstance(exc, APITimeoutError):
+                    error_msg = f'OpenAI API timeout ({api_kwargs.get("timeout")}) error: {exc} for model {model_name}'
+                    logger.error(error_msg)
+                    raise
+                elif isinstance(
+                    exc, (AuthenticationError, RateLimitError, BadRequestError)
+                ):
+                    error_msg = f'OpenAI API error ({type(exc).__name__}): {exc}'
+                    logger.error(error_msg)
+                    raise
+                else:
+                    is_length_error = 'Length' in str(
+                        exc
+                    ) or 'maximum context length' in str(exc)
+                    if is_length_error:
+                        raise ValueError(
+                            f'Input too long for model {model_name}. Error: {str(exc)[:100]}...'
+                        ) from exc
+                    raise
+
+    def _stream_from_cache(self, text: str, model_name: str) -> Iterator[str]:
+        """
+        Stream cached response text by tokenizing it using the model's tokenizer.
+
+        Args:
+            text: The cached response text
+            model_name: Name of the model for tokenization
+
+        Yields:
+            Token strings from the cached text
+        """
+        try:
+            # Use TokenizationMixin.encode to tokenize the text
+            tokens, token_strs = self.encode(
+                text, add_special_tokens=False, return_token_strs=True
+            )
+            # Yield each token string
+            for token in token_strs:
+                yield token
+        except Exception as e:
+            # Fallback: if tokenization fails, yield the text as a single chunk
+            logger.warning(
+                f'Failed to tokenize cached response: {e}. Yielding full text as single chunk.'
+            )
+            yield text
 
     @staticmethod
     def _strip_think_tags(text: str) -> str:
@@ -314,7 +446,9 @@ class LLM(
                 error_msg = f'OpenAI API error ({type(exc).__name__}): {exc}'
                 logger.error(error_msg)
                 raise
-            is_length_error = 'Length' in str(exc) or 'maximum context length' in str(exc)
+            is_length_error = 'Length' in str(exc) or 'maximum context length' in str(
+                exc
+            )
             if is_length_error:
                 raise ValueError(
                     f'Input too long for model {model_name}. Error: {str(exc)[:100]}...'
@@ -354,8 +488,9 @@ class LLM(
         temperature_ranges: tuple[float, float] | None = None,
         n: int = 1,
         cache=None,
+        stream: bool = False,
         **openai_client_kwargs,
-    ) -> list[dict[str, Any]]:
+    ) -> list[dict[str, Any]] | Iterator[str]:
         """
         Execute LLM task.
 
@@ -365,16 +500,29 @@ class LLM(
             two_step_parse_pydantic: Use two-step parsing (text then parse)
             temperature_ranges: If set, tuple of (min_temp, max_temp) to sample
             n: Number of temperature samples (only used with temperature_ranges, must be >= 2)
+            stream: If True, stream text completion with cache support (only for text output)
+            cache: Whether to use caching (default None uses instance setting)
             **runtime_kwargs: Additional runtime parameters
 
         Returns:
-            List of response dictionaries
+            List of response dictionaries, or Iterator[str] if stream=True
         """
         if cache is not None:
             if hasattr(self.client, 'set_cache'):
                 self.client.set_cache(cache)
             else:
                 logger.warning('Client does not support caching.')
+
+        # Handle streaming (only for text completion)
+        if stream:
+            pydantic_model = response_model or self.output_model
+            if pydantic_model not in (str, None):
+                raise ValueError(
+                    'Streaming is only supported for text completions, not structured outputs. '
+                    'Set response_model=None or response_model=str to use streaming.'
+                )
+            return self.stream_text_completion(input_data, **openai_client_kwargs)
+
         # Handle temperature range sampling
         if temperature_ranges is not None:
             if n < 2:
@@ -510,6 +658,7 @@ class LLM(
             timeout=timeout,
             **model_kwargs,
         )
+
 
 class LLM_NEMOTRON3(LLM):
     """
