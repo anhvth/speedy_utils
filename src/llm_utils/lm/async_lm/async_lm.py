@@ -1,18 +1,31 @@
 # from ._utils import *
-from typing import TYPE_CHECKING, Any, List, Literal, Optional, Type, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    List,
+    Literal,
+    Optional,
+    Type,
+    Union,
+    cast,
+)
 
 from loguru import logger
 from pydantic import BaseModel
 
 # from llm_utils.lm.async_lm.async_llm_task import OutputModelType
 from llm_utils.lm.async_lm.async_lm_base import AsyncLMBase
+from llm_utils.lm.mixins import TokenizationMixin
 import json
 
 try:
     from json_repair import jloads
 except ImportError:
+
     def jloads(x):
         return json.loads(x)
+
 
 from ._utils import (
     LegacyMsgs,
@@ -39,7 +52,7 @@ def jloads_safe(content: str) -> Any:
         raise ValueError(f"Invalid JSON content: {content}") from e
 
 
-class AsyncLM(AsyncLMBase):
+class AsyncLM(AsyncLMBase, TokenizationMixin):
     """Unified **async** language‑model wrapper with optional JSON parsing."""
 
     def __init__(
@@ -64,7 +77,6 @@ class AsyncLM(AsyncLMBase):
         repetition_penalty: float = 1.0,
         frequency_penalty: float | None = None,
     ) -> None:
-
         if model is None:
             models = (
                 OpenAI(base_url=f"http://{host}:{port}/v1", api_key="abc")
@@ -182,7 +194,9 @@ class AsyncLM(AsyncLMBase):
             from openai import AuthenticationError, BadRequestError, RateLimitError
 
             # Try fallback to beta mode if regular parsing fails
-            is_openai_error = isinstance(e, (AuthenticationError, RateLimitError, BadRequestError))
+            is_openai_error = isinstance(
+                e, (AuthenticationError, RateLimitError, BadRequestError)
+            )
             if not is_openai_error:
                 content = choice.get("content", "N/A") if choice else "N/A"
                 logger.info(
@@ -264,8 +278,20 @@ class AsyncLM(AsyncLMBase):
         prompt: str | None = None,
         messages: RawMsgs | None = None,
         max_tokens: int | None = None,
+        stream: bool = False,
     ):  # -> tuple[Any | dict[Any, Any], list[ChatCompletionMessagePar...:# -> tuple[Any | dict[Any, Any], list[ChatCompletionMessagePar...:
-        """Unified async call for language model, returns (assistant_message.model_dump(), messages)."""
+        """Unified async call for language model, returns (assistant_message.model_dump(), messages).
+
+        Args:
+            prompt: Single prompt string
+            messages: List of message dicts
+            max_tokens: Max tokens for response
+            stream: If True, returns async iterator of tokens instead of full response
+
+        Returns:
+            If stream=False: (assistant_message_dict, full_messages_list)
+            If stream=True: async iterator of token strings
+        """
         if (prompt is None) == (messages is None):
             raise ValueError("Provide *either* `prompt` or `messages` (but not both).")
 
@@ -280,9 +306,13 @@ class AsyncLM(AsyncLMBase):
             else cast(Messages, messages)
         )
 
-        assert (
-            self.model_kwargs["model"] is not None
-        ), "Model must be set before making a call."
+        assert self.model_kwargs["model"] is not None, (
+            "Model must be set before making a call."
+        )
+
+        # Handle streaming
+        if stream:
+            return self._stream_call_with_messages(list(openai_msgs), max_tokens)
 
         # Use unified client call
         raw_response = await self._unified_client_call(
@@ -305,17 +335,127 @@ class AsyncLM(AsyncLMBase):
             msg_dump = dict(assistant_msg)
         return msg_dump, full_messages
 
+    async def _stream_call_with_messages(
+        self, openai_msgs: Messages, max_tokens: int | None = None
+    ) -> AsyncIterator[str]:
+        """Stream response with caching support.
+
+        If response is cached, yields tokenized chunks from cache.
+        If response is not cached, streams directly from API.
+
+        Args:
+            openai_msgs: Converted message list
+            max_tokens: Max tokens for response
+
+        Yields:
+            Token strings from completion
+        """
+        # Try cache first by making a non-streaming call
+        cache_hit = False
+        cached_text = None
+
+        try:
+            # Attempt non-streaming call to check cache
+            cached_response = await self._unified_client_call(
+                openai_msgs, max_tokens=max_tokens
+            )
+            if hasattr(cached_response, "model_dump"):
+                cached_response = cached_response.model_dump()  # type: ignore
+
+            cache_hit = True
+            cached_text = cached_response["choices"][0]["message"]["content"]
+        except Exception as e:
+            # If cache lookup fails, we'll try streaming from API
+            cache_hit = False
+            logger.debug(f"Cache lookup failed, attempting stream from API: {e}")
+
+        if cache_hit and cached_text:
+            # Stream from cached response by tokenizing
+            async for token in self._stream_from_cache_async(cached_text):
+                yield token
+        else:
+            # Stream directly from API
+            try:
+                # Prepare call kwargs
+                call_kwargs = {
+                    "messages": openai_msgs,
+                    "stream": True,
+                    **self.model_kwargs,
+                }
+                if max_tokens is not None:
+                    call_kwargs["max_tokens"] = max_tokens
+                if self.extra_body:
+                    call_kwargs["extra_body"] = self.extra_body
+
+                stream_response = await self.client.chat.completions.create(
+                    **call_kwargs
+                )
+                async for chunk in stream_response:
+                    if hasattr(chunk, "choices") and chunk.choices:
+                        delta = chunk.choices[0].delta
+                        if hasattr(delta, "content") and delta.content:
+                            yield delta.content
+            except Exception as exc:
+                from openai import AuthenticationError, BadRequestError, RateLimitError
+
+                if isinstance(
+                    exc, (AuthenticationError, RateLimitError, BadRequestError)
+                ):
+                    error_msg = f"OpenAI API error ({type(exc).__name__}): {exc}"
+                    logger.error(error_msg)
+                    raise
+                raise
+
+    async def _stream_from_cache_async(self, text: str) -> AsyncIterator[str]:
+        """Stream cached response text by tokenizing it using the model's tokenizer.
+
+        Args:
+            text: The cached response text
+
+        Yields:
+            Token strings from the cached text
+        """
+        try:
+            # Use TokenizationMixin.encode to tokenize the text (synchronous call)
+            # Note: encode is sync, so we call it directly
+            tokens, token_strs = self.encode(
+                text, add_special_tokens=False, return_token_strs=True
+            )
+            # Yield each token string
+            for token in token_strs:
+                yield token
+        except Exception as e:
+            # Fallback: if tokenization fails, yield the text as a single chunk
+            logger.warning(
+                f"Failed to tokenize cached response: {e}. Yielding full text as single chunk."
+            )
+            yield text
+
     def call_sync(
         self,
         prompt: str | None = None,
         messages: RawMsgs | None = None,
         max_tokens: int | None = None,
+        stream: bool = False,
     ):
-        """Synchronous wrapper around the async __call__ method."""
+        """Synchronous wrapper around the async call_with_messages method.
+
+        Args:
+            prompt: Single prompt string
+            messages: List of message dicts
+            max_tokens: Max tokens for response
+            stream: If True, returns iterator of tokens
+
+        Returns:
+            If stream=False: (assistant_message_dict, full_messages_list)
+            If stream=True: iterator of token strings
+        """
         import asyncio
 
         return asyncio.run(
-            self.__call__(prompt=prompt, messages=messages, max_tokens=max_tokens)
+            self.call_with_messages(
+                prompt=prompt, messages=messages, max_tokens=max_tokens, stream=stream
+            )
         )
 
     async def parse(
@@ -325,9 +465,9 @@ class AsyncLM(AsyncLMBase):
     ) -> ParsedOutput[BaseModel]:
         """Parse response using guided JSON generation. Returns (parsed.model_dump(), messages)."""
         if not self._use_beta:
-            assert (
-                self.add_json_schema_to_instruction
-            ), "add_json_schema_to_instruction must be True when use_beta is False. otherwise model will not be able to parse the response."
+            assert self.add_json_schema_to_instruction, (
+                "add_json_schema_to_instruction must be True when use_beta is False. otherwise model will not be able to parse the response."
+            )
 
         assert self.response_model is not None, "response_model must be set at init."
         json_schema = self.response_model.model_json_schema()

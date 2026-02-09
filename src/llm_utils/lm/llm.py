@@ -59,7 +59,7 @@ class LLM(
         instruction: str | None = None,
         input_model: type[BaseModel] | type[str] = str,
         output_model: type[BaseModel] | type[str] = None,
-        client: 'OpenAI | int | str | None' = None,  # type: ignore[name-defined]
+        client: "OpenAI | int | str | None" = None,  # type: ignore[name-defined]
         cache=True,
         is_reasoning_model: bool = False,
         force_lora_unload: bool = False,
@@ -74,7 +74,7 @@ class LLM(
         """Initialize LLMTask."""
         if verbose:
             available_models = LLM.list_models(client=client)
-            logger.info(f'Available models: {available_models}')
+            logger.info(f"Available models: {available_models}")
         self.instruction = instruction
         self.input_model = input_model
         self.output_model = output_model
@@ -91,9 +91,9 @@ class LLM(
         self.cache = cache
         # Avoid importing OpenAI client class at module import time.
         # If a client object provides an api_key attribute, use it.
-        self.api_key = 'abc'
+        self.api_key = "abc"
         if client is not None:
-            api_key = getattr(client, 'api_key', None)
+            api_key = getattr(client, "api_key", None)
             if isinstance(api_key, str) and api_key:
                 self.api_key = api_key
 
@@ -118,12 +118,12 @@ class LLM(
             self.client.models.list()
         except Exception as e:
             logger.error(
-                f'Failed to connect to OpenAI client: {str(e)}, base_url={self.client.base_url}'
+                f"Failed to connect to OpenAI client: {str(e)}, base_url={self.client.base_url}"
             )
             raise e
 
-        if not self.model_kwargs.get('model', ''):
-            self.model_kwargs['model'] = self.client.models.list().data[0].id
+        if not self.model_kwargs.get("model", ""):
+            self.model_kwargs["model"] = self.client.models.list().data[0].id
 
         # Handle LoRA loading if lora_path is provided
         if self.lora_path:
@@ -140,14 +140,14 @@ class LLM(
     def _prepare_input(self, input_data: str | BaseModel | list[dict]) -> Messages:
         """Convert input to messages format."""
         if isinstance(input_data, list):
-            assert isinstance(input_data[0], dict) and 'role' in input_data[0], (
+            assert isinstance(input_data[0], dict) and "role" in input_data[0], (
                 "If input_data is a list, it must be a list of messages with 'role' and 'content' keys."
             )
             return cast(Messages, input_data)
         # Convert input to string format
         if isinstance(input_data, str):
             user_content = input_data
-        elif hasattr(input_data, 'model_dump_json'):
+        elif hasattr(input_data, "model_dump_json"):
             user_content = input_data.model_dump_json()
         elif isinstance(input_data, dict):
             user_content = jdumps(input_data)
@@ -157,13 +157,13 @@ class LLM(
         # Build messages
         messages = (
             [
-                {'role': 'system', 'content': self.instruction},
+                {"role": "system", "content": self.instruction},
             ]
             if self.instruction is not None
             else []
         )
 
-        messages.append({'role': 'user', 'content': user_content})
+        messages.append({"role": "user", "content": user_content})
         return cast(Messages, messages)
 
     @clean_traceback
@@ -176,13 +176,13 @@ class LLM(
 
         # Merge runtime kwargs with default model kwargs (runtime takes precedence)
         effective_kwargs = {**self.model_kwargs, **runtime_kwargs}
-        model_name = effective_kwargs.get('model', self.model_kwargs['model'])
+        model_name = effective_kwargs.get("model", self.model_kwargs["model"])
 
         # Extract model name from kwargs for API call
-        api_kwargs = {k: v for k, v in effective_kwargs.items() if k != 'model'}
+        api_kwargs = {k: v for k, v in effective_kwargs.items() if k != "model"}
 
-        if 'timeout' not in api_kwargs and self.timeout is not None:
-            api_kwargs['timeout'] = self.timeout
+        if "timeout" not in api_kwargs and self.timeout is not None:
+            api_kwargs["timeout"] = self.timeout
 
         try:
             completion = self.client.chat.completions.create(
@@ -206,19 +206,19 @@ class LLM(
             elif isinstance(
                 exc, (AuthenticationError, RateLimitError, BadRequestError)
             ):
-                error_msg = f'OpenAI API error ({type(exc).__name__}): {exc}'
+                error_msg = f"OpenAI API error ({type(exc).__name__}): {exc}"
                 logger.error(error_msg)
                 raise
             elif isinstance(exc, ValueError):
-                logger.error(f'ValueError during API call: {exc}')
+                logger.error(f"ValueError during API call: {exc}")
                 raise
             else:
-                is_length_error = 'Length' in str(
+                is_length_error = "Length" in str(
                     exc
-                ) or 'maximum context length' in str(exc)
+                ) or "maximum context length" in str(exc)
                 if is_length_error:
                     raise ValueError(
-                        f'Input too long for model {model_name}. Error: {str(exc)[:100]}...'
+                        f"Input too long for model {model_name}. Error: {str(exc)[:100]}..."
                     ) from exc
                 raise
         # print(completion)
@@ -226,22 +226,22 @@ class LLM(
         results: list[dict[str, Any]] = []
         for choice in completion.choices:
             assistant_message = [
-                {'role': 'assistant', 'content': choice.message.content}
+                {"role": "assistant", "content": choice.message.content}
             ]
             try:
                 reasoning_content = choice.message.reasoning
             except:
                 reasoning_content = None
             if reasoning_content:
-                assistant_message[0]['reasoning_content'] = reasoning_content
+                assistant_message[0]["reasoning_content"] = reasoning_content
 
             choice_messages = cast(
                 Messages,
                 messages + assistant_message,
             )
             result_dict = {
-                'parsed': choice.message.content,
-                'messages': choice_messages,
+                "parsed": choice.message.content,
+                "messages": choice_messages,
             }
 
             results.append(result_dict)
@@ -265,15 +265,15 @@ class LLM(
         """
         messages = self._prepare_input(input_data)
         effective_kwargs = {**self.model_kwargs, **runtime_kwargs}
-        model_name = effective_kwargs.get('model', self.model_kwargs['model'])
+        model_name = effective_kwargs.get("model", self.model_kwargs["model"])
 
         # Remove stream from effective_kwargs if present to avoid conflicts
         api_kwargs = {
-            k: v for k, v in effective_kwargs.items() if k not in ('model', 'stream')
+            k: v for k, v in effective_kwargs.items() if k not in ("model", "stream")
         }
 
-        if 'timeout' not in api_kwargs and self.timeout is not None:
-            api_kwargs['timeout'] = self.timeout
+        if "timeout" not in api_kwargs and self.timeout is not None:
+            api_kwargs["timeout"] = self.timeout
 
         # Try cache first by making a non-streaming call
         cache_hit = False
@@ -290,7 +290,7 @@ class LLM(
         except Exception as e:
             # If cache lookup fails, we'll try streaming from API
             cache_hit = False
-            logger.debug(f'Cache lookup failed, attempting stream from API: {e}')
+            logger.debug(f"Cache lookup failed, attempting stream from API: {e}")
 
         if cache_hit and cached_text:
             # Stream from cached response by tokenizing
@@ -304,7 +304,7 @@ class LLM(
                 for chunk in stream_response:
                     if chunk.choices and len(chunk.choices) > 0:
                         delta = chunk.choices[0].delta
-                        if hasattr(delta, 'content') and delta.content:
+                        if hasattr(delta, "content") and delta.content:
                             yield delta.content
             except Exception as exc:
                 from openai import (
@@ -321,16 +321,16 @@ class LLM(
                 elif isinstance(
                     exc, (AuthenticationError, RateLimitError, BadRequestError)
                 ):
-                    error_msg = f'OpenAI API error ({type(exc).__name__}): {exc}'
+                    error_msg = f"OpenAI API error ({type(exc).__name__}): {exc}"
                     logger.error(error_msg)
                     raise
                 else:
-                    is_length_error = 'Length' in str(
+                    is_length_error = "Length" in str(
                         exc
-                    ) or 'maximum context length' in str(exc)
+                    ) or "maximum context length" in str(exc)
                     if is_length_error:
                         raise ValueError(
-                            f'Input too long for model {model_name}. Error: {str(exc)[:100]}...'
+                            f"Input too long for model {model_name}. Error: {str(exc)[:100]}..."
                         ) from exc
                     raise
 
@@ -356,7 +356,7 @@ class LLM(
         except Exception as e:
             # Fallback: if tokenization fails, yield the text as a single chunk
             logger.warning(
-                f'Failed to tokenize cached response: {e}. Yielding full text as single chunk.'
+                f"Failed to tokenize cached response: {e}. Yielding full text as single chunk."
             )
             yield text
 
@@ -364,10 +364,10 @@ class LLM(
     def _strip_think_tags(text: str) -> str:
         """Remove <think> tags if present, returning only the reasoning body."""
         cleaned = text.strip()
-        if cleaned.startswith('<think>'):
-            cleaned = cleaned[len('<think>') :].lstrip()
-        if '</think>' in cleaned:
-            cleaned = cleaned.split('</think>', 1)[0].rstrip()
+        if cleaned.startswith("<think>"):
+            cleaned = cleaned[len("<think>") :].lstrip()
+        if "</think>" in cleaned:
+            cleaned = cleaned.split("</think>", 1)[0].rstrip()
         return cleaned
 
     def generate_with_think_prefix(
@@ -380,23 +380,23 @@ class LLM(
         results = self.text_completion(input_data, **runtime_kwargs)
 
         for result in results:
-            content = result.get('parsed') or ''
-            reasoning = result.get('reasoning_content') or ''
+            content = result.get("parsed") or ""
+            reasoning = result.get("reasoning_content") or ""
 
-            if not reasoning and str(content).lstrip().startswith('<think>'):
+            if not reasoning and str(content).lstrip().startswith("<think>"):
                 formatted = str(content)
             else:
                 reasoning_body = self._strip_think_tags(str(reasoning))
                 formatted = (
-                    f'<think>\n{reasoning_body}\n</think>\n\n{str(content).lstrip()}'
+                    f"<think>\n{reasoning_body}\n</think>\n\n{str(content).lstrip()}"
                 )
 
-            result['parsed'] = formatted
-            messages = result.get('messages')
+            result["parsed"] = formatted
+            messages = result.get("messages")
             if isinstance(messages, list) and messages:
                 last_msg = messages[-1]
-                if isinstance(last_msg, dict) and last_msg.get('role') == 'assistant':
-                    last_msg['content'] = formatted
+                if isinstance(last_msg, dict) and last_msg.get("role") == "assistant":
+                    last_msg["content"] = formatted
 
         return results
 
@@ -413,18 +413,18 @@ class LLM(
 
         # Merge runtime kwargs with default model kwargs (runtime takes precedence)
         effective_kwargs = {**self.model_kwargs, **runtime_kwargs}
-        model_name = effective_kwargs.get('model', self.model_kwargs['model'])
+        model_name = effective_kwargs.get("model", self.model_kwargs["model"])
 
         # Extract model name from kwargs for API call
-        api_kwargs = {k: v for k, v in effective_kwargs.items() if k != 'model'}
+        api_kwargs = {k: v for k, v in effective_kwargs.items() if k != "model"}
 
-        if 'timeout' not in api_kwargs and self.timeout is not None:
-            api_kwargs['timeout'] = self.timeout
+        if "timeout" not in api_kwargs and self.timeout is not None:
+            api_kwargs["timeout"] = self.timeout
 
         pydantic_model_to_use_opt = response_model or self.output_model
         if pydantic_model_to_use_opt is None:
             raise ValueError(
-                'No response model specified. Either set output_model in constructor or pass response_model parameter.'
+                "No response model specified. Either set output_model in constructor or pass response_model parameter."
             )
         pydantic_model_to_use: type[BaseModel] = cast(
             type[BaseModel], pydantic_model_to_use_opt
@@ -443,15 +443,15 @@ class LLM(
             from openai import AuthenticationError, BadRequestError, RateLimitError
 
             if isinstance(exc, (AuthenticationError, RateLimitError, BadRequestError)):
-                error_msg = f'OpenAI API error ({type(exc).__name__}): {exc}'
+                error_msg = f"OpenAI API error ({type(exc).__name__}): {exc}"
                 logger.error(error_msg)
                 raise
-            is_length_error = 'Length' in str(exc) or 'maximum context length' in str(
+            is_length_error = "Length" in str(exc) or "maximum context length" in str(
                 exc
             )
             if is_length_error:
                 raise ValueError(
-                    f'Input too long for model {model_name}. Error: {str(exc)[:100]}...'
+                    f"Input too long for model {model_name}. Error: {str(exc)[:100]}..."
                 ) from exc
             raise
 
@@ -459,7 +459,7 @@ class LLM(
         for choice in completion.choices:  # type: ignore[attr-defined]
             choice_messages = cast(
                 Messages,
-                messages + [{'role': 'assistant', 'content': choice.message.content}],
+                messages + [{"role": "assistant", "content": choice.message.content}],
             )
 
             # Ensure consistent Pydantic model output for both fresh and cached responses
@@ -471,11 +471,11 @@ class LLM(
                 # Fallback: ensure it's the correct type
                 parsed_content = pydantic_model_to_use.model_validate(parsed_content)
 
-            result_dict = {'parsed': parsed_content, 'messages': choice_messages}
+            result_dict = {"parsed": parsed_content, "messages": choice_messages}
 
             # Add reasoning content if this is a reasoning model
-            if self.is_reasoning_model and hasattr(choice.message, 'reasoning_content'):
-                result_dict['reasoning_content'] = choice.message.reasoning_content
+            if self.is_reasoning_model and hasattr(choice.message, "reasoning_content"):
+                result_dict["reasoning_content"] = choice.message.reasoning_content
 
             results.append(result_dict)
         return results
@@ -508,18 +508,18 @@ class LLM(
             List of response dictionaries, or Iterator[str] if stream=True
         """
         if cache is not None:
-            if hasattr(self.client, 'set_cache'):
+            if hasattr(self.client, "set_cache"):
                 self.client.set_cache(cache)
             else:
-                logger.warning('Client does not support caching.')
+                logger.warning("Client does not support caching.")
 
         # Handle streaming (only for text completion)
         if stream:
             pydantic_model = response_model or self.output_model
             if pydantic_model not in (str, None):
                 raise ValueError(
-                    'Streaming is only supported for text completions, not structured outputs. '
-                    'Set response_model=None or response_model=str to use streaming.'
+                    "Streaming is only supported for text completions, not structured outputs. "
+                    "Set response_model=None or response_model=str to use streaming."
                 )
             return self.stream_text_completion(input_data, **openai_client_kwargs)
 
@@ -527,7 +527,7 @@ class LLM(
         if temperature_ranges is not None:
             if n < 2:
                 raise ValueError(
-                    f'n must be >= 2 when using temperature_ranges, got {n}'
+                    f"n must be >= 2 when using temperature_ranges, got {n}"
                 )
             return self.temperature_range_sampling(
                 input_data,
@@ -536,7 +536,7 @@ class LLM(
                 response_model=response_model,
                 **openai_client_kwargs,
             )
-        openai_client_kwargs['n'] = n
+        openai_client_kwargs["n"] = n
 
         # Handle two-step Pydantic parsing
         pydantic_model = response_model or self.output_model
@@ -555,8 +555,8 @@ class LLM(
             )
 
         # Track conversation history
-        _last_conv = choices[0]['messages'] if choices else []
-        if not hasattr(self, '_last_conversations'):
+        _last_conv = choices[0]["messages"] if choices else []
+        if not hasattr(self, "_last_conversations"):
             self._last_conversations = []
         else:
             self._last_conversations = self._last_conversations[-100:]
@@ -567,14 +567,14 @@ class LLM(
         self, idx: int = -1, k_last_messages: int = 2
     ) -> list[dict[str, Any]]:
         """Inspect the message history of a specific response choice."""
-        if hasattr(self, '_last_conversations'):
+        if hasattr(self, "_last_conversations"):
             from llm_utils import show_chat
 
             conv = self._last_conversations[idx]
             if k_last_messages > 0:
                 conv = conv[-k_last_messages:]
             return show_chat(conv)
-        raise ValueError('No message history available. Make a call first.')
+        raise ValueError("No message history available. Make a call first.")
 
     def __inner_call__(
         self,
@@ -611,7 +611,7 @@ class LLM(
     @classmethod
     def from_prompt_builder(
         cls: BasePromptBuilder,
-        client: 'OpenAI | int | str | None' = None,  # type: ignore[name-defined]
+        client: "OpenAI | int | str | None" = None,  # type: ignore[name-defined]
         cache=True,
         is_reasoning_model: bool = False,
         lora_path: str | None = None,
@@ -620,7 +620,7 @@ class LLM(
         vllm_reuse: bool = True,
         timeout: float | Timeout | None = None,
         **model_kwargs,
-    ) -> 'LLM':
+    ) -> "LLM":
         """
         Create an LLMTask instance from a BasePromptBuilder instance.
 
@@ -668,16 +668,16 @@ class LLM_NEMOTRON3(LLM):
 
     def __init__(
         self,
-        model: str = 'nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16',
+        model: str = "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
         thinking_budget: int = 1024,
         enable_thinking: bool = True,
         **kwargs,
     ):
         # Force reasoning_model to True to enable reasoning_content extraction
-        kwargs['is_reasoning_model'] = True
+        kwargs["is_reasoning_model"] = True
         super().__init__(**kwargs)
 
-        self.model_kwargs['model'] = model
+        self.model_kwargs["model"] = model
         self.thinking_budget = thinking_budget
         self.enable_thinking = enable_thinking
 
@@ -697,7 +697,7 @@ class LLM_NEMOTRON3(LLM):
         if not self.enable_thinking:
             # Simple pass with thinking disabled in template
             return super().__call__(
-                input_data, chat_template_kwargs={'enable_thinking': False}, **kwargs
+                input_data, chat_template_kwargs={"enable_thinking": False}, **kwargs
             )
 
         # --- STEP 1: Generate Thinking Trace ---
@@ -707,31 +707,31 @@ class LLM_NEMOTRON3(LLM):
         # We use the raw text completion for the budget phase
         # Stop at the closing tag or budget limit
         thinking_response = self.text_completion(
-            input_data, max_tokens=budget, stop=['</think>'], **kwargs
+            input_data, max_tokens=budget, stop=["</think>"], **kwargs
         )[0]
 
-        reasoning_content = thinking_response['parsed']
+        reasoning_content = thinking_response["parsed"]
 
         # Ensure proper tag closing for the second pass
-        if '</think>' not in reasoning_content:
-            reasoning_content = f'{reasoning_content}\n</think>'
-        elif not reasoning_content.endswith('</think>'):
+        if "</think>" not in reasoning_content:
+            reasoning_content = f"{reasoning_content}\n</think>"
+        elif not reasoning_content.endswith("</think>"):
             # Ensure it ends exactly with the tag for continuity
-            reasoning_content = reasoning_content.split('</think>')[0] + '</think>'
+            reasoning_content = reasoning_content.split("</think>")[0] + "</think>"
 
         # --- STEP 2: Generate Final Answer ---
         # Append the thought to the assistant role and continue
         final_messages = messages + [
-            {'role': 'assistant', 'content': f'<think>\n{reasoning_content}\n'}
+            {"role": "assistant", "content": f"<think>\n{reasoning_content}\n"}
         ]
 
         # Use continue_final_message to prevent the model from repeating the header
         results = super().__call__(
-            final_messages, extra_body={'continue_final_message': True}, **kwargs
+            final_messages, extra_body={"continue_final_message": True}, **kwargs
         )
 
         # Inject the reasoning back into the result for the UI/API
         for res in results:
-            res['reasoning_content'] = reasoning_content
+            res["reasoning_content"] = reasoning_content
 
         return results
