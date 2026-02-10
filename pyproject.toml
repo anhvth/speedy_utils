@@ -138,7 +138,7 @@ ignore = [
     "E902", # io error
 ]
 unfixable = ["E401", "E402", "E501", "F401", "F403"]
-extend-select = ["F"] # keep all pyflakes rules
+extend-select = ["F", "Q"] # keep all pyflakes rules and enable quote rules
 
 
 [tool.ruff.format]
