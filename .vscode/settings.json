@@ -13,6 +13,6 @@
     "python.analysis.diagnosticSeverityOverrides": {
         "reportAttributeAccessIssue": "none"
     },
-    "python.defaultInterpreterPath": "/home/anhvth8/venvs/SFT/bin/python",
+    "python.defaultInterpreterPath": "/Users/anhvth/.local/share/venvs/speedy_utils/bin/python",
     "chatgpt.openOnStartup": true
 }
