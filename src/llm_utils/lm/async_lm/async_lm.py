@@ -309,12 +309,15 @@ class AsyncLM(AsyncLMBase, TokenizationMixin):
 
         # Handle streaming
         if stream:
-            # Disable caching when streaming - warn user
+            # Disable caching when streaming - warn user and disable on client
             if hasattr(self, "_cache") and self._cache:
                 logger.warning(
                     "Caching is disabled when streaming. "
                     "Responses will be streamed directly from the API without caching."
                 )
+            # Explicitly disable caching on the client to prevent pickle errors
+            if hasattr(self.client, "set_cache"):
+                self.client.set_cache(False)
             return self._stream_call_with_messages(list(openai_msgs), max_tokens)
 
         # Use unified client call

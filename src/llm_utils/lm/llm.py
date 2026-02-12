@@ -441,12 +441,15 @@ class LLM(
                     "Streaming is only supported for text completions, not structured outputs. "
                     "Set response_model=None or response_model=str to use streaming."
                 )
-            # Disable caching when streaming - warn user
+            # Disable caching when streaming - warn user and disable on client
             if cache is not False and self.cache:
                 logger.warning(
                     "Caching is disabled when streaming. "
                     "Responses will be streamed directly from the API without caching."
                 )
+            # Explicitly disable caching on the client to prevent pickle errors
+            if hasattr(self.client, "set_cache"):
+                self.client.set_cache(False)
             return self.stream_text_completion(input_data, **openai_client_kwargs)
 
         # Handle temperature range sampling
