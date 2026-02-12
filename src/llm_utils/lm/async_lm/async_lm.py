@@ -1,13 +1,9 @@
 # from ._utils import *
+import json
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncIterator,
-    List,
     Literal,
-    Optional,
-    Type,
-    Union,
     cast,
 )
 
@@ -17,7 +13,7 @@ from pydantic import BaseModel
 # from llm_utils.lm.async_lm.async_llm_task import OutputModelType
 from llm_utils.lm.async_lm.async_lm_base import AsyncLMBase
 from llm_utils.lm.mixins import TokenizationMixin
-import json
+
 
 try:
     from json_repair import jloads
@@ -35,9 +31,10 @@ from ._utils import (
     RawMsgs,
 )
 
+
 # Lazy import openai types for type checking only
 if TYPE_CHECKING:
-    from openai import AuthenticationError, BadRequestError, OpenAI, RateLimitError
+    from openai import OpenAI
 
 
 def jloads_safe(content: str) -> Any:
@@ -286,11 +283,11 @@ class AsyncLM(AsyncLMBase, TokenizationMixin):
             prompt: Single prompt string
             messages: List of message dicts
             max_tokens: Max tokens for response
-            stream: If True, returns async iterator of tokens instead of full response
+            stream: If True, returns raw stream response instead of full response
 
         Returns:
             If stream=False: (assistant_message_dict, full_messages_list)
-            If stream=True: async iterator of token strings
+            If stream=True: raw stream response object. Caller should iterate using `async for chunk in response`.
         """
         if (prompt is None) == (messages is None):
             raise ValueError("Provide *either* `prompt` or `messages` (but not both).")
@@ -312,6 +309,12 @@ class AsyncLM(AsyncLMBase, TokenizationMixin):
 
         # Handle streaming
         if stream:
+            # Disable caching when streaming - warn user
+            if hasattr(self, "_cache") and self._cache:
+                logger.warning(
+                    "Caching is disabled when streaming. "
+                    "Responses will be streamed directly from the API without caching."
+                )
             return self._stream_call_with_messages(list(openai_msgs), max_tokens)
 
         # Use unified client call
@@ -337,99 +340,32 @@ class AsyncLM(AsyncLMBase, TokenizationMixin):
 
     async def _stream_call_with_messages(
         self, openai_msgs: Messages, max_tokens: int | None = None
-    ) -> AsyncIterator[str]:
-        """Stream response with caching support.
+    ):
+        """Stream response directly from the API.
 
-        If response is cached, yields tokenized chunks from cache.
-        If response is not cached, streams directly from API.
+        Note: Caching is not supported when streaming to avoid compatibility
+        issues with providers that don't support the /tokenize endpoint.
 
         Args:
             openai_msgs: Converted message list
             max_tokens: Max tokens for response
 
-        Yields:
-            Token strings from completion
+        Returns:
+            Raw stream response object from the API. Caller should iterate over
+            it using `async for chunk in response`.
         """
-        # Try cache first by making a non-streaming call
-        cache_hit = False
-        cached_text = None
+        # Prepare call kwargs
+        call_kwargs = {
+            "messages": openai_msgs,
+            "stream": True,
+            **self.model_kwargs,
+        }
+        if max_tokens is not None:
+            call_kwargs["max_tokens"] = max_tokens
+        if self.extra_body:
+            call_kwargs["extra_body"] = self.extra_body
 
-        try:
-            # Attempt non-streaming call to check cache
-            cached_response = await self._unified_client_call(
-                openai_msgs, max_tokens=max_tokens
-            )
-            if hasattr(cached_response, "model_dump"):
-                cached_response = cached_response.model_dump()  # type: ignore
-
-            cache_hit = True
-            cached_text = cached_response["choices"][0]["message"]["content"]
-        except Exception as e:
-            # If cache lookup fails, we'll try streaming from API
-            cache_hit = False
-            logger.debug(f"Cache lookup failed, attempting stream from API: {e}")
-
-        if cache_hit and cached_text:
-            # Stream from cached response by tokenizing
-            async for token in self._stream_from_cache_async(cached_text):
-                yield token
-        else:
-            # Stream directly from API
-            try:
-                # Prepare call kwargs
-                call_kwargs = {
-                    "messages": openai_msgs,
-                    "stream": True,
-                    **self.model_kwargs,
-                }
-                if max_tokens is not None:
-                    call_kwargs["max_tokens"] = max_tokens
-                if self.extra_body:
-                    call_kwargs["extra_body"] = self.extra_body
-
-                stream_response = await self.client.chat.completions.create(
-                    **call_kwargs
-                )
-                async for chunk in stream_response:
-                    if hasattr(chunk, "choices") and chunk.choices:
-                        delta = chunk.choices[0].delta
-                        if hasattr(delta, "content") and delta.content:
-                            yield delta.content
-            except Exception as exc:
-                from openai import AuthenticationError, BadRequestError, RateLimitError
-
-                if isinstance(
-                    exc, (AuthenticationError, RateLimitError, BadRequestError)
-                ):
-                    error_msg = f"OpenAI API error ({type(exc).__name__}): {exc}"
-                    logger.error(error_msg)
-                    raise
-                raise
-
-    async def _stream_from_cache_async(self, text: str) -> AsyncIterator[str]:
-        """Stream cached response text by tokenizing it using the model's tokenizer.
-
-        Args:
-            text: The cached response text
-
-        Yields:
-            Token strings from the cached text
-        """
-        try:
-            # Use TokenizationMixin.encode to tokenize the text (synchronous call)
-            # Note: encode is sync, so we call it directly
-            tokens, token_strs = self.encode(
-                text, add_special_tokens=False, return_token_strs=True
-            )
-            # Yield each token string
-            for token in token_strs:
-                yield token
-        except Exception as e:
-            # Fallback: if tokenization fails, yield the text as a single chunk
-            logger.warning(
-                f"Failed to tokenize cached response: {e}. Yielding full text as single chunk."
-            )
-            yield text
+        return await self.client.chat.completions.create(**call_kwargs)
 
     def call_sync(
         self,
