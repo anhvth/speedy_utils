@@ -1,11 +1,51 @@
-from collections.abc import Callable
+import os
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
+
+from loguru import logger
 
 from speedy_utils.common.utils_cache import memoize
 
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI, OpenAI
+
+
+_LOCAL_PROXY_VARS = (
+    "http_proxy",
+    "HTTP_PROXY",
+)
+_localhost_proxy_notice_shown = False
+
+
+def _unset_proxy_env_for_localhost(base_url: Any) -> list[str]:
+    """Unset proxy env vars when base_url points to localhost/loopback."""
+    global _localhost_proxy_notice_shown
+
+    if not base_url:
+        return []
+
+    base_url_str = str(base_url)
+    parsed = urlparse(base_url_str)
+    host = parsed.hostname
+    if host not in {"localhost", "127.0.0.1", "::1"}:
+        return []
+
+    removed_vars: list[str] = []
+    for var_name in _LOCAL_PROXY_VARS:
+        if os.environ.pop(var_name, None) is not None:
+            removed_vars.append(var_name)
+
+    if removed_vars and not _localhost_proxy_notice_shown:
+        logger.warning(
+            "Localhost base_url detected ({}). Unset proxy env vars for local LLM "
+            "connectivity: {}",
+            base_url_str,
+            ", ".join(removed_vars),
+        )
+        _localhost_proxy_notice_shown = True
+
+    return removed_vars
 
 
 def _get_mopenai_class():
@@ -49,6 +89,7 @@ def _get_mopenai_class():
         """
 
         def __init__(self, *args, cache=True, **kwargs):
+            _unset_proxy_env_for_localhost(kwargs.get("base_url"))
             super().__init__(*args, **kwargs)
             self._orig_post = self.post
             if cache:
@@ -92,6 +133,7 @@ def _get_masyncopenai_class():
         """
 
         def __init__(self, *args, cache=True, **kwargs):
+            _unset_proxy_env_for_localhost(kwargs.get("base_url"))
             super().__init__(*args, **kwargs)
             self._orig_post = self.post
             if cache:
