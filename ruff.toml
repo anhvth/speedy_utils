@@ -75,7 +75,7 @@ lines-after-imports = 2
 max-complexity = 15
 
 [format]
-quote-style = "single"
+quote-style = "double"
 indent-style = "space"
 line-ending = "auto"
 skip-magic-trailing-comma = false
