@@ -10,6 +10,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
+from urllib.parse import urlparse
 
 from llm_utils.lm.openai_memoize import MOpenAI
 
@@ -28,6 +29,7 @@ Supported key=value args:
   host     streamlit bind host (default: 0.0.0.0)
   model    fixed model id (default: auto-detect from /v1/models)
   api_key  API key for OpenAI-compatible endpoint (default: abc)
+  thinking enable model thinking/reasoning stream (default: false)
 """
 
 
@@ -38,6 +40,7 @@ class ChatConfig:
     app_host: str = '0.0.0.0'
     model: str | None = None
     api_key: str = 'abc'
+    thinking: bool = False
 
 
 def normalize_client_base_url(client: str | int | None) -> str:
@@ -50,16 +53,18 @@ def normalize_client_base_url(client: str | int | None) -> str:
         raw = '8000'
 
     if raw.isdigit():
-        base_url = f'http://localhost:{raw}'
-    elif raw.startswith(('http://', 'https://')):
+        return f'http://localhost:{raw}/v1'
+
+    if raw.startswith(('http://', 'https://')):
         base_url = raw.rstrip('/')
     elif ':' in raw:
         base_url = f'http://{raw}'.rstrip('/')
     else:
-        base_url = f'http://localhost:{raw}'
+        return f'http://localhost:{raw}/v1'
 
-    if not base_url.endswith('/v1'):
-        base_url = f'{base_url}/v1'
+    parsed = urlparse(base_url)
+    if parsed.path in {'', '/'}:
+        return f'{base_url}/v1'
     return base_url
 
 
@@ -100,9 +105,13 @@ def parse_cli_args(argv: Iterable[str]) -> ChatConfig:
         if key == 'api_key':
             config.api_key = value or 'abc'
             continue
+        if key == 'thinking':
+            config.thinking = _parse_bool('thinking', value)
+            continue
 
         raise ValueError(
-            f"Unknown argument '{key}'. Supported keys: client, port, host, model, api_key."
+            "Unknown argument "
+            f"'{key}'. Supported keys: client, port, host, model, api_key, thinking."
         )
 
     return config
@@ -117,6 +126,17 @@ def _parse_positive_int(name: str, value: str) -> int:
     if parsed <= 0:
         raise ValueError(f'{name} must be > 0, got {parsed}.')
     return parsed
+
+
+def _parse_bool(name: str, value: str) -> bool:
+    normalized = value.strip().lower()
+    if normalized in {'1', 'true', 'yes', 'on', 'enabled'}:
+        return True
+    if normalized in {'0', 'false', 'no', 'off', 'disabled'}:
+        return False
+    raise ValueError(
+        f"{name} must be a boolean (true/false/1/0/enabled/disabled), got '{value}'."
+    )
 
 
 def _is_running_in_streamlit() -> bool:
@@ -136,6 +156,30 @@ def _list_models_safe(client: Any) -> tuple[list[str], str | None]:
         return [], str(exc)
 
 
+def _iter_delta_text(value: Any) -> Iterable[str]:
+    """Extract text fragments from OpenAI-compatible delta fields."""
+    if value is None:
+        return
+    if isinstance(value, str):
+        if value:
+            yield value
+        return
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, str):
+                if item:
+                    yield item
+                continue
+            if isinstance(item, dict):
+                text = item.get('text')
+                if isinstance(text, str) and text:
+                    yield text
+                continue
+            text = getattr(item, 'text', None)
+            if isinstance(text, str) and text:
+                yield text
+
+
 def _stream_tokens(
     *,
     client: Any,
@@ -143,21 +187,36 @@ def _stream_tokens(
     messages: list[dict[str, str]],
     temperature: float,
     max_tokens: int,
+    enable_thinking: bool,
 ):
+    call_kwargs: dict[str, Any] = {
+        'model': model,
+        'messages': messages,
+        'temperature': temperature,
+        'max_tokens': max_tokens,
+        'stream': True,
+    }
+    if enable_thinking:
+        call_kwargs['extra_body'] = {'thinking': {'type': 'enabled'}}
+
     stream = client.chat.completions.create(
-        model=model,
-        messages=messages,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        stream=True,
+        **call_kwargs,
     )
     for chunk in stream:
         if not chunk.choices:
             continue
         delta = chunk.choices[0].delta
+        reasoning_content = getattr(delta, 'reasoning_content', None)
+        for text in _iter_delta_text(reasoning_content):
+            yield 'thinking', text
+
+        reasoning = getattr(delta, 'reasoning', None)
+        for text in _iter_delta_text(reasoning):
+            yield 'thinking', text
+
         content = getattr(delta, 'content', None)
-        if content:
-            yield content
+        for text in _iter_delta_text(content):
+            yield 'content', text
 
 
 def _render_streaming_placeholder(placeholder: Any, text: str) -> None:
@@ -167,6 +226,42 @@ def _render_streaming_placeholder(placeholder: Any, text: str) -> None:
 <div class="sp-live-response">
   {safe_text}
   <span class="sp-stream-cursor"></span>
+</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_streaming_blocks(
+    placeholder: Any, *, thinking_text: str, answer_text: str, thinking_active: bool
+) -> None:
+    safe_answer = html.escape(answer_text).replace('\n', '<br>')
+    thinking_block = ''
+    if thinking_text.strip():
+        safe_thinking = html.escape(thinking_text).replace('\n', '<br>')
+        thinking_cursor = (
+            '<span class="sp-stream-cursor"></span>' if thinking_active else ''
+        )
+        if thinking_active:
+            thinking_block = f"""
+<div class="sp-live-response" style="margin-bottom:0.5rem; opacity:0.92;">
+  <strong>Thinking:</strong><br>{safe_thinking}{thinking_cursor}
+</div>
+            """
+        else:
+            thinking_block = f"""
+<details class="sp-thinking-details">
+  <summary>Thinking</summary>
+  <div class="sp-thinking-details-content">{safe_thinking}</div>
+</details>
+            """
+
+    answer_cursor = '<span class="sp-stream-cursor"></span>' if answer_text else ''
+    placeholder.markdown(
+        f"""
+{thinking_block}
+<div class="sp-live-response">
+  {safe_answer}{answer_cursor}
 </div>
         """,
         unsafe_allow_html=True,
@@ -437,6 +532,27 @@ div[data-testid='stChatMessage'] [data-testid='stMarkdownContainer'] span {
   white-space: normal;
 }
 
+.sp-thinking-details {
+  margin: 0 0 0.5rem;
+  border: 1px solid var(--sp-border);
+  border-radius: 10px;
+  background: rgba(18, 30, 51, 0.55);
+  padding: 0.45rem 0.65rem;
+}
+
+.sp-thinking-details summary {
+  color: var(--sp-muted);
+  font-weight: 700;
+  cursor: pointer;
+  user-select: none;
+}
+
+.sp-thinking-details-content {
+  margin-top: 0.45rem;
+  color: var(--sp-text);
+  line-height: 1.58;
+}
+
 .sp-stream-cursor {
   display: inline-block;
   width: 0.55ch;
@@ -575,6 +691,8 @@ a {
         st.session_state.max_tokens = 1024
     if 'system_prompt' not in st.session_state:
         st.session_state.system_prompt = ''
+    if 'enable_thinking' not in st.session_state:
+        st.session_state.enable_thinking = config.thinking
 
     st.markdown(
         f"""
@@ -629,6 +747,11 @@ a {
             height=120,
             placeholder='Optional system message for every request.',
         )
+        st.session_state.enable_thinking = st.toggle(
+            'Enable thinking stream',
+            value=bool(st.session_state.enable_thinking),
+            help='Sends extra_body.thinking.type=enabled for providers like Z.AI.',
+        )
         if st.button('Clear chat', use_container_width=True):
             st.session_state.messages = []
             st.rerun()
@@ -647,7 +770,8 @@ a {
 
     with st.chat_message('assistant'):
         placeholder = st.empty()
-        chunks: list[str] = []
+        answer_chunks: list[str] = []
+        thinking_chunks: list[str] = []
         _render_thinking_placeholder(placeholder)
 
         request_messages: list[dict[str, str]] = []
@@ -664,45 +788,79 @@ a {
                 )
 
             displayed_text = ''
-            pending_buffer = ''
+            displayed_thinking = ''
+            pending_answer_buffer = ''
+            pending_thinking_buffer = ''
             last_flush = time.perf_counter()
 
-            for token in _stream_tokens(
+            for chunk_kind, token in _stream_tokens(
                 client=client,
                 model=selected_model,
                 messages=request_messages,
                 temperature=st.session_state.temperature,
                 max_tokens=st.session_state.max_tokens,
+                enable_thinking=bool(st.session_state.enable_thinking),
             ):
-                chunks.append(token)
-                pending_buffer += token
+                if chunk_kind == 'thinking':
+                    thinking_chunks.append(token)
+                    pending_thinking_buffer += token
+                else:
+                    answer_chunks.append(token)
+                    pending_answer_buffer += token
                 now = time.perf_counter()
 
                 should_attempt_flush = (
-                    len(pending_buffer) >= 24
-                    or '\n' in pending_buffer
-                    or pending_buffer.endswith(('.', '!', '?', ':', ';', ','))
+                    len(pending_answer_buffer) >= 24
+                    or len(pending_thinking_buffer) >= 24
+                    or '\n' in pending_answer_buffer
+                    or '\n' in pending_thinking_buffer
+                    or pending_answer_buffer.endswith(('.', '!', '?', ':', ';', ','))
+                    or pending_thinking_buffer.endswith(('.', '!', '?', ':', ';', ','))
                     or (now - last_flush) >= 0.05
                 )
                 if should_attempt_flush:
-                    force_flush = len(pending_buffer) >= 72
-                    chunk_to_render, pending_buffer = _extract_renderable_chunk(
-                        pending_buffer, force=force_flush
+                    force_flush_answer = len(pending_answer_buffer) >= 72
+                    answer_to_render, pending_answer_buffer = _extract_renderable_chunk(
+                        pending_answer_buffer, force=force_flush_answer
                     )
-                    if chunk_to_render:
-                        displayed_text += chunk_to_render
-                        _render_streaming_placeholder(placeholder, displayed_text)
+                    if answer_to_render:
+                        displayed_text += answer_to_render
+
+                    force_flush_thinking = len(pending_thinking_buffer) >= 72
+                    thinking_to_render, pending_thinking_buffer = _extract_renderable_chunk(
+                        pending_thinking_buffer, force=force_flush_thinking
+                    )
+                    if thinking_to_render:
+                        displayed_thinking += thinking_to_render
+
+                    if answer_to_render or thinking_to_render:
+                        _render_streaming_blocks(
+                            placeholder,
+                            thinking_text=displayed_thinking,
+                            answer_text=displayed_text,
+                            thinking_active=True,
+                        )
                         last_flush = now
 
-            if pending_buffer:
-                chunk_to_render, pending_buffer = _extract_renderable_chunk(
-                    pending_buffer, force=True
+            if pending_thinking_buffer:
+                chunk_to_render, pending_thinking_buffer = _extract_renderable_chunk(
+                    pending_thinking_buffer, force=True
+                )
+                displayed_thinking += chunk_to_render
+            if pending_answer_buffer:
+                chunk_to_render, pending_answer_buffer = _extract_renderable_chunk(
+                    pending_answer_buffer, force=True
                 )
                 displayed_text += chunk_to_render
-                _render_streaming_placeholder(placeholder, displayed_text)
+            if displayed_text or displayed_thinking:
+                _render_streaming_blocks(
+                    placeholder,
+                    thinking_text=displayed_thinking,
+                    answer_text=displayed_text,
+                    thinking_active=False,
+                )
 
-            response_text = ''.join(chunks).strip() or '(empty response)'
-            placeholder.markdown(response_text)
+            response_text = ''.join(answer_chunks).strip() or '(empty response)'
         except Exception as exc:
             response_text = f'Request failed: {exc}'
             placeholder.error(response_text)
@@ -738,6 +896,7 @@ def _launch_streamlit(config: ChatConfig) -> int:
         '--',
         f'client={config.client}',
         f'api_key={config.api_key}',
+        f'thinking={str(config.thinking).lower()}',
     ]
     if config.model:
         command.append(f'model={config.model}')

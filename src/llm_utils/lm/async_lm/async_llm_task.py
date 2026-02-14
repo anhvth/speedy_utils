@@ -40,7 +40,6 @@ class LMConfiguration:
     base_url: str | None = None
     api_key: str | None = None
     cache: bool | None = True
-    think: Literal[True, False] | None = None
     add_json_schema_to_instruction: bool | None = None
     use_beta: bool | None = False
     ports: list[int] | None = None
@@ -58,7 +57,6 @@ class LMConfiguration:
             'base_url': self.base_url,
             'api_key': self.api_key,
             'cache': self.cache,
-            'think': self.think,
             'add_json_schema_to_instruction': self.add_json_schema_to_instruction,
             'use_beta': self.use_beta,
             'ports': self.ports,
@@ -95,7 +93,6 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
     DEFAULT_TOP_K: int | None = None
     DEFAULT_REPETITION_PENALTY: float | None = None
     DEFAULT_CACHE: bool | None = True
-    DEFAULT_THINK: Literal[True, False] | None = None
     DEFAULT_PORTS: list[int] | None = None
     DEFAULT_USE_BETA: bool | None = False
     DEFAULT_ADD_JSON_SCHEMA_TO_INSTRUCTION: bool | None = True
@@ -113,7 +110,6 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
         base_url: str | None = None,
         api_key: str | None = None,
         cache: bool | None = None,
-        think: Literal[True, False] | None = None,
         add_json_schema_to_instruction: bool | None = None,
         use_beta: bool | None = None,
         ports: list[int] | None = None,
@@ -138,7 +134,6 @@ class AsyncLLMTask(ABC, Generic[InputModelType, OutputModelType]):
             base_url=base_url if base_url is not None else self.DEFAULT_BASE_URL,
             api_key=api_key if api_key is not None else self.DEFAULT_API_KEY,
             cache=cache if cache is not None else self.DEFAULT_CACHE,
-            think=think if think is not None else self.DEFAULT_THINK,
             add_json_schema_to_instruction=(
                 add_json_schema_to_instruction
                 if add_json_schema_to_instruction is not None

@@ -1,5 +1,10 @@
 from .async_lm.async_llm_task import AsyncLLMTask
 from .async_lm.async_lm import AsyncLM
+from .async_lm.model_specific import (
+    AsyncLM_DeepSeekR1,
+    AsyncLM_GLM5,
+    AsyncLM_Qwen3,
+)
 from .base_prompt_builder import BasePromptBuilder
 from .llm import LLM
 from .llm_signature import LLMSignature
@@ -18,6 +23,9 @@ __all__ = [
     'LMBase',
     'LLM',
     'AsyncLM',
+    'AsyncLM_Qwen3',
+    'AsyncLM_GLM5',
+    'AsyncLM_DeepSeekR1',
     'AsyncLLMTask',
     'BasePromptBuilder',
     'LLMSignature',
