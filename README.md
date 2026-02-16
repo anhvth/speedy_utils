@@ -52,6 +52,7 @@ results = multi_thread(process_item, [1, 2, 3, 4, 5], error_handler='log')
   - [File I/O](#file-io)
   - [Data Manipulation](#data-manipulation)
   - [Utility Functions](#utility-functions)
+  - [LLM](#llm)
 - [Testing](#testing)
 
 ## Features
@@ -393,7 +394,7 @@ clock = Clock()
 clock.log()
 ```
 
-### LLM Class (from llm_utils)
+### LLM
 
 The `LLM` class provides a unified interface for language model interactions with structured input/output handling. It supports text completion, structured outputs, caching, streaming, and VLLM integration.
 
