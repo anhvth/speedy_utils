@@ -47,6 +47,9 @@ results = multi_thread(process_item, [1, 2, 3, 4, 5], error_handler='log')
 - [Installation](#installation)
 - [Usage](#usage)
   - [Parallel Processing](#parallel-processing)
+    - [Multi-threading](#multi-threading-with-enhanced-error-handling)
+    - [Multi-processing](#multi-processing-with-error-handling)
+    - [mpython](#mpython-cli-tool)
   - [Enhanced Error Handling](#enhanced-error-handling)
   - [Caching](#caching)
   - [File I/O](#file-io)
@@ -213,6 +216,47 @@ results = multi_process(
 )
 print(results)  # [0, 1, 4, 9, 16, None, 36, 49, 64, 81, None, 121]
 ```
+
+#### mpython (CLI Tool)
+
+`mpython` is a CLI tool for running Python scripts in multiple tmux windows with automatic GPU/CPU allocation for parallel processing.
+
+**Basic Usage:**
+
+```bash
+# Run script.py with 16 parallel processes across GPUs 0-7
+mpython script.py
+
+# Run with 8 processes
+mpython -t 8 script.py
+
+# Run on specific GPUs only
+mpython --gpus 0,1,2 script.py
+```
+
+**Multi-Process Script Setup:**
+
+Your script must use `MP_ID` and `MP_TOTAL` environment variables for sharding:
+
+```python
+import os
+
+MP_ID = int(os.getenv("MP_ID", "0"))
+MP_TOTAL = int(os.getenv("MP_TOTAL", "1"))
+
+# Shard your data - each process gets its slice
+inputs = list(range(1000))
+my_inputs = inputs[MP_ID::MP_TOTAL]
+
+for item in my_inputs:
+    process(item)
+```
+
+**Managing Sessions:**
+
+- Sessions are named incrementally: `mpython`, `mpython-1`, `mpython-2`, etc.
+- Kill all sessions: `kill-mpython`
+- Attach to session: `tmux attach -t mpython`
 
 ### Enhanced Error Handling
 
