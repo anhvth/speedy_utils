@@ -865,6 +865,10 @@ a:hover {
     if "enable_thinking" not in st.session_state:
         st.session_state.enable_thinking = config.thinking
 
+    def _on_clear_chat() -> None:
+        """Callback to clear chat history."""
+        st.session_state.messages = []
+
     st.markdown(
         f"""
 <div class="sp-hero">
@@ -934,9 +938,12 @@ a:hover {
         )
         st.session_state.enable_thinking = enable_thinking_val
 
-        if st.button("Clear chat", use_container_width=True, key="clear_chat_btn"):
-            st.session_state.messages = []
-            st.rerun()
+        st.button(
+            "Clear chat",
+            use_container_width=True,
+            key="clear_chat_btn",
+            on_click=_on_clear_chat,
+        )
 
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
