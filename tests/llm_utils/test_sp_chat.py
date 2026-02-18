@@ -2,7 +2,12 @@ import pytest
 
 from llm_utils.scripts.sp_chat import (
     ChatConfig,
+    DEFAULT_MAX_TOKENS,
+    DEFAULT_TEMPERATURE,
+    _archive_current_chat,
+    _build_history_title,
     _render_streaming_blocks,
+    _reset_chat_state,
     normalize_client_base_url,
     parse_cli_args,
 )
@@ -95,6 +100,59 @@ def test_render_streaming_blocks_shows_thinking_and_answer() -> None:
     assert placeholder.last_unsafe is True
 
 
-def test_clear_chat_button_callback() -> None:
-    """Clear chat now uses st.button return + st.rerun."""
-    assert True
+def test_reset_chat_state_like_soft_refresh() -> None:
+    state: dict[str, object] = {
+        'messages': [{'role': 'user', 'content': 'hello'}],
+        'temperature': 1.3,
+        'max_tokens': 256,
+        'system_prompt': 'be brief',
+        'enable_thinking': False,
+        'temp_slider': 1.3,
+        'max_tokens_input': 256,
+        'system_prompt_input': 'be brief',
+        'enable_thinking_toggle': False,
+        'unrelated_key': 'keep me',
+    }
+
+    _reset_chat_state(state, ChatConfig(thinking=True))
+
+    assert state['messages'] == []
+    assert state['temperature'] == DEFAULT_TEMPERATURE
+    assert state['max_tokens'] == DEFAULT_MAX_TOKENS
+    assert state['system_prompt'] == ''
+    assert state['enable_thinking'] is True
+    assert state['unrelated_key'] == 'keep me'
+
+
+def test_build_history_title_prefers_first_user_message() -> None:
+    messages = [
+        {'role': 'assistant', 'content': 'Hello there'},
+        {'role': 'user', 'content': 'Please summarize this long text now.'},
+    ]
+
+    title = _build_history_title(messages, index=3)
+
+    assert title.startswith('Chat 3: Please summarize')
+
+
+def test_archive_current_chat_moves_messages_to_history() -> None:
+    state: dict[str, object] = {
+        'messages': [
+            {'role': 'user', 'content': 'Hi'},
+            {'role': 'assistant', 'content': 'Hello!'},
+        ],
+        'chat_history': [],
+        'history_counter': 1,
+    }
+
+    _archive_current_chat(state)
+
+    history = state['chat_history']
+    assert isinstance(history, list)
+    assert len(history) == 1
+    entry = history[0]
+    assert entry['id'] == 1
+    assert entry['turn_count'] == 2
+    assert entry['messages'][0]['content'] == 'Hi'
+    assert state['dimmed_messages'][1]['content'] == 'Hello!'
+    assert state['history_counter'] == 2

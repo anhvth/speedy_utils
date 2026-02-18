@@ -1,22 +1,21 @@
 #!/usr/bin/env python3
-"""Simple Streamlit chat UI for quickly testing vLLM servers."""
+"""Minimalist Chainlit chat UI for quickly testing vLLM servers."""
 
 from __future__ import annotations
 
-import html
-import subprocess
+import os
 import sys
+import subprocess
 import time
-from dataclasses import dataclass
+import html
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, List
 from urllib.parse import urlparse
 
-from llm_utils.lm.openai_memoize import MOpenAI
-
+# --- Configuration & CLI Parsing ---
 
 HELP_TEXT = """\
-sp_chat: Streamlit chat UI for vLLM
+sp_chat: Chainlit chat UI for vLLM
 
 Usage:
   sp_chat
@@ -24,33 +23,149 @@ Usage:
   sp_chat client=http://10.0.0.3:8000/v1 port=5010 model=Qwen/Qwen2.5-7B-Instruct
 
 Supported key=value args:
-  client   vLLM client endpoint or port (default: 8000)
-  port     streamlit web port (default: 5009)
-  host     streamlit bind host (default: 0.0.0.0)
+  client   vLLM client endpoint or port (default: http://localhost:4343/v1)
+  port     web port (default: 5009)
+  host     bind host (default: 0.0.0.0)
   model    fixed model id (default: auto-detect from /v1/models)
   api_key  API key for OpenAI-compatible endpoint (default: abc)
-  thinking enable model thinking/reasoning stream (default: false)
+  thinking enable model thinking/reasoning stream (default: true)
 """
 
+DEFAULT_MAX_TOKENS = 4096
+DEFAULT_TEMPERATURE = 0.7
+DEFAULT_SYSTEM_PROMPT = ""
 
-@dataclass(slots=True)
 class ChatConfig:
-    client: str = "8000"
-    app_port: int = 5009
-    app_host: str = "0.0.0.0"
-    model: str | None = None
-    api_key: str = "abc"
-    thinking: bool = False
+    __slots__ = ("client", "app_port", "app_host", "model", "api_key", "thinking")
 
+    def __init__(
+        self,
+        client: str = "http://localhost:4343/v1",
+        app_port: int = 5009,
+        app_host: str = "0.0.0.0",
+        model: str | None = None,
+        api_key: str = "abc",
+        thinking: bool = True,
+    ):
+        self.client = client
+        self.app_port = app_port
+        self.app_host = app_host
+        self.model = model
+        self.api_key = api_key
+        self.thinking = thinking
+
+    def __repr__(self) -> str:
+        return (
+            "ChatConfig("
+            f"client={self.client!r}, "
+            f"app_port={self.app_port!r}, "
+            f"app_host={self.app_host!r}, "
+            f"model={self.model!r}, "
+            f"api_key={self.api_key!r}, "
+            f"thinking={self.thinking!r}"
+            ")"
+        )
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ChatConfig):
+            return False
+        return (
+            self.client == other.client
+            and self.app_port == other.app_port
+            and self.app_host == other.app_host
+            and self.model == other.model
+            and self.api_key == other.api_key
+            and self.thinking == other.thinking
+        )
+
+
+def _build_history_title(messages: list[dict[str, str]], index: int) -> str:
+    for message in messages:
+        if message.get("role") != "user":
+            continue
+        content = message.get("content", "").strip()
+        if not content:
+            continue
+        compact = " ".join(content.split())
+        if len(compact) > 30:
+            compact = f"{compact[:27]}..."
+        return f"Chat {index}: {compact}"
+    return f"Chat {index}"
+
+
+def _archive_current_chat(session_state: Any) -> None:
+    messages = list(session_state.get("messages", []))
+    if not messages:
+        return
+
+    history_index = int(session_state.get("history_counter", 1))
+    copied_messages = [dict(msg) for msg in messages]
+    history_entry = {
+        "id": history_index,
+        "title": _build_history_title(copied_messages, history_index),
+        "messages": copied_messages,
+        "turn_count": len(copied_messages),
+    }
+
+    history = session_state.setdefault("chat_history", [])
+    history.append(history_entry)
+    session_state["dimmed_messages"] = [dict(msg) for msg in copied_messages]
+    session_state["history_counter"] = history_index + 1
+
+
+def _reset_chat_state(session_state: Any, config: ChatConfig) -> None:
+    session_state["messages"] = []
+    session_state["temperature"] = DEFAULT_TEMPERATURE
+    session_state["max_tokens"] = DEFAULT_MAX_TOKENS
+    session_state["system_prompt"] = DEFAULT_SYSTEM_PROMPT
+    session_state["enable_thinking"] = bool(config.thinking)
+
+    # Keep these mirrored keys for backward compatibility with previous UI state shape.
+    session_state["temp_slider"] = DEFAULT_TEMPERATURE
+    session_state["max_tokens_input"] = DEFAULT_MAX_TOKENS
+    session_state["system_prompt_input"] = DEFAULT_SYSTEM_PROMPT
+    session_state["enable_thinking_toggle"] = bool(config.thinking)
+
+
+def _render_streaming_blocks(
+    placeholder: Any,
+    *,
+    thinking_text: str,
+    answer_text: str,
+) -> None:
+    parts: list[str] = []
+    cursor = (
+        "<span style=\"display:inline-block;width:4px;height:1em;"
+        "background:#ECECEC;animation:blink 1s step-end infinite;\"></span>"
+    )
+
+    if thinking_text.strip():
+        parts.append(
+            "<details class=\"sp-thinking-stream\" "
+            "style=\"color:#A3A3A3;font-size:0.9em;margin-bottom:1rem;"
+            "padding:0.5rem;border-left:2px solid #444;\">"
+            "<summary style=\"cursor:pointer;margin-bottom:0.5rem;\">"
+            "Thought Process</summary>"
+            f"<div style=\"white-space:pre-wrap;\">{html.escape(thinking_text)}"
+            f"{cursor if not answer_text else ''}</div></details>"
+        )
+
+    if answer_text.strip():
+        parts.append(
+            f"<div style=\"white-space:pre-wrap;line-height:1.6;\">"
+            f"{html.escape(answer_text)}{cursor}</div>"
+        )
+    elif not thinking_text.strip():
+        parts.append(f"<div>{cursor}</div>")
+
+    placeholder.markdown("\n".join(parts), unsafe_allow_html=True)
 
 def normalize_client_base_url(client: str | int | None) -> str:
-    """Normalize client input into an OpenAI-compatible base URL."""
     if client is None:
-        client = "8000"
-
+        client = "http://localhost:8000/v1"
     raw = str(client).strip()
     if not raw:
-        raw = "8000"
+        raw = "http://localhost:8000/v1"
 
     if raw.isdigit():
         return f"http://localhost:{raw}/v1"
@@ -67,11 +182,19 @@ def normalize_client_base_url(client: str | int | None) -> str:
         return f"{base_url}/v1"
     return base_url
 
+def _parse_positive_int(name: str, value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0: raise ValueError(f"{name} must be > 0.")
+    return parsed
+
+def _parse_bool(name: str, value: str) -> bool:
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on", "enabled"}: return True
+    if normalized in {"0", "false", "no", "off", "disabled"}: return False
+    raise ValueError(f"{name} must be a boolean.")
 
 def parse_cli_args(argv: Iterable[str]) -> ChatConfig:
-    """Parse key=value arguments, keeping defaults when omitted."""
     config = ChatConfig()
-
     for raw_arg in argv:
         arg = raw_arg.strip()
         if not arg:
@@ -82,1066 +205,237 @@ def parse_cli_args(argv: Iterable[str]) -> ChatConfig:
             arg = arg[2:]
 
         if "=" not in arg:
-            raise ValueError(
-                f"Invalid argument '{raw_arg}'. Expected key=value (example: client=8000)."
-            )
+            # Maybe it's a positional arg or flag without value?
+            # Original code strictly required key=value
+            raise ValueError(f"Invalid argument '{raw_arg}'. Expected key=value.")
 
         key, value = arg.split("=", 1)
         key = key.strip().lower().replace("-", "_")
         value = value.strip()
 
-        if key == "client":
-            config.client = value or "8000"
-            continue
-        if key in {"port", "app_port"}:
-            config.app_port = _parse_positive_int("port", value)
-            continue
-        if key in {"host", "app_host"}:
-            config.app_host = value or "0.0.0.0"
-            continue
-        if key == "model":
-            config.model = value or None
-            continue
-        if key == "api_key":
-            config.api_key = value or "abc"
-            continue
-        if key == "thinking":
-            config.thinking = _parse_bool("thinking", value)
-            continue
-
-        raise ValueError(
-            "Unknown argument "
-            f"'{key}'. Supported keys: client, port, host, model, api_key, thinking."
-        )
-
+        if key == "client": config.client = value or "http://localhost:4343/v1"
+        elif key in {"port", "app_port"}: config.app_port = _parse_positive_int("port", value)
+        elif key in {"host", "app_host"}: config.app_host = value or "0.0.0.0"
+        elif key == "model": config.model = value or None
+        elif key == "api_key": config.api_key = value or "abc"
+        elif key == "thinking": config.thinking = _parse_bool("thinking", value)
+        else:
+            raise ValueError(f"Unknown argument '{key}'. Supported keys: client, port, host, model, api_key, thinking.")
     return config
 
+# --- Chainlit App Logic ---
 
-def _parse_positive_int(name: str, value: str) -> int:
+def _is_running_in_chainlit() -> bool:
+    return os.environ.get("SP_CHAT_RUNNING") == "1"
+
+async def _list_models_async(client: Any) -> tuple[List[str], str | None]:
     try:
-        parsed = int(value)
-    except ValueError as exc:
-        raise ValueError(f"{name} must be an integer, got '{value}'.") from exc
-
-    if parsed <= 0:
-        raise ValueError(f"{name} must be > 0, got {parsed}.")
-    return parsed
-
-
-def _parse_bool(name: str, value: str) -> bool:
-    normalized = value.strip().lower()
-    if normalized in {"1", "true", "yes", "on", "enabled"}:
-        return True
-    if normalized in {"0", "false", "no", "off", "disabled"}:
-        return False
-    raise ValueError(
-        f"{name} must be a boolean (true/false/1/0/enabled/disabled), got '{value}'."
-    )
-
-
-def _is_running_in_streamlit() -> bool:
-    try:
-        from streamlit.runtime.scriptrunner import get_script_run_ctx
-    except Exception:
-        return False
-    return get_script_run_ctx() is not None
-
-
-def _list_models_safe(client: Any) -> tuple[list[str], str | None]:
-    try:
-        models = client.models.list().data
-        model_ids = [model.id for model in models]
-        return model_ids, None
+        resp = await client.models.list()
+        return sorted([m.id for m in resp.data]), None
     except Exception as exc:
         return [], str(exc)
 
-
-def _iter_delta_text(value: Any) -> Iterable[str]:
-    """Extract text fragments from OpenAI-compatible delta fields."""
-    if value is None:
-        return
-    if isinstance(value, str):
-        if value:
-            yield value
-        return
-    if isinstance(value, list):
-        for item in value:
-            if isinstance(item, str):
-                if item:
-                    yield item
-                continue
-            if isinstance(item, dict):
-                text = item.get("text")
-                if isinstance(text, str) and text:
-                    yield text
-                continue
-            text = getattr(item, "text", None)
-            if isinstance(text, str) and text:
-                yield text
-
-
-def _stream_tokens(
-    *,
-    client: Any,
-    model: str,
-    messages: list[dict[str, str]],
-    temperature: float,
-    max_tokens: int,
-    enable_thinking: bool,
-):
-    call_kwargs: dict[str, Any] = {
-        "model": model,
-        "messages": messages,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-        "stream": True,
-    }
-    if enable_thinking:
-        call_kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
-
-    stream = client.chat.completions.create(
-        **call_kwargs,
-    )
-    for chunk in stream:
-        if not chunk.choices:
-            continue
-        delta = chunk.choices[0].delta
-        reasoning_content = getattr(delta, "reasoning_content", None)
-        for text in _iter_delta_text(reasoning_content):
-            yield "thinking", text
-
-        reasoning = getattr(delta, "reasoning", None)
-        for text in _iter_delta_text(reasoning):
-            yield "thinking", text
-
-        content = getattr(delta, "content", None)
-        for text in _iter_delta_text(content):
-            yield "content", text
-
-
-def _render_streaming_placeholder(placeholder: Any, text: str) -> None:
-    safe_text = html.escape(text).replace("\n", "<br>")
-    placeholder.markdown(
-        f"""
-<div class="sp-live-response">
-  {safe_text}
-  <span class="sp-stream-cursor"></span>
-</div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def _render_streaming_blocks(
-    placeholder: Any,
-    *,
-    thinking_text: str,
-    answer_text: str,
-) -> None:
-    """Render thinking + answer blocks during streaming."""
-    parts: list[str] = []
-    cursor = '<span class="sp-stream-cursor"></span>'
-    if thinking_text.strip():
-        escaped_t = html.escape(thinking_text)
-        t_cursor = (
-            cursor if not answer_text.strip() else ''
-        )
-        parts.append(
-            '<div class="sp-thinking-stream">'
-            '<div class="sp-thinking-header">'
-            f'💭 Thinking{t_cursor}'
-            '</div>'
-            '<div class="sp-thinking-body">'
-            f'{escaped_t}</div></div>'
-        )
-    if answer_text.strip():
-        escaped_a = html.escape(answer_text)
-        parts.append(
-            '<div class="sp-live-response"'
-            ' style="white-space:pre-wrap;'
-            'word-break:break-word;">'
-            f'{escaped_a}{cursor}</div>'
-        )
-    elif not thinking_text.strip():
-        parts.append(
-            '<div class="sp-live-response">'
-            f'{cursor}</div>'
-        )
-    placeholder.markdown(
-        '\n'.join(parts),
-        unsafe_allow_html=True,
-    )
-
-
-def _render_thinking_placeholder(placeholder: Any) -> None:
-    placeholder.markdown(
-        """
-<div class="sp-thinking">
-  <span class="sp-thinking-dot"></span>
-  <span class="sp-thinking-dot"></span>
-  <span class="sp-thinking-dot"></span>
-  <span class="sp-thinking-label">Thinking</span>
-</div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def _extract_renderable_chunk(
-    buffer: str, force: bool = False, min_chunk_size: int = 8
-) -> tuple[str, str]:
-    """Return a natural-looking chunk (word/sentence boundary) and remaining buffer.
-
-    For smoother streaming, extracts smaller chunks more frequently.
-    """
-    if not buffer:
-        return "", ""
-    if force:
-        return buffer, ""
-
-    # If buffer is small, wait for more content
-    if len(buffer) < min_chunk_size:
-        return "", buffer
-
-    # Find natural break points in priority order
-    boundary_chars = ("\n\n", ". ", "! ", "? ", ": ", "; ", ", ", " ", "\n", "\t")
-
-    for boundary in boundary_chars:
-        idx = buffer.rfind(boundary, min_chunk_size - len(boundary))
-        if idx > 0:
-            cut_at = idx + len(boundary)
-            return buffer[:cut_at], buffer[cut_at:]
-
-    # If no boundary found but buffer is large enough, cut at min_chunk_size
-    if len(buffer) >= min_chunk_size * 2:
-        return buffer[:min_chunk_size], buffer[min_chunk_size:]
-
-    return "", buffer
-
-
-def _render_app(config: ChatConfig) -> None:
+def _list_models_sync(base_url: str, api_key: str) -> tuple[List[str], str | None]:
+    """Synchronous model listing used during startup info."""
+    from openai import OpenAI
     try:
-        import streamlit as st
-    except ImportError as exc:
-        raise SystemExit(
-            "sp_chat requires streamlit. Install it with: uv pip install streamlit"
-        ) from exc
+        c = OpenAI(base_url=base_url, api_key=api_key)
+        resp = c.models.list()
+        return sorted([m.id for m in resp.data]), None
+    except Exception as exc:
+        return [], str(exc)
+
+def _setup_chainlit():
+    import chainlit as cl
+    from chainlit.input_widget import Select, Slider, TextInput, Switch
+    from openai import AsyncOpenAI
+
+    base_url = os.environ.get("SP_CHAT_CLIENT", "http://localhost:4343/v1")
+    api_key = os.environ.get("SP_CHAT_API_KEY", "abc")
+    initial_model = os.environ.get("SP_CHAT_MODEL")
+    enable_thinking_default = os.environ.get("SP_CHAT_THINKING", "true") == "true"
+
+    client = AsyncOpenAI(base_url=base_url, api_key=api_key)
+
+    @cl.on_chat_start
+    async def start():
+        models, error = await _list_models_async(client)
 
-    st.set_page_config(
-        page_title="Speedy Chat",
-        page_icon="⚡",
-        layout="wide",
-        initial_sidebar_state="expanded",
-    )
-
-    st.markdown(
-        """
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
-
-:root {
-  --bg-primary: #0a0a0f;
-  --bg-secondary: #12121a;
-  --bg-tertiary: #1a1a25;
-  --bg-card: rgba(26, 26, 37, 0.6);
-  --border-subtle: rgba(255, 255, 255, 0.06);
-  --border-strong: rgba(255, 255, 255, 0.12);
-  --text-primary: #f0f0f5;
-  --text-secondary: #a0a0b0;
-  --text-muted: #6b6b7b;
-  --accent-primary: #6366f1;
-  --accent-secondary: #8b5cf6;
-  --accent-glow: rgba(99, 102, 241, 0.3);
-  --user-gradient: linear-gradient(135deg, rgba(99, 102, 241, 0.15), rgba(139, 92, 246, 0.08));
-  --assistant-gradient: linear-gradient(135deg, rgba(59, 130, 246, 0.12), rgba(99, 102, 241, 0.06));
-  --success: #10b981;
-  --warning: #f59e0b;
-}
-
-* {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-}
-
-.stApp {
-  background: var(--bg-primary);
-  color: var(--text-primary);
-}
-
-.stApp::before {
-  content: '';
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background:
-    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(99, 102, 241, 0.15), transparent),
-    radial-gradient(ellipse 60% 40% at 80% 80%, rgba(139, 92, 246, 0.1), transparent);
-  pointer-events: none;
-  z-index: 0;
-}
-
-[data-testid='stAppViewContainer'] {
-  position: relative;
-  z-index: 1;
-}
-
-header[data-testid='stHeader'] {
-  background: transparent;
-}
-
-[data-testid='stToolbar'],
-[data-testid='stDecoration'] {
-  display: none !important;
-}
-
-.block-container {
-  max-width: 1040px;
-  padding-top: 1rem;
-}
-
-/* Hero Section */
-.sp-hero {
-  padding: 1.2rem 1.3rem;
-  margin: 1rem 0 1.5rem 0;
-  background: linear-gradient(
-    145deg,
-    rgba(17, 27, 47, 0.84),
-    rgba(13, 20, 35, 0.7)
-  );
-  border: 1px solid var(--border-subtle);
-  border-radius: 22px;
-  backdrop-filter: blur(12px);
-  box-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.04) inset,
-    0 24px 46px rgba(2, 6, 16, 0.44);
-  width: 100%;
-  box-sizing: border-box;
-}
-
-div[data-testid='stChatInput'] textarea,
-div[data-testid='stChatInput'] input {
-  min-height: 56px !important;
-  border-radius: 15px !important;
-  background: rgba(12, 21, 37, 0.9) !important;
-  border: 1px solid var(--border-subtle) !important;
-  color: var(--text-primary) !important;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.32);
-}
-
-div[data-testid='stChatInput'] textarea::placeholder,
-div[data-testid='stChatInput'] input::placeholder {
-  color: var(--text-muted) !important;
-}
-
-div[data-testid='stChatInput'] button {
-  border-radius: 12px !important;
-  border: none !important;
-  background: linear-gradient(145deg, #4db5ff, #6f87ff) !important;
-  color: #eff6ff !important;
-}
-
-@keyframes sp-hero-in {
-  from {
-    opacity: 0;
-    transform: translateY(-10px) scale(0.98);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-.sp-chat-title {
-  font-size: 1.75rem;
-  font-weight: 700;
-  background: linear-gradient(135deg, var(--text-primary), var(--accent-primary));
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  margin-bottom: 0.25rem;
-  letter-spacing: -0.02em;
-}
-
-.sp-chat-subtitle {
-  color: var(--text-secondary);
-  font-size: 0.9rem;
-  margin-bottom: 1rem;
-}
-
-.sp-meta-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-}
-
-.sp-meta {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.375rem;
-  padding: 0.375rem 0.875rem;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid var(--border-subtle);
-  border-radius: 20px;
-  font-size: 0.8rem;
-  color: var(--text-secondary);
-  transition: all 0.2s ease;
-}
-
-.sp-meta:hover {
-  background: rgba(255, 255, 255, 0.06);
-  border-color: var(--border-strong);
-}
-
-.sp-meta-live {
-  background: rgba(16, 185, 129, 0.1);
-  border-color: rgba(16, 185, 129, 0.3);
-  color: var(--success);
-}
-
-.sp-meta-live .sp-meta-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--success);
-  animation: sp-pulse 2s ease-in-out infinite;
-}
-
-@keyframes sp-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.5; transform: scale(0.8); }
-}
-
-.sp-meta-label {
-  color: var(--text-muted);
-  font-weight: 500;
-}
-
-/* Sidebar */
-section[data-testid='stSidebar'] {
-  background: var(--bg-secondary);
-  border-right: 1px solid var(--border-subtle);
-}
-
-section[data-testid='stSidebar'] * {
-  color: var(--text-primary) !important;
-}
-
-section[data-testid='stSidebar'] .stButton > button {
-  background: var(--accent-primary) !important;
-  border: none !important;
-  border-radius: 10px !important;
-  font-weight: 500 !important;
-  transition: all 0.2s ease !important;
-}
-
-section[data-testid='stSidebar'] .stButton > button:hover {
-  background: var(--accent-secondary) !important;
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px var(--accent-glow);
-}
-
-/* Chat Messages */
-div[data-testid='stChatMessage'] {
-  border-radius: 12px !important;
-  border: 1px solid var(--border-subtle) !important;
-  background: var(--assistant-gradient), var(--bg-card) !important;
-  padding: 1rem 1.25rem !important;
-  margin-bottom: 0.75rem !important;
-  animation: sp-message-in 0.4s cubic-bezier(0.16, 1, 0.3, 1);
-  transition: all 0.2s ease;
-}
-
-@keyframes sp-message-in {
-  from {
-    opacity: 0;
-    transform: translateY(20px) scale(0.95);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-div[data-testid='stChatMessage']:hover {
-  border-color: var(--border-strong) !important;
-  transform: translateY(-1px);
-}
-
-div[data-testid='stChatMessage'][aria-label*='user'],
-div[data-testid='stChatMessage'][aria-label*='User'] {
-  background: var(--user-gradient), var(--bg-card) !important;
-  border-color: rgba(99, 102, 241, 0.2) !important;
-}
-
-div[data-testid='stChatMessage'] [data-testid='stMarkdownContainer'] p,
-div[data-testid='stChatMessage'] [data-testid='stMarkdownContainer'] li {
-  color: var(--text-primary) !important;
-  line-height: 1.7;
-  font-size: 0.95rem;
-}
-
-div[data-testid='stChatMessage'] [data-testid='stMarkdownContainer'] code {
-  font-family: 'JetBrains Mono', monospace !important;
-  background: rgba(0, 0, 0, 0.3) !important;
-  padding: 0.2rem 0.4rem !important;
-  border-radius: 4px !important;
-  font-size: 0.85em !important;
-}
-
-/* Streaming Display */
-.sp-live-response {
-  color: var(--text-primary);
-  line-height: 1.7;
-  font-size: 0.95rem;
-}
-
-.sp-stream-cursor {
-  display: inline-block;
-  width: 2px;
-  height: 1.2em;
-  margin-left: 2px;
-  vertical-align: text-bottom;
-  background: var(--accent-primary);
-  border-radius: 1px;
-  animation: sp-cursor-blink 1s ease-in-out infinite;
-  box-shadow: 0 0 8px var(--accent-glow);
-}
-
-@keyframes sp-cursor-blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.3; }
-}
-
-/* Thinking Block */
-.sp-thinking-details {
-  margin: 0 0 0.75rem;
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  background: rgba(0, 0, 0, 0.2);
-  overflow: hidden;
-  animation: sp-thinking-expand 0.3s ease;
-}
-
-@keyframes sp-thinking-expand {
-  from {
-    opacity: 0;
-    transform: scaleY(0.95);
-  }
-  to {
-    opacity: 1;
-    transform: scaleY(1);
-  }
-}
-
-.sp-thinking-details summary {
-  padding: 0.75rem 1rem;
-  color: var(--text-secondary);
-  font-size: 0.85rem;
-  font-weight: 500;
-  cursor: pointer;
-  user-select: none;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  transition: all 0.2s ease;
-}
-
-.sp-thinking-details summary:hover {
-  color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.02);
-}
-
-.sp-thinking-details summary::before {
-  content: '💭';
-  font-size: 0.9rem;
-}
-
-.sp-thinking-details[open] summary::before {
-  content: '🤔';
-}
-
-.sp-thinking-details-content {
-  padding: 0 1rem 1rem;
-  color: var(--text-secondary);
-  font-size: 0.9rem;
-  line-height: 1.6;
-  border-top: 1px solid var(--border-subtle);
-  margin-top: 0;
-  padding-top: 0.75rem;
-}
-
-/* Thinking Stream (live) */
-.sp-thinking-stream {
-  margin-bottom: 0.75rem;
-  border: 1px solid rgba(139, 92, 246, 0.25);
-  border-radius: 10px;
-  background: rgba(139, 92, 246, 0.06);
-  overflow: hidden;
-}
-
-.sp-thinking-header {
-  padding: 0.5rem 0.75rem;
-  font-size: 0.82rem;
-  font-weight: 600;
-  color: #a78bfa;
-  border-bottom: 1px solid rgba(139, 92, 246, 0.15);
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-}
-
-.sp-thinking-body {
-  padding: 0.75rem;
-  max-height: 400px;
-  overflow-y: auto;
-  color: var(--text-secondary);
-  font-size: 0.88rem;
-  line-height: 1.6;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-/* Thinking Indicator */
-.sp-thinking {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 1rem;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border-subtle);
-  border-radius: 20px;
-  color: var(--text-secondary);
-  font-size: 0.85rem;
-  animation: sp-thinking-in 0.3s ease;
-}
-
-@keyframes sp-thinking-in {
-  from {
-    opacity: 0;
-    transform: scale(0.9);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-.sp-thinking-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--accent-primary);
-  animation: sp-thinking-dot 1.4s ease-in-out infinite both;
-}
-
-.sp-thinking-dot:nth-child(1) { animation-delay: -0.32s; }
-.sp-thinking-dot:nth-child(2) { animation-delay: -0.16s; }
-.sp-thinking-dot:nth-child(3) { animation-delay: 0s; }
-
-@keyframes sp-thinking-dot {
-  0%, 80%, 100% {
-    transform: scale(0.6);
-    opacity: 0.4;
-  }
-  40% {
-    transform: scale(1);
-    opacity: 1;
-  }
-}
-
-.sp-thinking-label {
-  font-weight: 500;
-  margin-left: 0.25rem;
-}
-
-div[data-testid='stChatInput'] textarea {
-  min-height: 52px !important;
-  max-height: 200px !important;
-  background: var(--bg-tertiary) !important;
-  border: 1px solid var(--border-subtle) !important;
-  border-radius: 12px !important;
-  color: var(--text-primary) !important;
-  font-size: 0.95rem !important;
-  padding: 0.875rem 1rem !important;
-  transition: all 0.2s ease !important;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3) !important;
-}
-
-div[data-testid='stChatInput'] textarea:focus {
-  border-color: var(--accent-primary) !important;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3), 0 0 0 3px var(--accent-glow) !important;
-}
-
-div[data-testid='stChatInput'] textarea::placeholder {
-  color: var(--text-muted) !important;
-}
-
-div[data-testid='stChatInput'] button {
-  background: var(--accent-primary) !important;
-  border: none !important;
-  border-radius: 10px !important;
-  transition: all 0.2s ease !important;
-}
-
-div[data-testid='stChatInput'] button:hover {
-  background: var(--accent-secondary) !important;
-  transform: scale(1.05);
-  box-shadow: 0 4px 12px var(--accent-glow);
-}
-
-/* Links */
-a {
-  color: var(--accent-primary) !important;
-  text-decoration: none !important;
-  transition: all 0.2s ease;
-}
-
-a:hover {
-  color: var(--accent-secondary) !important;
-  text-decoration: underline !important;
-}
-
-/* Scrollbar */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-  background: var(--border-strong);
-  border-radius: 4px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: var(--text-muted);
-}
-
-/* Mobile Responsive */
-@media (max-width: 768px) {
-  .block-container {
-    padding: 0 1rem 1.5rem;
-  }
-
-  div[data-testid='stChatInput'] {
-    padding: 0.75rem 1rem 1rem !important;
-  }
-
-  .sp-hero {
-    padding: 1rem;
-    margin: 0.5rem 0 1rem;
-  }
-
-  .sp-chat-title {
-    font-size: 1.4rem;
-  }
-}
-</style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    base_url = normalize_client_base_url(config.client)
-    client = MOpenAI(base_url=base_url, api_key=config.api_key, cache=False)
-
-    models, model_error = _list_models_safe(client)
-    if not models and config.model:
-        models = [config.model]
-
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-    if "temperature" not in st.session_state:
-        st.session_state.temperature = 0.7
-    if "max_tokens" not in st.session_state:
-        st.session_state.max_tokens = 1024
-    if "system_prompt" not in st.session_state:
-        st.session_state.system_prompt = ""
-    if "enable_thinking" not in st.session_state:
-        st.session_state.enable_thinking = config.thinking
-
-    st.markdown(
-        f"""
-<div class="sp-hero">
-  <div class="sp-chat-title">Speedy vLLM Chat</div>
-  <div class="sp-chat-subtitle">Fast streaming playground for OpenAI-compatible local models.</div>
-  <div class="sp-meta-row">
-    <span class="sp-meta"><span class="sp-meta-label">Endpoint</span>{base_url}</span>
-    <span class="sp-meta sp-meta-live"><span class="sp-meta-dot"></span><span class="sp-meta-label">Transport</span>Real-time stream</span>
-    <span class="sp-meta"><span class="sp-meta-label">UX</span>Latency-first</span>
-  </div>
-</div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    with st.sidebar:
-        st.markdown("### Connection")
-        st.code(base_url, language=None)
-        if model_error:
-            st.warning(f"Model auto-detect failed: {model_error[:180]}")
-
-        selected_model = ""
         if models:
-            default_index = 0
-            if config.model and config.model in models:
-                default_index = models.index(config.model)
-            selected_model = st.selectbox("Model", options=models, index=default_index)
+            model_options = models
+        elif initial_model:
+            model_options = [initial_model]
         else:
-            selected_model = st.text_input("Model", value=config.model or "")
+            model_options = ["default"]
 
-        st.markdown("### Generation")
-        # Use unique keys for widgets to avoid rerender issues
-        temp_val = st.slider(
-            "Temperature",
-            min_value=0.0,
-            max_value=2.0,
-            value=st.session_state.temperature,
-            step=0.05,
-            key="temp_slider",
-        )
-        st.session_state.temperature = temp_val
+        default_idx = 0
+        if initial_model and initial_model in model_options:
+            default_idx = model_options.index(initial_model)
 
-        max_tokens_val = st.number_input(
-            "Max tokens",
-            min_value=1,
-            max_value=32768,
-            value=int(st.session_state.max_tokens),
-            step=128,
-            key="max_tokens_input",
-        )
-        st.session_state.max_tokens = int(max_tokens_val)
+        settings = await cl.ChatSettings(
+            [
+                Select(
+                    id="model",
+                    label="Model",
+                    values=model_options,
+                    initial_index=default_idx,
+                ),
+                Slider(
+                    id="temperature",
+                    label="Temperature",
+                    initial=DEFAULT_TEMPERATURE,
+                    min=0,
+                    max=2,
+                    step=0.05,
+                ),
+                Slider(
+                    id="max_tokens",
+                    label="Max Tokens",
+                    initial=DEFAULT_MAX_TOKENS,
+                    min=1,
+                    max=32768,
+                    step=128,
+                ),
+                TextInput(
+                    id="system_prompt",
+                    label="System Prompt",
+                    initial=DEFAULT_SYSTEM_PROMPT,
+                    multiline=True,
+                ),
+                Switch(
+                    id="thinking",
+                    label="Enable Thinking",
+                    initial=enable_thinking_default,
+                ),
+            ]
+        ).send()
 
-        system_prompt_val = st.text_area(
-            "System prompt",
-            value=st.session_state.system_prompt,
-            height=120,
-            placeholder="Optional system message for every request.",
-            key="system_prompt_input",
-        )
-        st.session_state.system_prompt = system_prompt_val
+        cl.user_session.set("settings", settings)
+        cl.user_session.set("client", client)
+        if error:
+            # Keep startup clean (no hardcoded first message), only surface real errors.
+            await cl.Message(content=f"⚠️ Model fetch error: {error}", author="system").send()
 
-        enable_thinking_val = st.toggle(
-            "Enable thinking stream",
-            value=bool(st.session_state.enable_thinking),
-            help="Sends extra_body.thinking.type=enabled for providers like Z.AI.",
-            key="enable_thinking_toggle",
-        )
-        st.session_state.enable_thinking = enable_thinking_val
+    @cl.on_settings_update
+    async def on_settings_update(settings):
+        cl.user_session.set("settings", settings)
 
-        if st.button(
-            'Clear chat',
-            use_container_width=True,
-            key='clear_chat_btn',
-        ):
-            st.session_state.messages = []
-            st.rerun()
+    @cl.on_message
+    async def on_message(message: cl.Message):
+        settings = cl.user_session.get("settings")
+        aclient: AsyncOpenAI = cl.user_session.get("client")
 
-    for message in st.session_state.messages:
-        with st.chat_message(message['role']):
-            thinking = message.get('thinking', '')
-            if thinking:
-                wc = len(thinking.split())
-                with st.expander(
-                    f'💭 Thinking ({wc} words)'
-                ):
-                    st.markdown(thinking)
-            st.markdown(message['content'])
+        model = settings["model"]
+        temperature = float(settings["temperature"])
+        max_tokens = int(settings["max_tokens"])
+        system_prompt = settings["system_prompt"]
+        enable_thinking = settings["thinking"]
 
-    prompt = st.chat_input("Send a prompt")
-    if not prompt:
-        return
+        messages = []
+        if system_prompt.strip():
+            messages.append({"role": "system", "content": system_prompt})
+        messages.extend(cl.chat_context.to_openai())
 
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
+        call_kwargs = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": True,
+        }
+        if enable_thinking:
+            call_kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
 
-    with st.chat_message("assistant"):
-        placeholder = st.empty()
-        answer_chunks: list[str] = []
-        thinking_chunks: list[str] = []
-        _render_thinking_placeholder(placeholder)
+        start_time = time.time()
 
-        request_messages: list[dict[str, str]] = []
-        system_prompt = st.session_state.system_prompt.strip()
-        if system_prompt:
-            request_messages.append({"role": "system", "content": system_prompt})
-        request_messages.extend(st.session_state.messages)
-
-        response_text = ""
         try:
-            if not selected_model:
-                raise ValueError(
-                    "No model available. Provide model=... or make /v1/models reachable."
-                )
+            stream = await aclient.chat.completions.create(**call_kwargs)
 
-            displayed_text = ""
-            displayed_thinking = ""
-            pending_answer_buffer = ""
-            pending_thinking_buffer = ""
-            last_flush = time.perf_counter()
-            flush_interval = 0.03  # 30ms for smooth 30+ FPS updates
-            min_chars_before_flush = 3  # Very small for responsive streaming
+            thinking_completed = False
+            final_answer = cl.Message(content="")
 
-            for chunk_kind, token in _stream_tokens(
-                client=client,
-                model=selected_model,
-                messages=request_messages,
-                temperature=st.session_state.temperature,
-                max_tokens=st.session_state.max_tokens,
-                enable_thinking=bool(st.session_state.enable_thinking),
-            ):
-                if chunk_kind == "thinking":
-                    thinking_chunks.append(token)
-                    pending_thinking_buffer += token
-                else:
-                    answer_chunks.append(token)
-                    pending_answer_buffer += token
-                now = time.perf_counter()
-                time_since_flush = now - last_flush
+            async with cl.Step(name="Thinking") as thinking_step:
+                async for chunk in stream:
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
 
-                # Determine if we should flush based on multiple criteria
-                total_pending = len(pending_answer_buffer) + len(
-                    pending_thinking_buffer
-                )
-                has_line_break = (
-                    "\n" in pending_answer_buffer or "\n" in pending_thinking_buffer
-                )
-                has_punctuation = any(
-                    pending_answer_buffer.endswith(p)
-                    or pending_thinking_buffer.endswith(p)
-                    for p in (". ", "! ", "? ", ": ", "; ", ", ")
-                )
-                buffer_large = total_pending >= 48
-                time_to_flush = time_since_flush >= flush_interval
-                has_min_content = total_pending >= min_chars_before_flush
+                    reasoning = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
+                    content = delta.content
 
-                should_flush = (
-                    (time_to_flush and has_min_content)
-                    or buffer_large
-                    or (has_line_break and has_min_content)
-                    or has_punctuation
-                )
+                    if reasoning and not thinking_completed:
+                        await thinking_step.stream_token(reasoning)
+                    elif not thinking_completed and content:
+                        thought_for = round(time.time() - start_time)
+                        thinking_step.name = f"Thought for {thought_for}s"
+                        await thinking_step.update()
+                        thinking_completed = True
+                        break
 
-                if should_flush:
-                    # Extract renderable content from buffers
-                    force_flush = buffer_large
-                    answer_to_render = ""
-                    thinking_to_render = ""
+                # If thinking never got content, close the step
+                if not thinking_completed:
+                    thought_for = round(time.time() - start_time)
+                    thinking_step.name = f"Thought for {thought_for}s"
+                    await thinking_step.update()
 
-                    if pending_answer_buffer:
-                        answer_to_render, pending_answer_buffer = (
-                            _extract_renderable_chunk(
-                                pending_answer_buffer,
-                                force=force_flush,
-                                min_chunk_size=4,
-                            )
-                        )
-                        if answer_to_render:
-                            displayed_text += answer_to_render
+            # Stream the final answer (continues from where we left off)
+            if thinking_completed and content:
+                # We already got the first content token above
+                await final_answer.stream_token(content)
 
-                    if pending_thinking_buffer:
-                        thinking_to_render, pending_thinking_buffer = (
-                            _extract_renderable_chunk(
-                                pending_thinking_buffer,
-                                force=force_flush,
-                                min_chunk_size=4,
-                            )
-                        )
-                        if thinking_to_render:
-                            displayed_thinking += thinking_to_render
+            async for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                if delta.content:
+                    await final_answer.stream_token(delta.content)
 
-                    # Only update UI if there's something new to show
-                    if answer_to_render or thinking_to_render:
-                        _render_streaming_blocks(
-                            placeholder,
-                            thinking_text=displayed_thinking,
-                            answer_text=displayed_text,
-                        )
-                        last_flush = now
+            await final_answer.send()
 
-            displayed_thinking += pending_thinking_buffer
-            pending_thinking_buffer = ''
-            displayed_text += pending_answer_buffer
-            pending_answer_buffer = ''
-            if displayed_text or displayed_thinking:
-                with placeholder.container():
-                    if displayed_thinking.strip():
-                        wc = len(
-                            displayed_thinking.split()
-                        )
-                        with st.expander(
-                            f'💭 Thinking '
-                            f'({wc} words)'
-                        ):
-                            st.markdown(
-                                displayed_thinking
-                            )
-                    st.markdown(
-                        displayed_text
-                        or '(empty response)'
-                    )
+        except Exception as e:
+            await cl.Message(content=f"Error: {str(e)}").send()
 
-            response_text = (
-                ''.join(answer_chunks).strip()
-                or '(empty response)'
-            )
-        except Exception as exc:
-            response_text = f"Request failed: {exc}"
-            placeholder.error(response_text)
+# --- Launcher ---
 
-    msg: dict[str, str] = {
-        'role': 'assistant',
-        'content': response_text,
-    }
-    full_thinking = ''.join(thinking_chunks).strip()
-    if full_thinking:
-        msg['thinking'] = full_thinking
-    st.session_state.messages.append(msg)
-
-
-def _launch_streamlit(config: ChatConfig) -> int:
+def _launch_chainlit(config: ChatConfig) -> int:
     try:
-        import streamlit  # noqa: F401
+        import chainlit  # noqa
     except ImportError:
-        print(
-            "sp_chat requires streamlit. Install it with: uv pip install streamlit",
-            file=sys.stderr,
-        )
+        print("Install chainlit via: uv pip install chainlit", file=sys.stderr)
         return 1
 
-    script_path = Path(__file__).resolve()
-    command = [
-        sys.executable,
-        "-m",
-        "streamlit",
-        "run",
-        str(script_path),
-        "--server.port",
-        str(config.app_port),
-        "--server.address",
-        config.app_host,
-        "--server.headless",
-        "true",
-        "--browser.gatherUsageStats",
-        "false",
-        "--",
-        f"client={config.client}",
-        f"api_key={config.api_key}",
-        f"thinking={str(config.thinking).lower()}",
-    ]
+    # Pass config via environment variables to the subprocess
+    env = os.environ.copy()
+    env["SP_CHAT_CLIENT"] = normalize_client_base_url(config.client)
+    env["SP_CHAT_API_KEY"] = config.api_key
     if config.model:
-        command.append(f"model={config.model}")
+        env["SP_CHAT_MODEL"] = config.model
+    env["SP_CHAT_THINKING"] = "true" if config.thinking else "false"
+    # Marker to indicate we are running the app logic
+    env["SP_CHAT_RUNNING"] = "1"
+    
+    # We use "chainlit run" on THIS file
+    script_path = str(Path(__file__).resolve())
+    
+    cmd = [
+        sys.executable, "-m", "chainlit", "run", script_path,
+        "--port", str(config.app_port),
+        "--host", config.app_host,
+        "--headless"
+    ]
+    
+    base_url = env["SP_CHAT_CLIENT"]
+    # Print detected models at launch for visibility
+    models, err = _list_models_sync(base_url, config.api_key)
+    if models:
+        print(f"Models: {', '.join(models)}")
+    elif err:
+        print(f"⚠️  Could not list models ({err}). Will retry in browser.")
 
-    display_host = (
-        "localhost" if config.app_host in {"0.0.0.0", "::"} else config.app_host
-    )
-    print(f"Launching chat UI at http://{display_host}:{config.app_port}")
-    return subprocess.run(command, check=False).returncode
+    host_display = "localhost" if config.app_host in {"0.0.0.0", "::"} else config.app_host
+    print(f"Chat UI → http://{host_display}:{config.app_port}")
 
+    return subprocess.run(cmd, env=env, check=False).returncode
 
 def main() -> int:
     try:
@@ -1150,15 +444,14 @@ def main() -> int:
         print(exc)
         return 0
     except ValueError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        print(HELP_TEXT, file=sys.stderr)
+        print(f"Error: {exc}\n{HELP_TEXT}", file=sys.stderr)
         return 2
 
-    if _is_running_in_streamlit():
-        _render_app(config)
-        return 0
-    return _launch_streamlit(config)
+    return _launch_chainlit(config)
 
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+# --- Module‑level dispatch ---
+# When chainlit imports this file, __name__ != "__main__" but our env marker is set.
+if _is_running_in_chainlit():
+    _setup_chainlit()
+elif __name__ == "__main__":
+    sys.exit(main())
