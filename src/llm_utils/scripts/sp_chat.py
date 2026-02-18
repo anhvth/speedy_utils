@@ -233,75 +233,42 @@ def _render_streaming_placeholder(placeholder: Any, text: str) -> None:
 
 
 def _render_streaming_blocks(
-    placeholder: Any, *, thinking_text: str, answer_text: str, thinking_active: bool
+    placeholder: Any,
+    *,
+    thinking_text: str,
+    answer_text: str,
 ) -> None:
-    # Convert markdown-friendly newlines to HTML breaks, preserving code blocks
-    def format_text(text: str) -> str:
-        if not text:
-            return ""
-        # Escape HTML first
-        safe = html.escape(text)
-        # Handle code blocks (preserve them)
-        parts = []
-        in_code = False
-        code_buffer = []
-
-        for line in safe.split("\n"):
-            if line.startswith("```"):
-                if in_code:
-                    # End code block
-                    code_content = "\n".join(code_buffer)
-                    parts.append(f"<pre><code>{code_content}</code></pre>")
-                    code_buffer = []
-                    in_code = False
-                else:
-                    # Start code block
-                    in_code = True
-            elif in_code:
-                code_buffer.append(line)
-            else:
-                # Regular line - convert newlines to <br> for paragraph breaks
-                if line.strip() == "":
-                    parts.append("<br>")
-                else:
-                    parts.append(line + "<br>")
-
-        # Handle any remaining code
-        if code_buffer:
-            code_content = "\n".join(code_buffer)
-            parts.append(f"<pre><code>{code_content}</code></pre>")
-
-        return "".join(parts)
-
-    safe_answer = format_text(answer_text)
-    thinking_block = ""
-
+    """Render thinking + answer blocks during streaming."""
+    parts: list[str] = []
+    cursor = '<span class="sp-stream-cursor"></span>'
     if thinking_text.strip():
-        safe_thinking = format_text(thinking_text)
-        if thinking_active:
-            thinking_cursor = '<span class="sp-stream-cursor"></span>'
-            thinking_block = f"""
-<div style="margin-bottom:0.75rem; opacity:0.9;">
-  <div style="color:var(--text-muted); font-size:0.8rem; margin-bottom:0.25rem; font-weight:500;">💭 Thinking</div>
-  <div class="sp-live-response" style="color:var(--text-secondary); font-size:0.9rem;">{safe_thinking}{thinking_cursor}</div>
-</div>
-            """
-        else:
-            thinking_block = f"""
-<details class="sp-thinking-details">
-  <summary>Thinking ({len(thinking_text.split())} words)</summary>
-  <div class="sp-thinking-details-content">{safe_thinking}</div>
-</details>
-            """
-
-    answer_cursor = '<span class="sp-stream-cursor"></span>' if thinking_active else ""
+        escaped_t = html.escape(thinking_text)
+        t_cursor = (
+            cursor if not answer_text.strip() else ''
+        )
+        parts.append(
+            '<div class="sp-thinking-stream">'
+            '<div class="sp-thinking-header">'
+            f'💭 Thinking{t_cursor}'
+            '</div>'
+            '<div class="sp-thinking-body">'
+            f'{escaped_t}</div></div>'
+        )
+    if answer_text.strip():
+        escaped_a = html.escape(answer_text)
+        parts.append(
+            '<div class="sp-live-response"'
+            ' style="white-space:pre-wrap;'
+            'word-break:break-word;">'
+            f'{escaped_a}{cursor}</div>'
+        )
+    elif not thinking_text.strip():
+        parts.append(
+            '<div class="sp-live-response">'
+            f'{cursor}</div>'
+        )
     placeholder.markdown(
-        f"""
-{thinking_block}
-<div class="sp-live-response">
-  {safe_answer}{answer_cursor}
-</div>
-        """,
+        '\n'.join(parts),
         unsafe_allow_html=True,
     )
 
@@ -704,6 +671,37 @@ div[data-testid='stChatMessage'] [data-testid='stMarkdownContainer'] code {
   padding-top: 0.75rem;
 }
 
+/* Thinking Stream (live) */
+.sp-thinking-stream {
+  margin-bottom: 0.75rem;
+  border: 1px solid rgba(139, 92, 246, 0.25);
+  border-radius: 10px;
+  background: rgba(139, 92, 246, 0.06);
+  overflow: hidden;
+}
+
+.sp-thinking-header {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #a78bfa;
+  border-bottom: 1px solid rgba(139, 92, 246, 0.15);
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.sp-thinking-body {
+  padding: 0.75rem;
+  max-height: 400px;
+  overflow-y: auto;
+  color: var(--text-secondary);
+  font-size: 0.88rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* Thinking Indicator */
 .sp-thinking {
   display: inline-flex;
@@ -865,10 +863,6 @@ a:hover {
     if "enable_thinking" not in st.session_state:
         st.session_state.enable_thinking = config.thinking
 
-    def _on_clear_chat() -> None:
-        """Callback to clear chat history."""
-        st.session_state.messages = []
-
     st.markdown(
         f"""
 <div class="sp-hero">
@@ -938,16 +932,24 @@ a:hover {
         )
         st.session_state.enable_thinking = enable_thinking_val
 
-        st.button(
-            "Clear chat",
+        if st.button(
+            'Clear chat',
             use_container_width=True,
-            key="clear_chat_btn",
-            on_click=_on_clear_chat,
-        )
+            key='clear_chat_btn',
+        ):
+            st.session_state.messages = []
+            st.rerun()
 
     for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+        with st.chat_message(message['role']):
+            thinking = message.get('thinking', '')
+            if thinking:
+                wc = len(thinking.split())
+                with st.expander(
+                    f'💭 Thinking ({wc} words)'
+                ):
+                    st.markdown(thinking)
+            st.markdown(message['content'])
 
     prompt = st.chat_input("Send a prompt")
     if not prompt:
@@ -1058,34 +1060,47 @@ a:hover {
                             placeholder,
                             thinking_text=displayed_thinking,
                             answer_text=displayed_text,
-                            thinking_active=True,
                         )
                         last_flush = now
 
-            if pending_thinking_buffer:
-                chunk_to_render, pending_thinking_buffer = _extract_renderable_chunk(
-                    pending_thinking_buffer, force=True
-                )
-                displayed_thinking += chunk_to_render
-            if pending_answer_buffer:
-                chunk_to_render, pending_answer_buffer = _extract_renderable_chunk(
-                    pending_answer_buffer, force=True
-                )
-                displayed_text += chunk_to_render
+            displayed_thinking += pending_thinking_buffer
+            pending_thinking_buffer = ''
+            displayed_text += pending_answer_buffer
+            pending_answer_buffer = ''
             if displayed_text or displayed_thinking:
-                _render_streaming_blocks(
-                    placeholder,
-                    thinking_text=displayed_thinking,
-                    answer_text=displayed_text,
-                    thinking_active=False,
-                )
+                with placeholder.container():
+                    if displayed_thinking.strip():
+                        wc = len(
+                            displayed_thinking.split()
+                        )
+                        with st.expander(
+                            f'💭 Thinking '
+                            f'({wc} words)'
+                        ):
+                            st.markdown(
+                                displayed_thinking
+                            )
+                    st.markdown(
+                        displayed_text
+                        or '(empty response)'
+                    )
 
-            response_text = "".join(answer_chunks).strip() or "(empty response)"
+            response_text = (
+                ''.join(answer_chunks).strip()
+                or '(empty response)'
+            )
         except Exception as exc:
             response_text = f"Request failed: {exc}"
             placeholder.error(response_text)
 
-    st.session_state.messages.append({"role": "assistant", "content": response_text})
+    msg: dict[str, str] = {
+        'role': 'assistant',
+        'content': response_text,
+    }
+    full_thinking = ''.join(thinking_chunks).strip()
+    if full_thinking:
+        msg['thinking'] = full_thinking
+    st.session_state.messages.append(msg)
 
 
 def _launch_streamlit(config: ChatConfig) -> int:

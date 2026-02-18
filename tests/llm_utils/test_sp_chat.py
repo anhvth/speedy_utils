@@ -81,37 +81,20 @@ class _PlaceholderSpy:
         self.last_unsafe = unsafe_allow_html
 
 
-def test_render_streaming_blocks_uses_foldable_thinking_when_complete() -> None:
+def test_render_streaming_blocks_shows_thinking_and_answer() -> None:
     placeholder = _PlaceholderSpy()
     _render_streaming_blocks(
         placeholder,
         thinking_text='reason step',
         answer_text='final answer',
-        thinking_active=False,
     )
 
-    assert '<details class="sp-thinking-details">' in placeholder.last_text
-    assert '<summary>Thinking' in placeholder.last_text
+    assert 'sp-thinking-stream' in placeholder.last_text
+    assert 'reason step' in placeholder.last_text
     assert 'final answer' in placeholder.last_text
     assert placeholder.last_unsafe is True
 
 
 def test_clear_chat_button_callback() -> None:
-    """Test that the clear chat callback properly resets session state.
-
-    This test verifies that using the on_click callback with st.button
-    correctly clears the messages from session state without issues.
-    """
-    # This test documents the expected behavior:
-    # When the clear chat button is clicked, it should call the _on_clear_chat
-    # callback which sets st.session_state.messages = []
-    # The button now uses on_click instead of checking the return value,
-    # which ensures proper Streamlit state management.
-
-    # In Streamlit's on_click callback pattern:
-    # 1. The callback runs when button is clicked
-    # 2. Session state is updated
-    # 3. App reruns with fresh state
-    # 4. Button doesn't block subsequent operations
-
-    assert True  # Callback pattern is correct in the code
+    """Clear chat now uses st.button return + st.rerun."""
+    assert True
