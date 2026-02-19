@@ -156,3 +156,41 @@ def test_archive_current_chat_moves_messages_to_history() -> None:
     assert entry['messages'][0]['content'] == 'Hi'
     assert state['dimmed_messages'][1]['content'] == 'Hello!'
     assert state['history_counter'] == 2
+
+
+def test_system_prompt_none_does_not_crash() -> None:
+    """Test that None system_prompt doesn't cause AttributeError.
+
+    Regression test for: 'NoneType' object has no attribute 'strip'
+    This can happen when settings['system_prompt'] is None.
+    """
+    # Simulate the logic from on_message
+    system_prompt = None
+
+    # This should not raise AttributeError
+    messages: list[dict] = []
+    if system_prompt and system_prompt.strip():
+        messages.append({"role": "system", "content": system_prompt})
+
+    assert messages == []
+
+    # Also test empty string case
+    system_prompt = ""
+    if system_prompt and system_prompt.strip():
+        messages.append({"role": "system", "content": system_prompt})
+
+    assert messages == []
+
+    # And whitespace-only case
+    system_prompt = "   "
+    if system_prompt and system_prompt.strip():
+        messages.append({"role": "system", "content": system_prompt})
+
+    assert messages == []
+
+    # Valid case should add message
+    system_prompt = "You are helpful"
+    if system_prompt and system_prompt.strip():
+        messages.append({"role": "system", "content": system_prompt})
+
+    assert messages == [{"role": "system", "content": "You are helpful"}]

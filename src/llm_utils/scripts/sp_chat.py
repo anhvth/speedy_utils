@@ -332,7 +332,7 @@ def _setup_chainlit():
         enable_thinking = settings["thinking"]
 
         messages = []
-        if system_prompt.strip():
+        if system_prompt and system_prompt.strip():
             messages.append({"role": "system", "content": system_prompt})
         messages.extend(cl.chat_context.to_openai())
 
