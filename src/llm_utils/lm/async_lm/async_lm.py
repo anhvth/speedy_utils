@@ -64,7 +64,6 @@ class AsyncLM(AsyncLMBase, TokenizationMixin):
         base_url: str | None = None,
         api_key: str | None = None,
         cache: bool = True,
-        think: Literal[True, False, None] = None,
         add_json_schema_to_instruction: bool | None = None,
         use_beta: bool = False,
         ports: list[int] | None = None,
@@ -75,6 +74,8 @@ class AsyncLM(AsyncLMBase, TokenizationMixin):
         frequency_penalty: float | None = None,
     ) -> None:
         if model is None:
+            from openai import OpenAI
+            
             models = (
                 OpenAI(base_url=f"http://{host}:{port}/v1", api_key="abc")
                 .models.list()
@@ -93,7 +94,6 @@ class AsyncLM(AsyncLMBase, TokenizationMixin):
 
         # Model behavior options
         self.response_model = response_model
-        self.think = think
         self._use_beta = use_beta
         self.add_json_schema_to_instruction = add_json_schema_to_instruction
         if not use_beta:
@@ -422,7 +422,6 @@ class AsyncLM(AsyncLMBase, TokenizationMixin):
             self.add_json_schema_to_instruction,
             json_schema,
             system_content,
-            think=self.think,
         )
 
         messages = [

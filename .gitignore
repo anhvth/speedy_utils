@@ -125,3 +125,4 @@ dmypy.json
 edu_results.json
 .playwright-mcp
 .DS_Store
+.chainlit

@@ -1,3 +1,15 @@
+"""Pre-configured AsyncLM wrappers with known sampling parameters.
+
+DEPRECATED: AsyncLMQwenThink and AsyncLMQwenNoThink are deprecated.
+Use AsyncLM_Qwen3 from model_specific.py instead:
+    from llm_utils import AsyncLM_Qwen3
+    lm = AsyncLM_Qwen3(enable_thinking=True)  # replaces AsyncLMQwenThink
+    lm = AsyncLM_Qwen3(enable_thinking=False) # replaces AsyncLMQwenNoThink
+
+This module maintains KNOWN_CONFIG for reference and backward compatibility.
+"""
+
+import warnings
 from typing import List
 
 from .async_lm import AsyncLM
@@ -88,6 +100,11 @@ KNOWN_KEYS: list[str] = list(KNOWN_CONFIG.keys())
 
 
 class AsyncLMQwenThink(AsyncLM):
+    """DEPRECATED: Use AsyncLM_Qwen3(enable_thinking=True) instead.
+    
+    This class is maintained for backward compatibility only.
+    """
+    
     def __init__(
         self,
         model: str = "Qwen32B",
@@ -101,6 +118,11 @@ class AsyncLMQwenThink(AsyncLM):
         ],
         **other_kwargs,
     ):
+        warnings.warn(
+            "AsyncLMQwenThink is deprecated. Use AsyncLM_Qwen3(enable_thinking=True) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         super().__init__(
             model="qwen3-think",
             temperature=temperature,
@@ -108,11 +130,15 @@ class AsyncLMQwenThink(AsyncLM):
             top_k=top_k,
             presence_penalty=presence_penalty,
             **other_kwargs,
-            think=True,
         )
 
 
 class AsyncLMQwenNoThink(AsyncLM):
+    """DEPRECATED: Use AsyncLM_Qwen3(enable_thinking=False) instead.
+    
+    This class is maintained for backward compatibility only.
+    """
+    
     def __init__(
         self,
         model: str = "Qwen32B",
@@ -126,6 +152,11 @@ class AsyncLMQwenNoThink(AsyncLM):
         ],
         **other_kwargs,
     ):
+        warnings.warn(
+            "AsyncLMQwenNoThink is deprecated. Use AsyncLM_Qwen3(enable_thinking=False) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         super().__init__(
             model=model,
             temperature=temperature,
@@ -133,5 +164,4 @@ class AsyncLMQwenNoThink(AsyncLM):
             top_k=top_k,
             presence_penalty=presence_penalty,
             **other_kwargs,
-            think=False,
         )

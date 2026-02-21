@@ -223,7 +223,6 @@ class AsyncLMBase:
         add_json_schema_to_instruction,
         json_schema,
         system_content,
-        think,
     ):
         if add_json_schema_to_instruction and response_model:
             schema_block = f'\n\n<output_json_schema>\n{json.dumps(json_schema, indent=2)}\n</output_json_schema>'
@@ -241,20 +240,6 @@ class AsyncLMBase:
                 system_content = system_content.strip()
             system_content += schema_block
 
-        if think is True:
-            if '/think' in system_content:
-                pass
-            elif '/no_think' in system_content:
-                system_content = system_content.replace('/no_think', '/think')
-            else:
-                system_content += '\n\n/think'
-        elif think is False:
-            if '/no_think' in system_content:
-                pass
-            elif '/think' in system_content:
-                system_content = system_content.replace('/think', '/no_think')
-            else:
-                system_content += '\n\n/no_think'
         return system_content
 
     async def inspect_history(self):

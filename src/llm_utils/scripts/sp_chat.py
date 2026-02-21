@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
-"""Simple Streamlit chat UI for quickly testing vLLM servers."""
+"""Minimalist Chainlit chat UI for quickly testing vLLM servers."""
 
 from __future__ import annotations
 
-import html
-import subprocess
+import os
 import sys
+import subprocess
 import time
-from dataclasses import dataclass
+import html
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, List
+from urllib.parse import urlparse
 
-from llm_utils.lm.openai_memoize import MOpenAI
-
+# --- Configuration & CLI Parsing ---
 
 HELP_TEXT = """\
-sp_chat: Streamlit chat UI for vLLM
+sp_chat: Chainlit chat UI for vLLM
 
 Usage:
   sp_chat
@@ -23,731 +23,419 @@ Usage:
   sp_chat client=http://10.0.0.3:8000/v1 port=5010 model=Qwen/Qwen2.5-7B-Instruct
 
 Supported key=value args:
-  client   vLLM client endpoint or port (default: 8000)
-  port     streamlit web port (default: 5009)
-  host     streamlit bind host (default: 0.0.0.0)
+  client   vLLM client endpoint or port (default: http://localhost:4343/v1)
+  port     web port (default: 5009)
+  host     bind host (default: 0.0.0.0)
   model    fixed model id (default: auto-detect from /v1/models)
   api_key  API key for OpenAI-compatible endpoint (default: abc)
+  thinking enable model thinking/reasoning stream (default: true)
 """
 
+DEFAULT_MAX_TOKENS = 4096
+DEFAULT_TEMPERATURE = 0.7
+DEFAULT_SYSTEM_PROMPT = ""
 
-@dataclass(slots=True)
 class ChatConfig:
-    client: str = '8000'
-    app_port: int = 5009
-    app_host: str = '0.0.0.0'
-    model: str | None = None
-    api_key: str = 'abc'
+    __slots__ = ("client", "app_port", "app_host", "model", "api_key", "thinking")
 
+    def __init__(
+        self,
+        client: str = "http://localhost:4343/v1",
+        app_port: int = 5009,
+        app_host: str = "0.0.0.0",
+        model: str | None = None,
+        api_key: str = "abc",
+        thinking: bool = True,
+    ):
+        self.client = client
+        self.app_port = app_port
+        self.app_host = app_host
+        self.model = model
+        self.api_key = api_key
+        self.thinking = thinking
+
+    def __repr__(self) -> str:
+        return (
+            "ChatConfig("
+            f"client={self.client!r}, "
+            f"app_port={self.app_port!r}, "
+            f"app_host={self.app_host!r}, "
+            f"model={self.model!r}, "
+            f"api_key={self.api_key!r}, "
+            f"thinking={self.thinking!r}"
+            ")"
+        )
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ChatConfig):
+            return False
+        return (
+            self.client == other.client
+            and self.app_port == other.app_port
+            and self.app_host == other.app_host
+            and self.model == other.model
+            and self.api_key == other.api_key
+            and self.thinking == other.thinking
+        )
+
+
+def _build_history_title(messages: list[dict[str, str]], index: int) -> str:
+    for message in messages:
+        if message.get("role") != "user":
+            continue
+        content = message.get("content", "").strip()
+        if not content:
+            continue
+        compact = " ".join(content.split())
+        if len(compact) > 30:
+            compact = f"{compact[:27]}..."
+        return f"Chat {index}: {compact}"
+    return f"Chat {index}"
+
+
+def _archive_current_chat(session_state: Any) -> None:
+    messages = list(session_state.get("messages", []))
+    if not messages:
+        return
+
+    history_index = int(session_state.get("history_counter", 1))
+    copied_messages = [dict(msg) for msg in messages]
+    history_entry = {
+        "id": history_index,
+        "title": _build_history_title(copied_messages, history_index),
+        "messages": copied_messages,
+        "turn_count": len(copied_messages),
+    }
+
+    history = session_state.setdefault("chat_history", [])
+    history.append(history_entry)
+    session_state["dimmed_messages"] = [dict(msg) for msg in copied_messages]
+    session_state["history_counter"] = history_index + 1
+
+
+def _reset_chat_state(session_state: Any, config: ChatConfig) -> None:
+    session_state["messages"] = []
+    session_state["temperature"] = DEFAULT_TEMPERATURE
+    session_state["max_tokens"] = DEFAULT_MAX_TOKENS
+    session_state["system_prompt"] = DEFAULT_SYSTEM_PROMPT
+    session_state["enable_thinking"] = bool(config.thinking)
+
+    # Keep these mirrored keys for backward compatibility with previous UI state shape.
+    session_state["temp_slider"] = DEFAULT_TEMPERATURE
+    session_state["max_tokens_input"] = DEFAULT_MAX_TOKENS
+    session_state["system_prompt_input"] = DEFAULT_SYSTEM_PROMPT
+    session_state["enable_thinking_toggle"] = bool(config.thinking)
+
+
+def _render_streaming_blocks(
+    placeholder: Any,
+    *,
+    thinking_text: str,
+    answer_text: str,
+) -> None:
+    parts: list[str] = []
+    cursor = (
+        "<span style=\"display:inline-block;width:4px;height:1em;"
+        "background:#ECECEC;animation:blink 1s step-end infinite;\"></span>"
+    )
+
+    if thinking_text.strip():
+        parts.append(
+            "<details class=\"sp-thinking-stream\" "
+            "style=\"color:#A3A3A3;font-size:0.9em;margin-bottom:1rem;"
+            "padding:0.5rem;border-left:2px solid #444;\">"
+            "<summary style=\"cursor:pointer;margin-bottom:0.5rem;\">"
+            "Thought Process</summary>"
+            f"<div style=\"white-space:pre-wrap;\">{html.escape(thinking_text)}"
+            f"{cursor if not answer_text else ''}</div></details>"
+        )
+
+    if answer_text.strip():
+        parts.append(
+            f"<div style=\"white-space:pre-wrap;line-height:1.6;\">"
+            f"{html.escape(answer_text)}{cursor}</div>"
+        )
+    elif not thinking_text.strip():
+        parts.append(f"<div>{cursor}</div>")
+
+    placeholder.markdown("\n".join(parts), unsafe_allow_html=True)
 
 def normalize_client_base_url(client: str | int | None) -> str:
-    """Normalize client input into an OpenAI-compatible base URL."""
     if client is None:
-        client = '8000'
-
+        client = "http://localhost:8000/v1"
     raw = str(client).strip()
     if not raw:
-        raw = '8000'
+        raw = "http://localhost:8000/v1"
 
     if raw.isdigit():
-        base_url = f'http://localhost:{raw}'
-    elif raw.startswith(('http://', 'https://')):
-        base_url = raw.rstrip('/')
-    elif ':' in raw:
-        base_url = f'http://{raw}'.rstrip('/')
-    else:
-        base_url = f'http://localhost:{raw}'
+        return f"http://localhost:{raw}/v1"
 
-    if not base_url.endswith('/v1'):
-        base_url = f'{base_url}/v1'
+    if raw.startswith(("http://", "https://")):
+        base_url = raw.rstrip("/")
+    elif ":" in raw:
+        base_url = f"http://{raw}".rstrip("/")
+    else:
+        return f"http://localhost:{raw}/v1"
+
+    parsed = urlparse(base_url)
+    if parsed.path in {"", "/"}:
+        return f"{base_url}/v1"
     return base_url
 
+def _parse_positive_int(name: str, value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0: raise ValueError(f"{name} must be > 0.")
+    return parsed
+
+def _parse_bool(name: str, value: str) -> bool:
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on", "enabled"}: return True
+    if normalized in {"0", "false", "no", "off", "disabled"}: return False
+    raise ValueError(f"{name} must be a boolean.")
 
 def parse_cli_args(argv: Iterable[str]) -> ChatConfig:
-    """Parse key=value arguments, keeping defaults when omitted."""
     config = ChatConfig()
-
     for raw_arg in argv:
         arg = raw_arg.strip()
         if not arg:
             continue
-        if arg in {'help', '-h', '--help'}:
+        if arg in {"help", "-h", "--help"}:
             raise SystemExit(HELP_TEXT)
-        if arg.startswith('--'):
+        if arg.startswith("--"):
             arg = arg[2:]
 
-        if '=' not in arg:
-            raise ValueError(
-                f"Invalid argument '{raw_arg}'. Expected key=value (example: client=8000)."
-            )
+        if "=" not in arg:
+            # Maybe it's a positional arg or flag without value?
+            # Original code strictly required key=value
+            raise ValueError(f"Invalid argument '{raw_arg}'. Expected key=value.")
 
-        key, value = arg.split('=', 1)
-        key = key.strip().lower().replace('-', '_')
+        key, value = arg.split("=", 1)
+        key = key.strip().lower().replace("-", "_")
         value = value.strip()
 
-        if key == 'client':
-            config.client = value or '8000'
-            continue
-        if key in {'port', 'app_port'}:
-            config.app_port = _parse_positive_int('port', value)
-            continue
-        if key in {'host', 'app_host'}:
-            config.app_host = value or '0.0.0.0'
-            continue
-        if key == 'model':
-            config.model = value or None
-            continue
-        if key == 'api_key':
-            config.api_key = value or 'abc'
-            continue
-
-        raise ValueError(
-            f"Unknown argument '{key}'. Supported keys: client, port, host, model, api_key."
-        )
-
+        if key == "client": config.client = value or "http://localhost:4343/v1"
+        elif key in {"port", "app_port"}: config.app_port = _parse_positive_int("port", value)
+        elif key in {"host", "app_host"}: config.app_host = value or "0.0.0.0"
+        elif key == "model": config.model = value or None
+        elif key == "api_key": config.api_key = value or "abc"
+        elif key == "thinking": config.thinking = _parse_bool("thinking", value)
+        else:
+            raise ValueError(f"Unknown argument '{key}'. Supported keys: client, port, host, model, api_key, thinking.")
     return config
 
+# --- Chainlit App Logic ---
 
-def _parse_positive_int(name: str, value: str) -> int:
+def _is_running_in_chainlit() -> bool:
+    return os.environ.get("SP_CHAT_RUNNING") == "1"
+
+async def _list_models_async(client: Any) -> tuple[List[str], str | None]:
     try:
-        parsed = int(value)
-    except ValueError as exc:
-        raise ValueError(f"{name} must be an integer, got '{value}'.") from exc
-
-    if parsed <= 0:
-        raise ValueError(f'{name} must be > 0, got {parsed}.')
-    return parsed
-
-
-def _is_running_in_streamlit() -> bool:
-    try:
-        from streamlit.runtime.scriptrunner import get_script_run_ctx
-    except Exception:
-        return False
-    return get_script_run_ctx() is not None
-
-
-def _list_models_safe(client: Any) -> tuple[list[str], str | None]:
-    try:
-        models = client.models.list().data
-        model_ids = [model.id for model in models]
-        return model_ids, None
+        resp = await client.models.list()
+        return sorted([m.id for m in resp.data]), None
     except Exception as exc:
         return [], str(exc)
 
-
-def _stream_tokens(
-    *,
-    client: Any,
-    model: str,
-    messages: list[dict[str, str]],
-    temperature: float,
-    max_tokens: int,
-):
-    stream = client.chat.completions.create(
-        model=model,
-        messages=messages,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        stream=True,
-    )
-    for chunk in stream:
-        if not chunk.choices:
-            continue
-        delta = chunk.choices[0].delta
-        content = getattr(delta, 'content', None)
-        if content:
-            yield content
-
-
-def _render_streaming_placeholder(placeholder: Any, text: str) -> None:
-    safe_text = html.escape(text).replace('\n', '<br>')
-    placeholder.markdown(
-        f"""
-<div class="sp-live-response">
-  {safe_text}
-  <span class="sp-stream-cursor"></span>
-</div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def _render_thinking_placeholder(placeholder: Any) -> None:
-    placeholder.markdown(
-        """
-<div class="sp-thinking">
-  <span class="sp-thinking-dot"></span>
-  <span class="sp-thinking-dot"></span>
-  <span class="sp-thinking-dot"></span>
-  <span class="sp-thinking-label">Thinking</span>
-</div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def _extract_renderable_chunk(buffer: str, force: bool = False) -> tuple[str, str]:
-    """Return a natural-looking chunk (word/sentence boundary) and remaining buffer."""
-    if not buffer:
-        return '', ''
-    if force:
-        return buffer, ''
-
-    boundary_chars = ('\n', ' ', '\t', '.', '!', '?', ':', ';', ',')
-    cut_index = max(buffer.rfind(ch) for ch in boundary_chars)
-    if cut_index <= 0:
-        return '', buffer
-
-    cut_at = cut_index + 1
-    return buffer[:cut_at], buffer[cut_at:]
-
-
-def _render_app(config: ChatConfig) -> None:
+def _list_models_sync(base_url: str, api_key: str) -> tuple[List[str], str | None]:
+    """Synchronous model listing used during startup info."""
+    from openai import OpenAI
     try:
-        import streamlit as st
-    except ImportError as exc:
-        raise SystemExit(
-            'sp_chat requires streamlit. Install it with: uv pip install streamlit'
-        ) from exc
+        c = OpenAI(base_url=base_url, api_key=api_key)
+        resp = c.models.list()
+        return sorted([m.id for m in resp.data]), None
+    except Exception as exc:
+        return [], str(exc)
 
-    st.set_page_config(
-        page_title='Speedy Chat',
-        page_icon=':speech_balloon:',
-        layout='wide',
-    )
+def _setup_chainlit():
+    import chainlit as cl
+    from chainlit.input_widget import Select, Slider, TextInput, Switch
+    from openai import AsyncOpenAI
 
-    st.markdown(
-        """
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;700;800&family=Space+Grotesk:wght@500;700&display=swap');
+    base_url = os.environ.get("SP_CHAT_CLIENT", "http://localhost:4343/v1")
+    api_key = os.environ.get("SP_CHAT_API_KEY", "abc")
+    initial_model = os.environ.get("SP_CHAT_MODEL")
+    enable_thinking_default = os.environ.get("SP_CHAT_THINKING", "true") == "true"
 
-:root,
-[data-theme='light'],
-[data-theme='dark'] {
-  --sp-bg-0: #060a14;
-  --sp-bg-1: #0a1120;
-  --sp-bg-2: #11192d;
-  --sp-surface: rgba(16, 25, 43, 0.72);
-  --sp-surface-strong: rgba(12, 20, 35, 0.88);
-  --sp-border: rgba(106, 142, 196, 0.34);
-  --sp-border-strong: rgba(122, 178, 255, 0.52);
-  --sp-text: #edf4ff;
-  --sp-muted: #a4b7d3;
-  --sp-accent: #5dc1ff;
-  --sp-accent-2: #83a6ff;
-  --sp-user-bg: linear-gradient(128deg, rgba(51, 127, 255, 0.25), rgba(84, 200, 255, 0.14));
-  --sp-assistant-bg: linear-gradient(128deg, rgba(115, 141, 255, 0.22), rgba(58, 88, 143, 0.16));
-}
+    client = AsyncOpenAI(base_url=base_url, api_key=api_key)
 
-* {
-  font-family: 'Manrope', sans-serif;
-}
+    @cl.on_chat_start
+    async def start():
+        models, error = await _list_models_async(client)
 
-.stApp {
-  background:
-    radial-gradient(900px 600px at -8% -12%, rgba(57, 129, 255, 0.22), transparent 62%),
-    radial-gradient(950px 700px at 110% -10%, rgba(105, 95, 255, 0.18), transparent 58%),
-    linear-gradient(180deg, var(--sp-bg-0), var(--sp-bg-1) 48%, var(--sp-bg-2));
-  color: var(--sp-text);
-}
-
-.stApp::before,
-.stApp::after {
-  content: '';
-  position: fixed;
-  width: 22rem;
-  height: 22rem;
-  pointer-events: none;
-  z-index: 0;
-  filter: blur(72px);
-  opacity: 0.48;
-}
-
-.stApp::before {
-  top: 9%;
-  right: 13%;
-  background: rgba(83, 194, 255, 0.32);
-}
-
-.stApp::after {
-  bottom: 12%;
-  left: 8%;
-  background: rgba(117, 124, 255, 0.28);
-}
-
-[data-testid='stAppViewContainer'] > .main,
-section[data-testid='stSidebar'] {
-  position: relative;
-  z-index: 1;
-}
-
-header[data-testid='stHeader'] {
-  background: transparent;
-}
-
-[data-testid='stToolbar'],
-[data-testid='stDecoration'] {
-  visibility: hidden;
-}
-
-.block-container {
-  max-width: 1040px;
-  padding-top: 1rem;
-}
-
-.sp-hero {
-  padding: 1.2rem 1.3rem;
-  border: 1px solid var(--sp-border);
-  border-radius: 22px;
-  background: linear-gradient(
-    145deg,
-    rgba(17, 27, 47, 0.84),
-    rgba(13, 20, 35, 0.7)
-  );
-  box-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.04) inset,
-    0 24px 46px rgba(2, 6, 16, 0.44);
-  backdrop-filter: blur(12px);
-  margin-bottom: 1rem;
-}
-
-.sp-chat-title {
-  font-family: 'Space Grotesk', sans-serif;
-  letter-spacing: 0.2px;
-  font-size: 2.1rem;
-  font-weight: 700;
-  color: var(--sp-text);
-  margin-bottom: 0.2rem;
-}
-
-.sp-chat-subtitle {
-  color: var(--sp-muted);
-  font-size: 1.02rem;
-  margin-bottom: 0.85rem;
-}
-
-.sp-meta-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.55rem;
-}
-
-.sp-meta {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.42rem;
-  border: 1px solid var(--sp-border);
-  border-radius: 999px;
-  padding: 0.34rem 0.78rem;
-  background: rgba(20, 33, 56, 0.64);
-  color: var(--sp-text);
-  font-size: 0.82rem;
-  white-space: nowrap;
-}
-
-.sp-meta-live {
-  border-color: rgba(132, 211, 255, 0.48);
-  background: rgba(26, 49, 83, 0.73);
-}
-
-.sp-meta-live .sp-meta-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 999px;
-  background: #77d5ff;
-  box-shadow: 0 0 0 rgba(119, 213, 255, 0.5);
-  animation: sp-live-pulse 1.3s ease-out infinite;
-}
-
-.sp-meta-label {
-  color: var(--sp-muted);
-  font-weight: 600;
-}
-
-section[data-testid='stSidebar'] {
-  background: linear-gradient(
-    180deg,
-    rgba(10, 16, 30, 0.97),
-    rgba(7, 12, 24, 0.97)
-  );
-  border-right: 1px solid rgba(104, 144, 201, 0.22);
-}
-
-section[data-testid='stSidebar'] * {
-  color: var(--sp-text) !important;
-}
-
-section[data-testid='stSidebar'] [data-baseweb='select'] > div,
-section[data-testid='stSidebar'] textarea,
-section[data-testid='stSidebar'] input,
-section[data-testid='stSidebar'] .stCodeBlock {
-  background: var(--sp-surface-strong) !important;
-  border-color: var(--sp-border) !important;
-  color: var(--sp-text) !important;
-}
-
-section[data-testid='stSidebar'] textarea::placeholder,
-section[data-testid='stSidebar'] input::placeholder {
-  color: var(--sp-muted) !important;
-}
-
-section[data-testid='stSidebar'] .stButton > button {
-  border-radius: 13px;
-  border: 1px solid var(--sp-border);
-  background: rgba(20, 33, 56, 0.75);
-  color: var(--sp-text);
-}
-
-section[data-testid='stSidebar'] .stButton > button:hover {
-  border-color: var(--sp-border-strong);
-  transform: translateY(-1px);
-}
-
-div[data-testid='stChatMessage'] {
-  border-radius: 18px !important;
-  border: 1px solid var(--sp-border) !important;
-  background:
-    var(--sp-assistant-bg),
-    rgba(13, 21, 38, 0.78) !important;
-  box-shadow: 0 14px 30px rgba(3, 7, 20, 0.34);
-  padding: 0.22rem 0.38rem;
-  margin-bottom: 0.6rem;
-  animation: sp-fade-up 0.2s ease-out;
-}
-
-div[data-testid='stChatMessage'][aria-label*='user'],
-div[data-testid='stChatMessage'][aria-label*='User'] {
-  background:
-    var(--sp-user-bg),
-    rgba(11, 18, 32, 0.85) !important;
-  border-color: var(--sp-border-strong) !important;
-}
-
-div[data-testid='stChatMessage'] [data-testid='stMarkdownContainer'] p,
-div[data-testid='stChatMessage'] [data-testid='stMarkdownContainer'] li,
-div[data-testid='stChatMessage'] [data-testid='stMarkdownContainer'] span {
-  color: var(--sp-text) !important;
-  line-height: 1.6;
-}
-
-.sp-live-response {
-  color: var(--sp-text);
-  line-height: 1.62;
-  white-space: normal;
-}
-
-.sp-stream-cursor {
-  display: inline-block;
-  width: 0.55ch;
-  height: 1.05em;
-  margin-left: 0.2rem;
-  vertical-align: -0.12em;
-  border-radius: 2px;
-  background: linear-gradient(180deg, #8ed6ff, #5f8dff);
-  box-shadow: 0 0 12px rgba(114, 185, 255, 0.8);
-  animation: sp-cursor-blink 1.05s steps(2, end) infinite;
-}
-
-.sp-thinking {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.32rem;
-  border: 1px solid var(--sp-border);
-  border-radius: 999px;
-  background: rgba(18, 30, 51, 0.75);
-  padding: 0.34rem 0.66rem;
-  color: var(--sp-muted);
-}
-
-.sp-thinking-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: #8ed6ff;
-  opacity: 0.6;
-  animation: sp-thinking-bounce 1.2s ease-in-out infinite;
-}
-
-.sp-thinking-dot:nth-child(2) {
-  animation-delay: 0.16s;
-}
-
-.sp-thinking-dot:nth-child(3) {
-  animation-delay: 0.32s;
-}
-
-.sp-thinking-label {
-  margin-left: 0.2rem;
-  font-size: 0.82rem;
-  font-weight: 600;
-}
-
-div[data-testid='stChatInput'] textarea,
-div[data-testid='stChatInput'] input {
-  min-height: 56px !important;
-  border-radius: 15px !important;
-  background: rgba(12, 21, 37, 0.9) !important;
-  border: 1px solid var(--sp-border) !important;
-  color: var(--sp-text) !important;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.32);
-}
-
-div[data-testid='stChatInput'] textarea::placeholder,
-div[data-testid='stChatInput'] input::placeholder {
-  color: var(--sp-muted) !important;
-}
-
-div[data-testid='stChatInput'] button {
-  border-radius: 12px !important;
-  border: none !important;
-  background: linear-gradient(145deg, #4db5ff, #6f87ff) !important;
-  color: #eff6ff !important;
-}
-
-a {
-  color: #8fd0ff !important;
-}
-
-@keyframes sp-fade-up {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@keyframes sp-cursor-blink {
-  0%,
-  49% {
-    opacity: 1;
-  }
-  50%,
-  100% {
-    opacity: 0.25;
-  }
-}
-
-@keyframes sp-thinking-bounce {
-  0%,
-  80%,
-  100% {
-    transform: translateY(0);
-    opacity: 0.55;
-  }
-  40% {
-    transform: translateY(-2px);
-    opacity: 1;
-  }
-}
-
-@keyframes sp-live-pulse {
-  0% {
-    box-shadow: 0 0 0 0 rgba(119, 213, 255, 0.45);
-  }
-  70% {
-    box-shadow: 0 0 0 6px rgba(119, 213, 255, 0);
-  }
-  100% {
-    box-shadow: 0 0 0 0 rgba(119, 213, 255, 0);
-  }
-}
-</style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    base_url = normalize_client_base_url(config.client)
-    client = MOpenAI(base_url=base_url, api_key=config.api_key, cache=False)
-
-    models, model_error = _list_models_safe(client)
-    if not models and config.model:
-        models = [config.model]
-
-    if 'messages' not in st.session_state:
-        st.session_state.messages = []
-    if 'temperature' not in st.session_state:
-        st.session_state.temperature = 0.7
-    if 'max_tokens' not in st.session_state:
-        st.session_state.max_tokens = 1024
-    if 'system_prompt' not in st.session_state:
-        st.session_state.system_prompt = ''
-
-    st.markdown(
-        f"""
-<div class="sp-hero">
-  <div class="sp-chat-title">Speedy vLLM Chat</div>
-  <div class="sp-chat-subtitle">Fast streaming playground for OpenAI-compatible local models.</div>
-  <div class="sp-meta-row">
-    <span class="sp-meta"><span class="sp-meta-label">Endpoint</span>{base_url}</span>
-    <span class="sp-meta sp-meta-live"><span class="sp-meta-dot"></span><span class="sp-meta-label">Transport</span>Real-time stream</span>
-    <span class="sp-meta"><span class="sp-meta-label">UX</span>Latency-first</span>
-  </div>
-</div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    with st.sidebar:
-        st.markdown('### Connection')
-        st.code(base_url, language=None)
-        if model_error:
-            st.warning(f'Model auto-detect failed: {model_error[:180]}')
-
-        selected_model = ''
         if models:
-            default_index = 0
-            if config.model and config.model in models:
-                default_index = models.index(config.model)
-            selected_model = st.selectbox('Model', options=models, index=default_index)
+            model_options = models
+        elif initial_model:
+            model_options = [initial_model]
         else:
-            selected_model = st.text_input('Model', value=config.model or '')
+            model_options = ["default"]
 
-        st.markdown('### Generation')
-        st.session_state.temperature = st.slider(
-            'Temperature',
-            min_value=0.0,
-            max_value=2.0,
-            value=st.session_state.temperature,
-            step=0.05,
-        )
-        st.session_state.max_tokens = int(
-            st.number_input(
-                'Max tokens',
-                min_value=1,
-                max_value=32768,
-                value=int(st.session_state.max_tokens),
-                step=128,
-            )
-        )
-        st.session_state.system_prompt = st.text_area(
-            'System prompt',
-            value=st.session_state.system_prompt,
-            height=120,
-            placeholder='Optional system message for every request.',
-        )
-        if st.button('Clear chat', use_container_width=True):
-            st.session_state.messages = []
-            st.rerun()
+        default_idx = 0
+        if initial_model and initial_model in model_options:
+            default_idx = model_options.index(initial_model)
 
-    for message in st.session_state.messages:
-        with st.chat_message(message['role']):
-            st.markdown(message['content'])
+        settings = await cl.ChatSettings(
+            [
+                Select(
+                    id="model",
+                    label="Model",
+                    values=model_options,
+                    initial_index=default_idx,
+                ),
+                Slider(
+                    id="temperature",
+                    label="Temperature",
+                    initial=DEFAULT_TEMPERATURE,
+                    min=0,
+                    max=2,
+                    step=0.05,
+                ),
+                Slider(
+                    id="max_tokens",
+                    label="Max Tokens",
+                    initial=DEFAULT_MAX_TOKENS,
+                    min=1,
+                    max=32768,
+                    step=128,
+                ),
+                TextInput(
+                    id="system_prompt",
+                    label="System Prompt",
+                    initial=DEFAULT_SYSTEM_PROMPT,
+                    multiline=True,
+                ),
+                Switch(
+                    id="thinking",
+                    label="Enable Thinking",
+                    initial=enable_thinking_default,
+                ),
+            ]
+        ).send()
 
-    prompt = st.chat_input('Send a prompt')
-    if not prompt:
-        return
+        cl.user_session.set("settings", settings)
+        cl.user_session.set("client", client)
+        if error:
+            # Keep startup clean (no hardcoded first message), only surface real errors.
+            await cl.Message(content=f"⚠️ Model fetch error: {error}", author="system").send()
 
-    st.session_state.messages.append({'role': 'user', 'content': prompt})
-    with st.chat_message('user'):
-        st.markdown(prompt)
+    @cl.on_settings_update
+    async def on_settings_update(settings):
+        cl.user_session.set("settings", settings)
 
-    with st.chat_message('assistant'):
-        placeholder = st.empty()
-        chunks: list[str] = []
-        _render_thinking_placeholder(placeholder)
+    @cl.on_message
+    async def on_message(message: cl.Message):
+        settings = cl.user_session.get("settings")
+        aclient: AsyncOpenAI = cl.user_session.get("client")
 
-        request_messages: list[dict[str, str]] = []
-        system_prompt = st.session_state.system_prompt.strip()
-        if system_prompt:
-            request_messages.append({'role': 'system', 'content': system_prompt})
-        request_messages.extend(st.session_state.messages)
+        model = settings["model"]
+        temperature = float(settings["temperature"])
+        max_tokens = int(settings["max_tokens"])
+        system_prompt = settings["system_prompt"]
+        enable_thinking = settings["thinking"]
 
-        response_text = ''
+        messages = []
+        if system_prompt and system_prompt.strip():
+            messages.append({"role": "system", "content": system_prompt})
+        messages.extend(cl.chat_context.to_openai())
+
+        call_kwargs = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": True,
+        }
+        if enable_thinking:
+            call_kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
+
+        start_time = time.time()
+
         try:
-            if not selected_model:
-                raise ValueError(
-                    'No model available. Provide model=... or make /v1/models reachable.'
-                )
+            stream = await aclient.chat.completions.create(**call_kwargs)
 
-            displayed_text = ''
-            pending_buffer = ''
-            last_flush = time.perf_counter()
+            thinking_completed = False
+            final_answer = cl.Message(content="")
 
-            for token in _stream_tokens(
-                client=client,
-                model=selected_model,
-                messages=request_messages,
-                temperature=st.session_state.temperature,
-                max_tokens=st.session_state.max_tokens,
-            ):
-                chunks.append(token)
-                pending_buffer += token
-                now = time.perf_counter()
+            async with cl.Step(name="Thinking") as thinking_step:
+                async for chunk in stream:
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
 
-                should_attempt_flush = (
-                    len(pending_buffer) >= 24
-                    or '\n' in pending_buffer
-                    or pending_buffer.endswith(('.', '!', '?', ':', ';', ','))
-                    or (now - last_flush) >= 0.05
-                )
-                if should_attempt_flush:
-                    force_flush = len(pending_buffer) >= 72
-                    chunk_to_render, pending_buffer = _extract_renderable_chunk(
-                        pending_buffer, force=force_flush
-                    )
-                    if chunk_to_render:
-                        displayed_text += chunk_to_render
-                        _render_streaming_placeholder(placeholder, displayed_text)
-                        last_flush = now
+                    reasoning = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
+                    content = delta.content
 
-            if pending_buffer:
-                chunk_to_render, pending_buffer = _extract_renderable_chunk(
-                    pending_buffer, force=True
-                )
-                displayed_text += chunk_to_render
-                _render_streaming_placeholder(placeholder, displayed_text)
+                    if reasoning and not thinking_completed:
+                        await thinking_step.stream_token(reasoning)
+                    elif not thinking_completed and content:
+                        thought_for = round(time.time() - start_time)
+                        thinking_step.name = f"Thought for {thought_for}s"
+                        await thinking_step.update()
+                        thinking_completed = True
+                        break
 
-            response_text = ''.join(chunks).strip() or '(empty response)'
-            placeholder.markdown(response_text)
-        except Exception as exc:
-            response_text = f'Request failed: {exc}'
-            placeholder.error(response_text)
+                # If thinking never got content, close the step
+                if not thinking_completed:
+                    thought_for = round(time.time() - start_time)
+                    thinking_step.name = f"Thought for {thought_for}s"
+                    await thinking_step.update()
 
-    st.session_state.messages.append({'role': 'assistant', 'content': response_text})
+            # Stream the final answer (continues from where we left off)
+            if thinking_completed and content:
+                # We already got the first content token above
+                await final_answer.stream_token(content)
 
+            async for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                if delta.content:
+                    await final_answer.stream_token(delta.content)
 
-def _launch_streamlit(config: ChatConfig) -> int:
+            await final_answer.send()
+
+        except Exception as e:
+            await cl.Message(content=f"Error: {str(e)}").send()
+
+# --- Launcher ---
+
+def _launch_chainlit(config: ChatConfig) -> int:
     try:
-        import streamlit  # noqa: F401
+        import chainlit  # noqa
     except ImportError:
-        print(
-            'sp_chat requires streamlit. Install it with: uv pip install streamlit',
-            file=sys.stderr,
-        )
+        print("Install chainlit via: uv pip install chainlit", file=sys.stderr)
         return 1
 
-    script_path = Path(__file__).resolve()
-    command = [
-        sys.executable,
-        '-m',
-        'streamlit',
-        'run',
-        str(script_path),
-        '--server.port',
-        str(config.app_port),
-        '--server.address',
-        config.app_host,
-        '--server.headless',
-        'true',
-        '--browser.gatherUsageStats',
-        'false',
-        '--',
-        f'client={config.client}',
-        f'api_key={config.api_key}',
-    ]
+    # Pass config via environment variables to the subprocess
+    env = os.environ.copy()
+    env["SP_CHAT_CLIENT"] = normalize_client_base_url(config.client)
+    env["SP_CHAT_API_KEY"] = config.api_key
     if config.model:
-        command.append(f'model={config.model}')
+        env["SP_CHAT_MODEL"] = config.model
+    env["SP_CHAT_THINKING"] = "true" if config.thinking else "false"
+    # Marker to indicate we are running the app logic
+    env["SP_CHAT_RUNNING"] = "1"
+    
+    # We use "chainlit run" on THIS file
+    script_path = str(Path(__file__).resolve())
+    
+    cmd = [
+        sys.executable, "-m", "chainlit", "run", script_path,
+        "--port", str(config.app_port),
+        "--host", config.app_host,
+        "--headless"
+    ]
+    
+    base_url = env["SP_CHAT_CLIENT"]
+    # Print detected models at launch for visibility
+    models, err = _list_models_sync(base_url, config.api_key)
+    if models:
+        print(f"Models: {', '.join(models)}")
+    elif err:
+        print(f"⚠️  Could not list models ({err}). Will retry in browser.")
 
-    display_host = (
-        'localhost' if config.app_host in {'0.0.0.0', '::'} else config.app_host
-    )
-    print(f'Launching chat UI at http://{display_host}:{config.app_port}')
-    return subprocess.run(command, check=False).returncode
+    host_display = "localhost" if config.app_host in {"0.0.0.0", "::"} else config.app_host
+    print(f"Chat UI → http://{host_display}:{config.app_port}")
 
+    return subprocess.run(cmd, env=env, check=False).returncode
 
 def main() -> int:
     try:
@@ -756,15 +444,14 @@ def main() -> int:
         print(exc)
         return 0
     except ValueError as exc:
-        print(f'Error: {exc}', file=sys.stderr)
-        print(HELP_TEXT, file=sys.stderr)
+        print(f"Error: {exc}\n{HELP_TEXT}", file=sys.stderr)
         return 2
 
-    if _is_running_in_streamlit():
-        _render_app(config)
-        return 0
-    return _launch_streamlit(config)
+    return _launch_chainlit(config)
 
-
-if __name__ == '__main__':
-    raise SystemExit(main())
+# --- Module‑level dispatch ---
+# When chainlit imports this file, __name__ != "__main__" but our env marker is set.
+if _is_running_in_chainlit():
+    _setup_chainlit()
+elif __name__ == "__main__":
+    sys.exit(main())

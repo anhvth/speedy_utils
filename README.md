@@ -47,11 +47,15 @@ results = multi_thread(process_item, [1, 2, 3, 4, 5], error_handler='log')
 - [Installation](#installation)
 - [Usage](#usage)
   - [Parallel Processing](#parallel-processing)
+    - [Multi-threading](#multi-threading-with-enhanced-error-handling)
+    - [Multi-processing](#multi-processing-with-error-handling)
+    - [mpython](#mpython-cli-tool)
   - [Enhanced Error Handling](#enhanced-error-handling)
   - [Caching](#caching)
   - [File I/O](#file-io)
   - [Data Manipulation](#data-manipulation)
   - [Utility Functions](#utility-functions)
+  - [LLM](#llm)
 - [Testing](#testing)
 
 ## Features
@@ -212,6 +216,47 @@ results = multi_process(
 )
 print(results)  # [0, 1, 4, 9, 16, None, 36, 49, 64, 81, None, 121]
 ```
+
+#### mpython (CLI Tool)
+
+`mpython` is a CLI tool for running Python scripts in multiple tmux windows with automatic GPU/CPU allocation for parallel processing.
+
+**Basic Usage:**
+
+```bash
+# Run script.py with 16 parallel processes across GPUs 0-7
+mpython script.py
+
+# Run with 8 processes
+mpython -t 8 script.py
+
+# Run on specific GPUs only
+mpython --gpus 0,1,2 script.py
+```
+
+**Multi-Process Script Setup:**
+
+Your script must use `MP_ID` and `MP_TOTAL` environment variables for sharding:
+
+```python
+import os
+
+MP_ID = int(os.getenv("MP_ID", "0"))
+MP_TOTAL = int(os.getenv("MP_TOTAL", "1"))
+
+# Shard your data - each process gets its slice
+inputs = list(range(1000))
+my_inputs = inputs[MP_ID::MP_TOTAL]
+
+for item in my_inputs:
+    process(item)
+```
+
+**Managing Sessions:**
+
+- Sessions are named incrementally: `mpython`, `mpython-1`, `mpython-2`, etc.
+- Kill all sessions: `kill-mpython`
+- Attach to session: `tmux attach -t mpython`
 
 ### Enhanced Error Handling
 
@@ -391,6 +436,164 @@ result = slow_function()  # Prints execution time
 clock = Clock()
 # ... your code ...
 clock.log()
+```
+
+### LLM
+
+The `LLM` class provides a unified interface for language model interactions with structured input/output handling. It supports text completion, structured outputs, caching, streaming, and VLLM integration.
+
+#### Basic Text Completion
+
+```python
+from llm_utils import LLM
+
+llm = LLM(
+    instruction="You are a helpful assistant.",
+    model="gpt-4o-mini"
+)
+
+# Simple text completion
+results = llm("What is Python?")
+print(results[0]["parsed"])  # The text response
+print(results[0]["messages"])  # Full conversation history
+```
+
+#### Structured Output with Pydantic
+
+```python
+from pydantic import BaseModel
+from llm_utils import LLM
+
+class Sentiment(BaseModel):
+    sentiment: str
+    confidence: float
+
+llm = LLM(
+    instruction="Analyze the sentiment of the input.",
+    output_model=Sentiment,
+    model="gpt-4o-mini"
+)
+
+results = llm("I love this product!")
+parsed: Sentiment = results[0]["parsed"]
+print(f"Sentiment: {parsed.sentiment}, Confidence: {parsed.confidence}")
+```
+
+#### Streaming Responses
+
+```python
+from llm_utils import LLM
+
+llm = LLM(model="gpt-4o-mini")
+
+# Stream text responses
+stream = llm("Tell me a story", stream=True)
+for chunk in stream:
+    content = chunk.choices[0].delta.content
+    if content:
+        print(content, end="", flush=True)
+```
+
+#### Client Configuration
+
+The `LLM` class accepts various client configurations:
+
+```python
+from llm_utils import LLM
+from openai import OpenAI
+
+# Using a custom OpenAI client
+custom_client = OpenAI(base_url="http://localhost:8000/v1", api_key="your-key")
+llm = LLM(client=custom_client, model="llama-2-7b")
+
+# Using a port number (for VLLM servers)
+llm = LLM(client=8000, model="llama-2-7b")
+
+# Using a base URL string
+llm = LLM(client="http://localhost:8000/v1", model="llama-2-7b")
+```
+
+#### VLLM Integration
+
+Start and manage VLLM servers automatically:
+
+```python
+from llm_utils import LLM
+
+llm = LLM(
+    vllm_cmd="vllm serve meta-llama/Llama-2-7b-chat-hf --port 8000",
+    model="meta-llama/Llama-2-7b-chat-hf"
+)
+
+# The server starts automatically and is cleaned up on exit
+results = llm("Hello!")
+
+# Cleanup is automatic when using context manager
+with LLM(vllm_cmd="vllm serve ...") as llm:
+    results = llm("Hello!")
+```
+
+#### Caching
+
+Enable response caching to avoid redundant API calls:
+
+```python
+from llm_utils import LLM
+
+# Enable caching (default: True)
+llm = LLM(model="gpt-4o-mini", cache=True)
+
+# First call hits the API
+result1 = llm("What is 2+2?")
+
+# Second call returns cached result
+result2 = llm("What is 2+2?")  # Instant response from cache
+
+# Disable caching for a specific call
+result3 = llm("What is 2+2?", cache=False)
+```
+
+#### Reasoning Models
+
+Handle reasoning models that provide thinking traces:
+
+```python
+from llm_utils import LLM
+
+# For models like DeepSeek-R1 that output reasoning
+llm = LLM(
+    model="deepseek-reasoner",
+    is_reasoning_model=True
+)
+
+results = llm("Solve this math problem: 15 * 23")
+
+# Access the final answer
+answer = results[0]["parsed"]
+
+# Access reasoning content (if available)
+reasoning = results[0].get("reasoning_content")
+```
+
+#### Conversation History
+
+Inspect previous conversations:
+
+```python
+from llm_utils import LLM
+
+llm = LLM(model="gpt-4o-mini")
+
+# Make some calls
+llm("Hello")
+llm("How are you?")
+
+# Inspect the last conversation
+history = llm.inspect_history(idx=-1)
+print(history)
+
+# Get last 3 messages from the conversation
+history = llm.inspect_history(idx=-1, k_last_messages=3)
 ```
 
 ## Testing
