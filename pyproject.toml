@@ -34,6 +34,7 @@ dependencies = [
     "pytest",
     "rich>=14.3.1",
     "chainlit>=2.0",
+    "transformers>=4.57.6",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",

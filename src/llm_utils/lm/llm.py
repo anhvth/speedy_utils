@@ -589,78 +589,78 @@ class LLM(
         )
 
 
-class LLM_NEMOTRON3(LLM):
-    """
-    Custom implementation for NVIDIA Nemotron-3 reasoning models.
-    Supports thinking budget control and native reasoning tags.
-    """
+# class LLM_NEMOTRON3(LLM):
+#     """
+#     Custom implementation for NVIDIA Nemotron-3 reasoning models.
+#     Supports thinking budget control and native reasoning tags.
+#     """
 
-    def __init__(
-        self,
-        model: str = "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
-        thinking_budget: int = 1024,
-        enable_thinking: bool = True,
-        **kwargs,
-    ):
-        # Force reasoning_model to True to enable reasoning_content extraction
-        kwargs["is_reasoning_model"] = True
-        super().__init__(**kwargs)
+#     def __init__(
+#         self,
+#         model: str = "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+#         thinking_budget: int = 1024,
+#         enable_thinking: bool = True,
+#         **kwargs,
+#     ):
+#         # Force reasoning_model to True to enable reasoning_content extraction
+#         kwargs["is_reasoning_model"] = True
+#         super().__init__(**kwargs)
 
-        self.model_kwargs["model"] = model
-        self.thinking_budget = thinking_budget
-        self.enable_thinking = enable_thinking
+#         self.model_kwargs["model"] = model
+#         self.thinking_budget = thinking_budget
+#         self.enable_thinking = enable_thinking
 
-    def _prepare_input(self, input_data: str | BaseModel | list[dict]) -> Messages:
-        """Override to ensure Nemotron chat template requirements are met."""
-        messages = super()._prepare_input(input_data)
-        return messages
+#     def _prepare_input(self, input_data: str | BaseModel | list[dict]) -> Messages:
+#         """Override to ensure Nemotron chat template requirements are met."""
+#         messages = super()._prepare_input(input_data)
+#         return messages
 
-    def __call__(
-        self,
-        input_data: str | BaseModel | list[dict],
-        thinking_budget: Optional[int] = None,
-        **kwargs,
-    ) -> List[Dict[str, Any]]:
-        budget = thinking_budget or self.thinking_budget
+#     def __call__(
+#         self,
+#         input_data: str | BaseModel | list[dict],
+#         thinking_budget: Optional[int] = None,
+#         **kwargs,
+#     ) -> List[Dict[str, Any]]:
+#         budget = thinking_budget or self.thinking_budget
 
-        if not self.enable_thinking:
-            # Simple pass with thinking disabled in template
-            return super().__call__(
-                input_data, chat_template_kwargs={"enable_thinking": False}, **kwargs
-            )
+#         if not self.enable_thinking:
+#             # Simple pass with thinking disabled in template
+#             return super().__call__(
+#                 input_data, chat_template_kwargs={"enable_thinking": False}, **kwargs
+#             )
 
-        # --- STEP 1: Generate Thinking Trace ---
-        # We manually append <think> to force the reasoning MoE layers
-        messages = self._prepare_input(input_data)
+#         # --- STEP 1: Generate Thinking Trace ---
+#         # We manually append <think> to force the reasoning MoE layers
+#         messages = self._prepare_input(input_data)
 
-        # We use the raw text completion for the budget phase
-        # Stop at the closing tag or budget limit
-        thinking_response = self.text_completion(
-            input_data, max_tokens=budget, stop=["</think>"], **kwargs
-        )[0]
+#         # We use the raw text completion for the budget phase
+#         # Stop at the closing tag or budget limit
+#         thinking_response = self.text_completion(
+#             input_data, max_tokens=budget, stop=["</think>"], **kwargs
+#         )[0]
 
-        reasoning_content = thinking_response["parsed"]
+#         reasoning_content = thinking_response["parsed"]
 
-        # Ensure proper tag closing for the second pass
-        if "</think>" not in reasoning_content:
-            reasoning_content = f"{reasoning_content}\n</think>"
-        elif not reasoning_content.endswith("</think>"):
-            # Ensure it ends exactly with the tag for continuity
-            reasoning_content = reasoning_content.split("</think>")[0] + "</think>"
+#         # Ensure proper tag closing for the second pass
+#         if "</think>" not in reasoning_content:
+#             reasoning_content = f"{reasoning_content}\n</think>"
+#         elif not reasoning_content.endswith("</think>"):
+#             # Ensure it ends exactly with the tag for continuity
+#             reasoning_content = reasoning_content.split("</think>")[0] + "</think>"
 
-        # --- STEP 2: Generate Final Answer ---
-        # Append the thought to the assistant role and continue
-        final_messages = messages + [
-            {"role": "assistant", "content": f"<think>\n{reasoning_content}\n"}
-        ]
+#         # --- STEP 2: Generate Final Answer ---
+#         # Append the thought to the assistant role and continue
+#         final_messages = messages + [
+#             {"role": "assistant", "content": f"<think>\n{reasoning_content}\n"}
+#         ]
 
-        # Use continue_final_message to prevent the model from repeating the header
-        results = super().__call__(
-            final_messages, extra_body={"continue_final_message": True}, **kwargs
-        )
+#         # Use continue_final_message to prevent the model from repeating the header
+#         results = super().__call__(
+#             final_messages, extra_body={"continue_final_message": True}, **kwargs
+#         )
 
-        # Inject the reasoning back into the result for the UI/API
-        for res in results:
-            res["reasoning_content"] = reasoning_content
+#         # Inject the reasoning back into the result for the UI/API
+#         for res in results:
+#             res["reasoning_content"] = reasoning_content
 
-        return results
+#         return results

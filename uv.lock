@@ -8633,7 +8633,7 @@ wheels = [
 
 [[package]]
 name = "speedy-utils"
-version = "1.2.10"
+version = "1.2.11"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
@@ -8667,6 +8667,7 @@ dependencies = [
     { name = "scikit-learn", version = "1.7.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "tabulate" },
     { name = "tqdm" },
+    { name = "transformers" },
     { name = "xxhash" },
 ]
 
@@ -8716,6 +8717,7 @@ requires-dist = [
     { name = "tabulate" },
     { name = "torch", marker = "extra == 'llm-utils'", specifier = ">=2.8.0" },
     { name = "tqdm" },
+    { name = "transformers", specifier = ">=4.57.6" },
     { name = "transformers", marker = "extra == 'llm-utils'", specifier = ">=4.57.6" },
     { name = "vllm", marker = "extra == 'llm-utils'", specifier = ">=0.11.0" },
     { name = "vllm", marker = "extra == 'ray'", specifier = ">=0.6.3" },
