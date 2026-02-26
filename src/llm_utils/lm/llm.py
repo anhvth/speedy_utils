@@ -130,6 +130,14 @@ class LLM(
         if self.lora_path:
             self._load_lora_adapter()
 
+    @property
+    def model(self) -> str:
+        """Return the model name from model_kwargs."""
+        model = self.model_kwargs.get("model")
+        if not model:
+            logger.warning("No model specified in model_kwargs")
+        return model
+
     def __enter__(self):
         """Context manager entry."""
         return self
