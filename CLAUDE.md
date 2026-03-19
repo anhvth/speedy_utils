@@ -1,79 +1,164 @@
-# Claude Code Instructions for speedy_utils
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Development Commands
+
+```bash
+# Install dependencies
+uv sync
+
+# Install with optional ray extras
+uv sync --extra ray
+
+# Run tests
+uv run pytest
+
+# Run a single test file
+uv run pytest tests/test_thread.py
+
+# Run with verbose output
+uv run pytest -v
+
+# Check import time (must be < 0.4s)
+python -c "import time; start=time.perf_counter(); import speedy_utils; print(f'{time.perf_counter()-start:.3f}s')"
+
+# Detailed import analysis
+python scripts/debug_import_time.py speedy_utils --min-sec 0.05 --no-stdlib
+
+# Lint with ruff
+uv run ruff check .
+
+# Format with ruff
+uv run ruff format .
+
+# Bump version (runs tests first, then commits and pushes)
+./bumpversion.sh patch  # or minor, major
+
+# Deploy to PyPI (requires PYPI_API_TOKEN)
+./scripts/deploy.sh
+```
 
 ## Performance Requirement: Import Time < 0.4s
 
-**CRITICAL:** All modules in this project MUST import in under 0.4 seconds. This is enforced by a git pre-commit hook that will block commits if import time exceeds 0.4s.
-
-### Why This Matters
-
-- Users should be able to `import speedy_utils` instantly
-- Slow imports hurt developer experience and productivity
-- Heavy dependencies like torch, ray, matplotlib should NOT load until actually used
+**CRITICAL:** All modules must import in under 0.4 seconds. This is enforced by a git pre-commit hook.
 
 ### Lazy Import Strategy
 
-**Rule:** Import heavy modules inside the function that needs them, NOT at module level.
+Import heavy modules inside functions, NOT at module level:
 
 ```python
-# BAD - Imports at module level (slow!)
+# BAD - slow module-level import
 import torch
-import ray
-import matplotlib.pyplot as plt
-
 def some_function():
     return torch.tensor([1, 2, 3])
 
-
-# GOOD - Lazy import inside function (fast!)
+# GOOD - lazy import
 def some_function():
-    import torch  # Only imports when function is called
+    import torch  # Only imports when called
     return torch.tensor([1, 2, 3])
 ```
 
 ### Heavy Modules to Lazy-Load
 
-| Module | Typical Import Time | Strategy |
-|--------|---------------------|----------|
-| `torch` | ~5s cumulative | Lazy import in GPU functions |
-| `ray` | ~10s cumulative | Lazy import in distributed functions |
-| `matplotlib` | ~3.6s cumulative | Lazy import in plotting functions |
-| `pandas` | ~1.3s cumulative | Lazy import in data functions |
-| `IPython` | ~1s cumulative | Lazy import in notebook functions |
+| Module | Import Time | Strategy |
+|--------|-------------|----------|
+| `torch` | ~5s | Lazy import in GPU functions |
+| `ray` | ~10s | Lazy import in distributed functions |
+| `matplotlib` | ~3.6s | Lazy import in plotting functions |
+| `pandas` | ~1.3s | Lazy import in data functions |
+| `IPython` | ~1s | Lazy import in notebook functions |
 
 ### Using the _LazyModule Pattern
-
-For commonly used heavy modules, use the `_LazyModule` class from `__imports.py`:
 
 ```python
 from speedy_utils.__imports import pd, ray, plt
 
-# These are lazy - only import when first accessed
 def process_data():
-    df = pd.DataFrame()  # pandas imports here
+    df = pd.DataFrame()  # pandas imports here, not at module load
     return df
 ```
 
-### Testing Import Time
+## Architecture
 
-To check import time manually:
+### Package Structure
 
-```bash
-# Check specific module
-python -c "import time; start=time.perf_counter(); import speedy_utils; print(f'{time.perf_counter()-start:.3f}s')"
+Three main packages under `src/`:
 
-# Run detailed analysis
-python scripts/debug_import_time.py speedy_utils --min-sec 0.05 --no-stdlib
+- **`speedy_utils`**: Core utilities (caching, IO, parallel processing, timing)
+  - `common/`: Cache (`memoize`, `imemoize`), IO (`load_json_or_pickle`), logging, error handling
+  - `multi_worker/`: `multi_thread`, `multi_process`, Ray dataset processing
+  - `__imports.py`: Lazy-loaded heavy dependencies (torch, ray, pandas, matplotlib)
+
+- **`llm_utils`**: LLM integration layer
+  - `lm/llm.py`: Main `LLM` class with OpenAI/VLLM support, structured outputs, caching
+  - `lm/openai_memoize.py`: `MOpenAI` - memoized OpenAI client
+  - `chat_format/`: Transform between ChatML, ShareGPT, text formats
+  - `vector_cache/`: Embedding-based response caching
+
+- **`vision_utils`**: Image processing utilities
+  - `io_utils.py`: Image loading, video frame extraction
+  - `plot.py`: Matplotlib wrappers for visualization
+
+### Key Patterns
+
+**Lazy Exports via `__getattr__`**: Both `speedy_utils` and `llm_utils` use lazy attribute access to keep import time fast:
+
+```python
+# In __init__.py
+_LAZY_ATTRS = {"LLM": ("llm_utils.lm", "LLM")}
+
+def __getattr__(name):
+    module_name, attr_name = _LAZY_ATTRS[name]
+    module = importlib.import_module(module_name)
+    return getattr(module, attr_name)
 ```
 
-### When Adding New Dependencies
+**Memoization**: `@memoize` caches function results to disk; `@imemoize` caches in memory:
 
-1. Check import time of the new dependency
-2. If > 0.1s, use lazy import strategy
-3. Test that `import speedy_utils` still completes in < 0.4s
-4. The pre-commit hook will enforce this automatically
+```python
+from speedy_utils import memoize, imemoize
 
-### Module-Specific Targets
+@memoize  # Persists to disk at ~/.cache/speedy_utils/
+def expensive_call(x):
+    return x ** 2
 
-- `speedy_utils`: < 0.4s
-- `llm_utils`: < 0.4s
-- `vision_utils`: < 0.4s
+@imemoize  # In-memory only
+def fast_cached_call(x):
+    return x * 2
+```
+
+**Parallel Processing with Error Handling**:
+
+```python
+from speedy_utils import multi_thread, multi_process
+
+# Three error handling modes
+results = multi_thread(func, items, error_handler='raise')  # Stop on error (default)
+results = multi_thread(func, items, error_handler='ignore')  # Continue, return None for errors
+results = multi_thread(func, items, error_handler='log')    # Log errors, continue
+```
+
+### CLI Tools
+
+The package provides these CLI commands:
+
+- `mpython`: Run Python scripts across multiple tmux windows with GPU/CPU allocation
+- `kill-mpython`: Kill all mpython sessions
+- `sp_chat`: Interactive chat CLI
+- `svllm`: Start VLLM server
+- `spu-prefetch-large-model`: Prefetch models to disk cache
+
+## Code Style
+
+- Line length: 88 characters (Black/Ruff default)
+- Ruff handles linting and formatting (config in `ruff.toml` and `pyproject.toml`)
+- Ignore rules `E402`, `F401`, `F403` in `__init__.py` files for lazy import patterns
+- Quote style: double quotes
+
+## Version Management
+
+Version is in `pyproject.toml`. Use `./bumpversion.sh` to bump version, which:
+1. Runs pytest (requires 90% pass rate)
+2. Bumps version using `uv version`
+3. Commits and pushes

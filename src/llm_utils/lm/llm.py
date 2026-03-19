@@ -274,10 +274,71 @@ class LLM(
         if "timeout" not in api_kwargs and self.timeout is not None:
             api_kwargs["timeout"] = self.timeout
 
+        # Disable caching for streaming - streaming responses cannot be cached
+        if hasattr(self.client, "set_cache"):
+            self.client.set_cache(False)
+
         # Stream directly from API (caching not supported in streaming mode)
         return self.client.chat.completions.create(
             model=model_name, messages=messages, stream=True, **api_kwargs
         )
+
+    def stream_print(
+        self,
+        input_data: str | BaseModel | list[dict],
+        show_reasoning: bool = False,
+        **runtime_kwargs,
+    ) -> str:
+        """
+        Stream and print completion with clean output formatting.
+
+        For reasoning models, only shows the final answer by default (not the thinking process).
+        For regular models, just streams the content.
+
+        Args:
+            input_data: Input data (string, BaseModel, or message list)
+            show_reasoning: If True and is_reasoning_model, also show thinking process
+            **runtime_kwargs: Additional runtime parameters (e.g., max_tokens=500)
+
+        Returns:
+            The complete response text (final answer only)
+        """
+        import sys
+
+        stream = self.stream_text_completion(input_data, **runtime_kwargs)
+
+        content_parts: list[str] = []
+
+        for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+
+            # Only show reasoning if explicitly requested
+            if show_reasoning and self.is_reasoning_model:
+                reasoning = getattr(delta, "reasoning_content", None) or getattr(
+                    delta, "reasoning", None
+                )
+                if reasoning:
+                    sys.stdout.write(reasoning)
+                    sys.stdout.flush()
+
+            content = delta.content
+            if content:
+                # Add separator if we showed reasoning
+                if show_reasoning and self.is_reasoning_model and not content_parts:
+                    sys.stdout.write("\n\n" + "=" * 40 + "\n\n")
+                    sys.stdout.flush()
+                content_parts.append(content)
+                sys.stdout.write(content)
+                sys.stdout.flush()
+
+        # Final newline
+        if content_parts or reasoning_parts:
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+
+        return "".join(content_parts)
 
     @staticmethod
     def _strip_think_tags(text: str) -> str:
