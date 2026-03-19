@@ -344,8 +344,8 @@ def _setup_chainlit():
             "stream": True,
         }
         if enable_thinking:
-            call_kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
-
+            call_kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": True}}
+    
         start_time = time.time()
 
         try:
