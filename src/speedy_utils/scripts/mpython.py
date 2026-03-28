@@ -70,6 +70,68 @@ def get_next_session_name(base_name='mpython'):
     return f'{base_name}-{next_num}'
 
 
+def _prompt_collision_action(base_name='mpython'):
+    """Prompt for how to handle existing base tmux session.
+
+    Returns:
+        "overwrite" to kill base session and reuse name
+        "increment" to keep existing behavior and create next numbered session
+    """
+    prompt_text = (
+        f"Tmux session '{base_name}' already exists. Choose action:\n"
+        "  1) overwrite (kill and relaunch)\n"
+        "  2) increment (create new numbered session)\n"
+        "Enter 1 or 2: "
+    )
+    while True:
+        if Console:
+            console = Console(stderr=True, force_terminal=True)
+            choice = console.input(prompt_text).strip()
+        else:
+            choice = input(prompt_text).strip()
+
+        if choice == '1':
+            return 'overwrite'
+        if choice == '2':
+            return 'increment'
+        print("Invalid choice. Please enter 1 or 2.", file=sys.stderr)
+
+
+def _kill_tmux_session(session_name):
+    """Kill one tmux session by exact name."""
+    result = subprocess.run(
+        ['tmux', 'kill-session', '-t', session_name],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        stderr = (result.stderr or '').strip()
+        raise RuntimeError(
+            f"Failed to kill tmux session '{session_name}'. {stderr}".strip()
+        )
+
+
+def resolve_session_name(base_name='mpython'):
+    """Resolve tmux session name with collision handling policy."""
+    existing_sessions = get_existing_tmux_sessions()
+    if base_name not in existing_sessions:
+        return base_name
+
+    if not sys.stdin.isatty():
+        print(
+            f"Tmux session '{base_name}' already exists and no interactive TTY "
+            "is available. Re-run interactively to choose overwrite/increment.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
+    action = _prompt_collision_action(base_name=base_name)
+    if action == 'overwrite':
+        _kill_tmux_session(base_name)
+        return base_name
+    return get_next_session_name(base_name)
+
+
 def assert_script(python_path):
     with open(python_path) as f:
         code_str = f.read()
@@ -189,7 +251,7 @@ def main():
 
         cmds.append(fold_cmd)
 
-    session_name = get_next_session_name('mpython')
+    session_name = resolve_session_name('mpython')
     run_in_tmux(cmds, session_name, args.total_fold)
     os.chmod('/tmp/start_multirun_tmux.sh', 0o755)  # Make the script executable
     os.system('/tmp/start_multirun_tmux.sh')
