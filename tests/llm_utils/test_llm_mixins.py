@@ -222,5 +222,272 @@ class TestLLMTimeout(unittest.TestCase):
         self.assertEqual(kwargs['timeout'], 1.0)
 
 
+class TestLLMEnableThinking(unittest.TestCase):
+    """Verify sync LLM thinking-control merges into extra_body correctly."""
+
+    class _StrictCompletions:
+        def __init__(self, completion):
+            self.calls = []
+            self._completion = completion
+
+        def create(
+            self,
+            *,
+            model,
+            messages,
+            extra_body=None,
+            timeout=None,
+            n=1,
+        ):
+            self.calls.append(
+                {
+                    'model': model,
+                    'messages': messages,
+                    'extra_body': extra_body,
+                    'timeout': timeout,
+                    'n': n,
+                }
+            )
+            return self._completion
+
+    class _StrictChat:
+        def __init__(self, completion):
+            self.completions = TestLLMEnableThinking._StrictCompletions(completion)
+
+    class _StrictClient:
+        def __init__(self, completion, model='test-model'):
+            self.chat = TestLLMEnableThinking._StrictChat(completion)
+            self.models = MagicMock()
+            self.models.list.return_value = MagicMock(
+                data=[MagicMock(id=model)]
+            )
+            self.base_url = 'http://worker-10:8002/v1'
+
+    @staticmethod
+    def _make_mock_client():
+        mock_client = MagicMock()
+        mock_model = MagicMock(id='test-model')
+        mock_client.models.list.return_value = MagicMock(data=[mock_model])
+        return mock_client
+
+    @staticmethod
+    def _make_text_completion():
+        mock_choice = MagicMock()
+        mock_choice.message.content = 'hello'
+        return MagicMock(choices=[mock_choice])
+
+    @staticmethod
+    def _make_parse_completion():
+        mock_choice = MagicMock()
+        mock_choice.message.content = '{"text": "hello", "score": 7}'
+        mock_choice.message.parsed = OutputModel(text='hello', score=7)
+        return MagicMock(choices=[mock_choice])
+
+    @patch('llm_utils.lm.llm.get_base_client')
+    def test_constructor_level_enable_thinking_false_sets_extra_body(
+        self, mock_get_client
+    ):
+        mock_client = self._make_mock_client()
+        mock_client.chat.completions.create.return_value = self._make_text_completion()
+        mock_get_client.return_value = mock_client
+
+        llm = LLM(enable_thinking=False)
+        llm('prompt')
+
+        _, kwargs = mock_client.chat.completions.create.call_args
+        self.assertEqual(
+            kwargs['extra_body'],
+            {'chat_template_kwargs': {'enable_thinking': False}},
+        )
+        self.assertNotIn('enable_thinking', kwargs)
+
+    @patch('llm_utils.lm.llm.get_base_client')
+    def test_notebook_style_client_url_call_uses_extra_body_without_leaking_flag(
+        self, mock_get_client
+    ):
+        client_url = 'http://worker-10:8002/v1'
+        model = '/tmp/scratch/models/checkpoint-48'
+        strict_client = self._StrictClient(
+            self._make_text_completion(),
+            model=model,
+        )
+        mock_get_client.return_value = strict_client
+        llm_kwargs = {
+            'client': client_url,
+            'cache': False,
+            'is_reasoning_model': True,
+            'enable_thinking': False,
+            'model': model,
+        }
+
+        llm = LLM(**llm_kwargs)
+        self.assertEqual(llm.model, model)
+
+        llm('hi')
+
+        mock_get_client.assert_called_once_with(
+            client_url,
+            cache=False,
+            api_key='abc',
+            vllm_cmd=None,
+            vllm_process=None,
+        )
+        self.assertEqual(len(strict_client.chat.completions.calls), 1)
+        kwargs = strict_client.chat.completions.calls[0]
+        self.assertEqual(kwargs['model'], model)
+        self.assertEqual(
+            kwargs['extra_body'],
+            {'chat_template_kwargs': {'enable_thinking': False}},
+        )
+        self.assertNotIn('enable_thinking', kwargs)
+
+    @patch('llm_utils.lm.llm.get_base_client')
+    def test_runtime_enable_thinking_overrides_instance_default(
+        self, mock_get_client
+    ):
+        mock_client = self._make_mock_client()
+        mock_client.chat.completions.create.return_value = self._make_text_completion()
+        mock_get_client.return_value = mock_client
+
+        llm = LLM(enable_thinking=True)
+        llm.text_completion('prompt', enable_thinking=False)
+
+        _, kwargs = mock_client.chat.completions.create.call_args
+        self.assertEqual(
+            kwargs['extra_body'],
+            {'chat_template_kwargs': {'enable_thinking': False}},
+        )
+        self.assertNotIn('enable_thinking', kwargs)
+
+    @patch('llm_utils.lm.llm.get_base_client')
+    def test_stale_enable_thinking_in_model_kwargs_is_filtered(
+        self, mock_get_client
+    ):
+        mock_client = self._make_mock_client()
+        mock_client.chat.completions.create.return_value = self._make_text_completion()
+        mock_get_client.return_value = mock_client
+
+        llm = LLM()
+        llm.model_kwargs['enable_thinking'] = False
+
+        llm.text_completion('prompt')
+
+        _, kwargs = mock_client.chat.completions.create.call_args
+        self.assertNotIn('enable_thinking', kwargs)
+        self.assertNotIn('extra_body', kwargs)
+
+    @patch('llm_utils.lm.llm.get_base_client')
+    def test_existing_extra_body_keys_are_preserved(self, mock_get_client):
+        mock_client = self._make_mock_client()
+        mock_client.chat.completions.create.return_value = self._make_text_completion()
+        mock_get_client.return_value = mock_client
+
+        llm = LLM()
+        llm.text_completion(
+            'prompt',
+            enable_thinking=False,
+            extra_body={'top_k': 20},
+        )
+
+        _, kwargs = mock_client.chat.completions.create.call_args
+        self.assertEqual(
+            kwargs['extra_body'],
+            {
+                'top_k': 20,
+                'chat_template_kwargs': {'enable_thinking': False},
+            },
+        )
+
+    @patch('llm_utils.lm.llm.get_base_client')
+    def test_existing_chat_template_kwargs_are_preserved(self, mock_get_client):
+        mock_client = self._make_mock_client()
+        mock_client.chat.completions.create.return_value = self._make_text_completion()
+        mock_get_client.return_value = mock_client
+
+        llm = LLM()
+        llm.text_completion(
+            'prompt',
+            enable_thinking=False,
+            extra_body={
+                'chat_template_kwargs': {'foo': 'bar'},
+                'top_p': 0.9,
+            },
+        )
+
+        _, kwargs = mock_client.chat.completions.create.call_args
+        self.assertEqual(
+            kwargs['extra_body'],
+            {
+                'chat_template_kwargs': {
+                    'foo': 'bar',
+                    'enable_thinking': False,
+                },
+                'top_p': 0.9,
+            },
+        )
+
+    @patch('llm_utils.lm.llm.get_base_client')
+    def test_runtime_extra_body_enable_thinking_wins(self, mock_get_client):
+        mock_client = self._make_mock_client()
+        mock_client.chat.completions.create.return_value = self._make_text_completion()
+        mock_get_client.return_value = mock_client
+
+        llm = LLM(enable_thinking=False)
+        llm.text_completion(
+            'prompt',
+            enable_thinking=True,
+            extra_body={'chat_template_kwargs': {'enable_thinking': False}},
+        )
+
+        _, kwargs = mock_client.chat.completions.create.call_args
+        self.assertEqual(
+            kwargs['extra_body'],
+            {'chat_template_kwargs': {'enable_thinking': False}},
+        )
+
+    @patch('llm_utils.lm.llm.get_base_client')
+    def test_stream_text_completion_uses_same_merge_logic(self, mock_get_client):
+        mock_client = self._make_mock_client()
+        mock_client.chat.completions.create.return_value = iter([])
+        mock_get_client.return_value = mock_client
+
+        llm = LLM(enable_thinking=False)
+        llm.stream_text_completion(
+            'prompt',
+            extra_body={'top_k': 10},
+        )
+
+        _, kwargs = mock_client.chat.completions.create.call_args
+        self.assertTrue(kwargs['stream'])
+        self.assertEqual(
+            kwargs['extra_body'],
+            {
+                'top_k': 10,
+                'chat_template_kwargs': {'enable_thinking': False},
+            },
+        )
+
+    @patch('llm_utils.lm.llm.get_base_client')
+    def test_pydantic_parse_uses_same_merge_logic(self, mock_get_client):
+        mock_client = self._make_mock_client()
+        mock_client.chat.completions.parse.return_value = self._make_parse_completion()
+        mock_get_client.return_value = mock_client
+
+        llm = LLM(enable_thinking=False, output_model=OutputModel)
+        llm.pydantic_parse(
+            'prompt',
+            extra_body={'top_k': 5},
+        )
+
+        _, kwargs = mock_client.chat.completions.parse.call_args
+        self.assertEqual(
+            kwargs['extra_body'],
+            {
+                'top_k': 5,
+                'chat_template_kwargs': {'enable_thinking': False},
+            },
+        )
+
+
 if __name__ == '__main__':
     unittest.main()

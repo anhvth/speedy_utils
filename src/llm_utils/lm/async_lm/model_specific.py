@@ -4,7 +4,6 @@ This module provides specialized AsyncLM subclasses that implement
 model-specific thinking/reasoning control mechanisms:
 
 - AsyncLM_Qwen3: Qwen3 models use /think and /no_think system prompt directives
-- AsyncLM_GLM5: GLM-5 uses extra_body.chat_template_kwargs.enable_thinking
 - AsyncLM_DeepSeekR1: DeepSeek-R1 requires server-side reasoning parser config
 
 Each class encapsulates the appropriate thinking control mechanism for its
@@ -115,99 +114,6 @@ class AsyncLM_Qwen3(AsyncLM):
                 system_content += '\n\n/no_think'
         
         return system_content
-
-
-class AsyncLM_GLM5(AsyncLM):
-    """GLM-5 model with thinking control via extra_body parameters.
-    
-    GLM-5 controls thinking mode via the chat_template_kwargs.enable_thinking
-    parameter in extra_body. When enabled, the model returns reasoning content
-    in the response.choices[0].message.reasoning field.
-    
-    Reference: https://docs.vllm.ai/projects/recipes/en/latest/GLM/GLM5.html
-    
-    Args:
-        enable_thinking: If True, adds extra_body to enable thinking mode.
-                        If False (default), thinking is disabled.
-        model: Model name/identifier
-        temperature: Sampling temperature (default: 1.0)
-        max_tokens: Maximum tokens to generate (default: 4096)
-        **kwargs: Additional arguments passed to AsyncLM
-        
-    Example:
-        >>> lm = AsyncLM_GLM5(enable_thinking=True, port=8000)
-        >>> result = await lm.call_with_messages(messages)
-        >>> # Reasoning appears in result.choices[0].message.reasoning
-    """
-    
-    def __init__(
-        self,
-        *,
-        enable_thinking: bool = False,
-        model: str | None = None,
-        temperature: float = 1.0,
-        max_tokens: int = 4096,
-        **kwargs,
-    ):
-        super().__init__(
-            model=model,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            **kwargs,
-        )
-        
-        self.enable_thinking = enable_thinking
-    
-    def _get_extra_body_params(self) -> dict[str, Any] | None:
-        """Get extra_body parameters for GLM-5 thinking control."""
-        if not self.enable_thinking:
-            # Explicitly disable thinking
-            return {
-                'chat_template_kwargs': {
-                    'enable_thinking': False
-                }
-            }
-        # Thinking is enabled by default in GLM-5, but we can be explicit
-        return None  # Or could return {'chat_template_kwargs': {'enable_thinking': True}}
-    
-    async def _call_and_parse(
-        self,
-        messages: list[dict[str, str]],
-        response_model: type[BaseModel] | None,
-        json_schema: dict[str, Any] | None,
-    ) -> tuple[Any, list[dict[str, str]], BaseModel | str]:
-        """Override to inject extra_body for GLM-5 thinking control."""
-        # Build kwargs for completion call
-        call_kwargs: dict[str, Any] = {
-            'model': self.model_name,
-            'messages': messages,
-            **self.model_kwargs,
-        }
-        
-        # Add GLM-5 thinking control via extra_body
-        extra_body = self._get_extra_body_params()
-        if extra_body is not None:
-            call_kwargs['extra_body'] = extra_body
-        
-        # Add response format if needed
-        if response_model and not self.add_json_schema_to_instruction:
-            call_kwargs['response_format'] = response_model
-        
-        # Make the API call
-        completion = await self.client.chat.completions.create(**call_kwargs)
-        
-        # Parse the response
-        if response_model:
-            parsed = self._parse_complete_output(completion, response_model)
-        else:
-            if hasattr(completion, 'model_dump'):
-                completion_dict = completion.model_dump()
-            else:
-                completion_dict = completion
-            content = completion_dict['choices'][0]['message']['content']
-            parsed = content or ''
-        
-        return completion, messages, parsed
 
 
 class AsyncLM_DeepSeekR1(AsyncLM):

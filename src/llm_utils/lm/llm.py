@@ -5,6 +5,7 @@ Simplified LLM Task module for handling language model interactions with structu
 """
 
 import subprocess
+from copy import deepcopy
 
 # Typing imports
 from collections.abc import AsyncIterator, Iterator
@@ -45,7 +46,6 @@ if TYPE_CHECKING:
 # Type aliases for better readability
 Messages = list[dict]  # Simplified type, actual type validated at runtime
 
-
 class LLM(
     TemperatureRangeMixin,
     TwoStepPydanticMixin,
@@ -70,6 +70,7 @@ class LLM(
         vllm_reuse: bool = True,
         verbose=False,
         timeout: float | Timeout | None = None,
+        enable_thinking: bool | None = None,
         **model_kwargs,
     ):
         """Initialize LLMTask."""
@@ -88,6 +89,7 @@ class LLM(
         self.vllm_reuse = vllm_reuse
         self.vllm_process: subprocess.Popen | None = None
         self.timeout = timeout
+        self.enable_thinking = enable_thinking
         self.last_ai_response = None  # Store raw response from client
         self.cache = cache
         # Avoid importing OpenAI client class at module import time.
@@ -175,9 +177,45 @@ class LLM(
         messages.append({"role": "user", "content": user_content})
         return cast(Messages, messages)
 
+    def _build_api_kwargs(
+        self,
+        effective_kwargs: dict[str, Any],
+        *,
+        enable_thinking: bool | None = None,
+        drop_keys: tuple[str, ...] = (),
+    ) -> tuple[str, dict[str, Any]]:
+        """Normalize API kwargs shared by sync completion paths."""
+        model_name = effective_kwargs.get("model", self.model_kwargs["model"])
+        filtered_drop_keys = {"model", "enable_thinking", *drop_keys}
+        api_kwargs = {
+            k: v for k, v in effective_kwargs.items() if k not in filtered_drop_keys
+        }
+
+        effective_enable_thinking = (
+            self.enable_thinking if enable_thinking is None else enable_thinking
+        )
+        if effective_enable_thinking is not None:
+            extra_body = deepcopy(api_kwargs.get("extra_body") or {})
+            chat_template_kwargs = deepcopy(
+                extra_body.get("chat_template_kwargs") or {}
+            )
+            chat_template_kwargs.setdefault(
+                "enable_thinking", effective_enable_thinking
+            )
+            extra_body["chat_template_kwargs"] = chat_template_kwargs
+            api_kwargs["extra_body"] = extra_body
+
+        if "timeout" not in api_kwargs and self.timeout is not None:
+            api_kwargs["timeout"] = self.timeout
+
+        return model_name, api_kwargs
+
     @clean_traceback
     def text_completion(
-        self, input_data: str | BaseModel | list[dict], **runtime_kwargs
+        self,
+        input_data: str | BaseModel | list[dict],
+        enable_thinking: bool | None = None,
+        **runtime_kwargs,
     ) -> list[dict[str, Any]]:
         """Execute LLM task and return text responses."""
         # Prepare messages
@@ -185,13 +223,10 @@ class LLM(
 
         # Merge runtime kwargs with default model kwargs (runtime takes precedence)
         effective_kwargs = {**self.model_kwargs, **runtime_kwargs}
-        model_name = effective_kwargs.get("model", self.model_kwargs["model"])
-
-        # Extract model name from kwargs for API call
-        api_kwargs = {k: v for k, v in effective_kwargs.items() if k != "model"}
-
-        if "timeout" not in api_kwargs and self.timeout is not None:
-            api_kwargs["timeout"] = self.timeout
+        model_name, api_kwargs = self._build_api_kwargs(
+            effective_kwargs,
+            enable_thinking=enable_thinking,
+        )
 
         try:
             completion = self.client.chat.completions.create(
@@ -254,7 +289,10 @@ class LLM(
         return results
 
     def stream_text_completion(
-        self, input_data: str | BaseModel | list[dict], **runtime_kwargs
+        self,
+        input_data: str | BaseModel | list[dict],
+        enable_thinking: bool | None = None,
+        **runtime_kwargs,
     ):
         """
         Stream text completion directly from the API.
@@ -272,15 +310,11 @@ class LLM(
         """
         messages = self._prepare_input(input_data)
         effective_kwargs = {**self.model_kwargs, **runtime_kwargs}
-        model_name = effective_kwargs.get("model", self.model_kwargs["model"])
-
-        # Remove stream from effective_kwargs if present to avoid conflicts
-        api_kwargs = {
-            k: v for k, v in effective_kwargs.items() if k not in ("model", "stream")
-        }
-
-        if "timeout" not in api_kwargs and self.timeout is not None:
-            api_kwargs["timeout"] = self.timeout
+        model_name, api_kwargs = self._build_api_kwargs(
+            effective_kwargs,
+            enable_thinking=enable_thinking,
+            drop_keys=("stream",),
+        )
 
         # Disable caching for streaming - streaming responses cannot be cached
         if hasattr(self.client, "set_cache"):
@@ -393,6 +427,7 @@ class LLM(
         self,
         input_data: str | BaseModel | list[dict],
         response_model: type[BaseModel] | None | type[str] = None,
+        enable_thinking: bool | None = None,
         **runtime_kwargs,
     ) -> list[dict[str, Any]]:
         """Execute LLM task and return parsed Pydantic model responses."""
@@ -401,13 +436,10 @@ class LLM(
 
         # Merge runtime kwargs with default model kwargs (runtime takes precedence)
         effective_kwargs = {**self.model_kwargs, **runtime_kwargs}
-        model_name = effective_kwargs.get("model", self.model_kwargs["model"])
-
-        # Extract model name from kwargs for API call
-        api_kwargs = {k: v for k, v in effective_kwargs.items() if k != "model"}
-
-        if "timeout" not in api_kwargs and self.timeout is not None:
-            api_kwargs["timeout"] = self.timeout
+        model_name, api_kwargs = self._build_api_kwargs(
+            effective_kwargs,
+            enable_thinking=enable_thinking,
+        )
 
         pydantic_model_to_use_opt = response_model or self.output_model
         if pydantic_model_to_use_opt is None:
@@ -477,6 +509,7 @@ class LLM(
         n: int = 1,
         cache=None,
         stream: bool = False,
+        enable_thinking: bool | None = None,
         **openai_client_kwargs,
     ) -> list[dict[str, Any]] | Any:
         """
@@ -519,7 +552,11 @@ class LLM(
             # Explicitly disable caching on the client to prevent pickle errors
             if hasattr(self.client, "set_cache"):
                 self.client.set_cache(False)
-            return self.stream_text_completion(input_data, **openai_client_kwargs)
+            return self.stream_text_completion(
+                input_data,
+                enable_thinking=enable_thinking,
+                **openai_client_kwargs,
+            )
 
         # Handle temperature range sampling
         if temperature_ranges is not None:
@@ -532,6 +569,7 @@ class LLM(
                 temperature_ranges=temperature_ranges,
                 n=n,
                 response_model=response_model,
+                enable_thinking=enable_thinking,
                 **openai_client_kwargs,
             )
         openai_client_kwargs["n"] = n
@@ -542,6 +580,7 @@ class LLM(
             choices = self.two_step_pydantic_parse(
                 input_data,
                 response_model=pydantic_model,
+                enable_thinking=enable_thinking,
                 **openai_client_kwargs,
             )
         else:
@@ -549,6 +588,7 @@ class LLM(
                 input_data,
                 response_model=response_model,
                 two_step_parse_pydantic=False,
+                enable_thinking=enable_thinking,
                 **openai_client_kwargs,
             )
 

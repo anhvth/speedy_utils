@@ -18,7 +18,6 @@ __all__ = [
     # core LLM APIs (lazy)
     "AsyncLM",
     "AsyncLM_Qwen3",
-    "AsyncLM_GLM5",
     "AsyncLM_DeepSeekR1",
     "AsyncLLMTask",
     "LLM",
@@ -46,7 +45,6 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "AsyncLLMTask": ("llm_utils.lm", "AsyncLLMTask"),
     "AsyncLM": ("llm_utils.lm", "AsyncLM"),
     "AsyncLM_Qwen3": ("llm_utils.lm", "AsyncLM_Qwen3"),
-    "AsyncLM_GLM5": ("llm_utils.lm", "AsyncLM_GLM5"),
     "AsyncLM_DeepSeekR1": ("llm_utils.lm", "AsyncLM_DeepSeekR1"),
     "Input": ("llm_utils.lm", "Input"),
     "InputField": ("llm_utils.lm", "InputField"),
