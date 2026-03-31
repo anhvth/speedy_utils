@@ -5,6 +5,7 @@ Simplified LLM Task module for handling language model interactions with structu
 """
 
 import subprocess
+import warnings
 from copy import deepcopy
 
 # Typing imports
@@ -62,7 +63,6 @@ class LLM(
         output_model: type[BaseModel] | type[str] = None,
         client: "OpenAI | int | str | None" = None,  # type: ignore[name-defined]
         cache=True,
-        is_reasoning_model: bool = False,
         force_lora_unload: bool = False,
         lora_path: str | None = None,
         vllm_cmd: str | None = None,
@@ -77,11 +77,18 @@ class LLM(
         if verbose:
             available_models = LLM.list_models(client=client)
             logger.info(f"Available models: {available_models}")
+        if "is_reasoning_model" in model_kwargs:
+            model_kwargs.pop("is_reasoning_model")
+            warnings.warn(
+                "`is_reasoning_model` is deprecated and no longer needed. "
+                "Reasoning content is now auto-detected from responses.",
+                FutureWarning,
+                stacklevel=2,
+            )
         self.instruction = instruction
         self.input_model = input_model
         self.output_model = output_model
         self.model_kwargs = model_kwargs
-        self.is_reasoning_model = is_reasoning_model
         self.force_lora_unload = force_lora_unload
         self.lora_path = lora_path
         self.vllm_cmd = vllm_cmd
@@ -210,6 +217,15 @@ class LLM(
 
         return model_name, api_kwargs
 
+    @staticmethod
+    def _extract_reasoning_content(message: Any) -> str | None:
+        """Extract reasoning content from a response message when present."""
+        for attr_name in ("reasoning_content", "reasoning"):
+            reasoning = getattr(message, attr_name, None)
+            if isinstance(reasoning, str):
+                return reasoning
+        return None
+
     @clean_traceback
     def text_completion(
         self,
@@ -269,10 +285,7 @@ class LLM(
             assistant_message = [
                 {"role": "assistant", "content": choice.message.content}
             ]
-            try:
-                reasoning_content = choice.message.reasoning
-            except:
-                reasoning_content = None
+            reasoning_content = self._extract_reasoning_content(choice.message)
             if reasoning_content:
                 assistant_message[0]["reasoning_content"] = reasoning_content
 
@@ -284,9 +297,73 @@ class LLM(
                 "parsed": choice.message.content,
                 "messages": choice_messages,
             }
+            if reasoning_content:
+                result_dict["reasoning_content"] = reasoning_content
 
             results.append(result_dict)
         return results
+
+    @clean_traceback
+    def complete_message(
+        self,
+        input_data: str | BaseModel | list[dict],
+        enable_thinking: bool | None = None,
+        **runtime_kwargs,
+    ) -> Any:
+        """
+        Execute LLM task and return only `completion.choices[0].message`.
+
+        This method is intentionally stateless: it does not update
+        `self.last_ai_response` or conversation history attributes, making it
+        safe for concurrent use where shared mutable state is undesirable.
+        """
+        messages = self._prepare_input(input_data)
+        effective_kwargs = {**self.model_kwargs, **runtime_kwargs}
+        model_name, api_kwargs = self._build_api_kwargs(
+            effective_kwargs,
+            enable_thinking=enable_thinking,
+        )
+
+        try:
+            completion = self.client.chat.completions.create(
+                model=model_name, messages=messages, **api_kwargs
+            )
+        except Exception as exc:
+            from openai import (
+                APITimeoutError,
+                AuthenticationError,
+                BadRequestError,
+                RateLimitError,
+            )
+
+            if isinstance(exc, APITimeoutError):
+                error_msg = f"OpenAI API timeout ({api_kwargs['timeout']}) error: {exc} for model {model_name}"
+                logger.error(error_msg)
+                raise
+            if isinstance(exc, (AuthenticationError, RateLimitError, BadRequestError)):
+                error_msg = f"OpenAI API error ({type(exc).__name__}): {exc}"
+                logger.error(error_msg)
+                raise
+            if isinstance(exc, ValueError):
+                logger.error(f"ValueError during API call: {exc}")
+                raise
+            is_length_error = "Length" in str(exc) or "maximum context length" in str(
+                exc
+            )
+            if is_length_error:
+                raise ValueError(
+                    f"Input too long for model {model_name}. Error: {str(exc)[:100]}..."
+                ) from exc
+            raise
+
+        if not completion.choices:
+            raise ValueError("No choices returned from completion.")
+        return completion.choices[0].message
+
+    # Backward compatibility alias
+    def first_message_completion(self, *args, **kwargs) -> Any:
+        """Alias for complete_message() for backward compatibility."""
+        return self.complete_message(*args, **kwargs)
 
     def stream_text_completion(
         self,
@@ -350,6 +427,7 @@ class LLM(
         stream = self.stream_text_completion(input_data, **runtime_kwargs)
 
         content_parts: list[str] = []
+        reasoning_printed = False
 
         for chunk in stream:
             if not chunk.choices:
@@ -357,18 +435,17 @@ class LLM(
             delta = chunk.choices[0].delta
 
             # Only show reasoning if explicitly requested
-            if show_reasoning and self.is_reasoning_model:
-                reasoning = getattr(delta, "reasoning_content", None) or getattr(
-                    delta, "reasoning", None
-                )
+            if show_reasoning:
+                reasoning = self._extract_reasoning_content(delta)
                 if reasoning:
+                    reasoning_printed = True
                     sys.stdout.write(reasoning)
                     sys.stdout.flush()
 
             content = delta.content
             if content:
                 # Add separator if we showed reasoning
-                if show_reasoning and self.is_reasoning_model and not content_parts:
+                if show_reasoning and reasoning_printed and not content_parts:
                     sys.stdout.write("\n\n" + "=" * 40 + "\n\n")
                     sys.stdout.flush()
                 content_parts.append(content)
@@ -376,7 +453,7 @@ class LLM(
                 sys.stdout.flush()
 
         # Final newline
-        if content_parts or reasoning_parts:
+        if content_parts or reasoning_printed:
             sys.stdout.write("\n")
             sys.stdout.flush()
 
@@ -493,9 +570,10 @@ class LLM(
 
             result_dict = {"parsed": parsed_content, "messages": choice_messages}
 
-            # Add reasoning content if this is a reasoning model
-            if self.is_reasoning_model and hasattr(choice.message, "reasoning_content"):
-                result_dict["reasoning_content"] = choice.message.reasoning_content
+            reasoning_content = self._extract_reasoning_content(choice.message)
+            if reasoning_content:
+                choice_messages[-1]["reasoning_content"] = reasoning_content
+                result_dict["reasoning_content"] = reasoning_content
 
             results.append(result_dict)
         return results
@@ -651,7 +729,6 @@ class LLM(
         cls: BasePromptBuilder,
         client: "OpenAI | int | str | None" = None,  # type: ignore[name-defined]
         cache=True,
-        is_reasoning_model: bool = False,
         lora_path: str | None = None,
         vllm_cmd: str | None = None,
         vllm_timeout: int = 0.1,
@@ -669,7 +746,6 @@ class LLM(
             builder: BasePromptBuilder instance
             client: OpenAI client, port number, or base_url string
             cache: Whether to use cached responses (default True)
-            is_reasoning_model: Whether model is reasoning model (default False)
             lora_path: Optional path to LoRA adapter directory
             vllm_cmd: Optional VLLM command to start server automatically
             vllm_timeout: Timeout in seconds to wait for VLLM server (default 120)
@@ -688,7 +764,6 @@ class LLM(
             output_model=output_model,
             client=client,
             cache=cache,
-            is_reasoning_model=is_reasoning_model,
             lora_path=lora_path,
             vllm_cmd=vllm_cmd,
             vllm_timeout=vllm_timeout,

@@ -1,6 +1,9 @@
 """Unit tests for LLM mixins."""
 
+import io
 import unittest
+from contextlib import redirect_stdout
+from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
@@ -277,10 +280,25 @@ class TestLLMEnableThinking(unittest.TestCase):
         return MagicMock(choices=[mock_choice])
 
     @staticmethod
+    def _make_text_completion_with_reasoning(reasoning_attr='reasoning'):
+        mock_choice = MagicMock()
+        mock_choice.message.content = 'hello'
+        setattr(mock_choice.message, reasoning_attr, 'thinking')
+        return MagicMock(choices=[mock_choice])
+
+    @staticmethod
     def _make_parse_completion():
         mock_choice = MagicMock()
         mock_choice.message.content = '{"text": "hello", "score": 7}'
         mock_choice.message.parsed = OutputModel(text='hello', score=7)
+        return MagicMock(choices=[mock_choice])
+
+    @staticmethod
+    def _make_parse_completion_with_reasoning(reasoning_attr='reasoning_content'):
+        mock_choice = MagicMock()
+        mock_choice.message.content = '{"text": "hello", "score": 7}'
+        mock_choice.message.parsed = OutputModel(text='hello', score=7)
+        setattr(mock_choice.message, reasoning_attr, 'thinking')
         return MagicMock(choices=[mock_choice])
 
     @patch('llm_utils.lm.llm.get_base_client')
@@ -320,7 +338,11 @@ class TestLLMEnableThinking(unittest.TestCase):
             'model': model,
         }
 
-        llm = LLM(**llm_kwargs)
+        with pytest.warns(
+            FutureWarning,
+            match='is_reasoning_model',
+        ):
+            llm = LLM(**llm_kwargs)
         self.assertEqual(llm.model, model)
 
         llm('hi')
@@ -340,6 +362,111 @@ class TestLLMEnableThinking(unittest.TestCase):
             {'chat_template_kwargs': {'enable_thinking': False}},
         )
         self.assertNotIn('enable_thinking', kwargs)
+
+    @patch('llm_utils.lm.llm.get_base_client')
+    def test_text_completion_auto_attaches_reasoning_content(self, mock_get_client):
+        mock_client = self._make_mock_client()
+        mock_client.chat.completions.create.return_value = (
+            self._make_text_completion_with_reasoning()
+        )
+        mock_get_client.return_value = mock_client
+
+        llm = LLM()
+        result = llm.text_completion('prompt')
+
+        self.assertEqual(result[0]['reasoning_content'], 'thinking')
+        self.assertEqual(
+            result[0]['messages'][-1]['reasoning_content'],
+            'thinking',
+        )
+
+    @patch('llm_utils.lm.llm.get_base_client')
+    def test_pydantic_parse_auto_attaches_reasoning_content(self, mock_get_client):
+        mock_client = self._make_mock_client()
+        mock_client.chat.completions.parse.return_value = (
+            self._make_parse_completion_with_reasoning()
+        )
+        mock_get_client.return_value = mock_client
+
+        llm = LLM(output_model=OutputModel)
+        result = llm.pydantic_parse('prompt')
+
+        self.assertEqual(result[0]['reasoning_content'], 'thinking')
+        self.assertEqual(
+            result[0]['messages'][-1]['reasoning_content'],
+            'thinking',
+        )
+
+    @patch('llm_utils.lm.llm.get_base_client')
+    def test_pydantic_parse_supports_reasoning_field_alias(self, mock_get_client):
+        mock_client = self._make_mock_client()
+        mock_client.chat.completions.parse.return_value = (
+            self._make_parse_completion_with_reasoning(reasoning_attr='reasoning')
+        )
+        mock_get_client.return_value = mock_client
+
+        llm = LLM(output_model=OutputModel)
+        result = llm.pydantic_parse('prompt')
+
+        self.assertEqual(result[0]['reasoning_content'], 'thinking')
+
+    @patch('llm_utils.lm.llm.get_base_client')
+    def test_stream_print_shows_reasoning_only_when_present(self, mock_get_client):
+        mock_client = self._make_mock_client()
+        mock_get_client.return_value = mock_client
+        llm = LLM()
+
+        stream = iter(
+            [
+                SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            delta=SimpleNamespace(reasoning_content='thinking ', content=None)
+                        )
+                    ]
+                ),
+                SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            delta=SimpleNamespace(content='answer', reasoning_content=None)
+                        )
+                    ]
+                ),
+            ]
+        )
+
+        with patch.object(llm, 'stream_text_completion', return_value=stream):
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                result = llm.stream_print('prompt', show_reasoning=True)
+
+        self.assertEqual(result, 'answer')
+        self.assertEqual(
+            stdout.getvalue(),
+            'thinking \n\n========================================\n\nanswer\n',
+        )
+
+    @patch('llm_utils.lm.llm.get_base_client')
+    def test_stream_print_without_reasoning_skips_separator(self, mock_get_client):
+        mock_client = self._make_mock_client()
+        mock_get_client.return_value = mock_client
+        llm = LLM()
+
+        stream = iter(
+            [
+                SimpleNamespace(
+                    choices=[SimpleNamespace(delta=SimpleNamespace(content='answer'))]
+                )
+            ]
+        )
+
+        with patch.object(llm, 'stream_text_completion', return_value=stream):
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                result = llm.stream_print('prompt', show_reasoning=True)
+
+        self.assertEqual(result, 'answer')
+        self.assertEqual(stdout.getvalue(), 'answer\n')
 
     @patch('llm_utils.lm.llm.get_base_client')
     def test_runtime_enable_thinking_overrides_instance_default(
@@ -487,6 +614,58 @@ class TestLLMEnableThinking(unittest.TestCase):
                 'chat_template_kwargs': {'enable_thinking': False},
             },
         )
+
+    @patch('llm_utils.lm.llm.get_base_client')
+    def test_complete_message_returns_first_choice_message(self, mock_get_client):
+        mock_client = self._make_mock_client()
+        first_msg = SimpleNamespace(content='first')
+        second_msg = SimpleNamespace(content='second')
+        mock_client.chat.completions.create.return_value = SimpleNamespace(
+            choices=[
+                SimpleNamespace(message=first_msg),
+                SimpleNamespace(message=second_msg),
+            ]
+        )
+        mock_get_client.return_value = mock_client
+
+        llm = LLM()
+        result = llm.complete_message('prompt')
+
+        self.assertIs(result, first_msg)
+
+    @patch('llm_utils.lm.llm.get_base_client')
+    def test_complete_message_is_stateless_for_last_ai_response(
+        self, mock_get_client
+    ):
+        mock_client = self._make_mock_client()
+        first_msg = SimpleNamespace(content='first')
+        mock_client.chat.completions.create.return_value = SimpleNamespace(
+            choices=[SimpleNamespace(message=first_msg)]
+        )
+        mock_get_client.return_value = mock_client
+
+        llm = LLM()
+        llm.last_ai_response = 'sentinel'
+
+        llm.complete_message('prompt')
+
+        self.assertEqual(llm.last_ai_response, 'sentinel')
+
+    @patch('llm_utils.lm.llm.get_base_client')
+    def test_first_message_completion_alias_calls_complete_message(
+        self, mock_get_client
+    ):
+        mock_client = self._make_mock_client()
+        first_msg = SimpleNamespace(content='first')
+        mock_client.chat.completions.create.return_value = SimpleNamespace(
+            choices=[SimpleNamespace(message=first_msg)]
+        )
+        mock_get_client.return_value = mock_client
+
+        llm = LLM()
+        result = llm.first_message_completion('prompt')
+
+        self.assertIs(result, first_msg)
 
 
 if __name__ == '__main__':

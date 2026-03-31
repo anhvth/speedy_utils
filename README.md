@@ -561,17 +561,14 @@ Handle reasoning models that provide thinking traces:
 from llm_utils import LLM
 
 # For models like DeepSeek-R1 that output reasoning
-llm = LLM(
-    model="deepseek-reasoner",
-    is_reasoning_model=True
-)
+llm = LLM(model="deepseek-reasoner")
 
 results = llm("Solve this math problem: 15 * 23")
 
 # Access the final answer
 answer = results[0]["parsed"]
 
-# Access reasoning content (if available)
+# Access reasoning content when the response includes it
 reasoning = results[0].get("reasoning_content")
 ```
 
