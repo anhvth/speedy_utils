@@ -405,24 +405,35 @@ class LLM(
     def stream_print(
         self,
         input_data: str | BaseModel | list[dict],
-        show_reasoning: bool = False,
+        show_reasoning: bool | None = None,
         **runtime_kwargs,
     ) -> str:
         """
         Stream and print completion with clean output formatting.
 
-        For reasoning models, only shows the final answer by default (not the thinking process).
-        For regular models, just streams the content.
+        When thinking is enabled, reasoning tokens are streamed by default.
+        Callers can still override that behavior by passing show_reasoning explicitly.
 
         Args:
             input_data: Input data (string, BaseModel, or message list)
-            show_reasoning: If True and is_reasoning_model, also show thinking process
+            show_reasoning: Whether to print reasoning tokens while streaming.
+                When omitted, this follows the effective enable_thinking value.
             **runtime_kwargs: Additional runtime parameters (e.g., max_tokens=500)
 
         Returns:
             The complete response text (final answer only)
         """
         import sys
+
+        effective_enable_thinking = runtime_kwargs.get(
+            "enable_thinking",
+            self.enable_thinking,
+        )
+        should_show_reasoning = (
+            bool(effective_enable_thinking)
+            if show_reasoning is None
+            else show_reasoning
+        )
 
         stream = self.stream_text_completion(input_data, **runtime_kwargs)
 
@@ -435,7 +446,7 @@ class LLM(
             delta = chunk.choices[0].delta
 
             # Only show reasoning if explicitly requested
-            if show_reasoning:
+            if should_show_reasoning:
                 reasoning = self._extract_reasoning_content(delta)
                 if reasoning:
                     reasoning_printed = True
@@ -445,7 +456,7 @@ class LLM(
             content = delta.content
             if content:
                 # Add separator if we showed reasoning
-                if show_reasoning and reasoning_printed and not content_parts:
+                if should_show_reasoning and reasoning_printed and not content_parts:
                     sys.stdout.write("\n\n" + "=" * 40 + "\n\n")
                     sys.stdout.flush()
                 content_parts.append(content)

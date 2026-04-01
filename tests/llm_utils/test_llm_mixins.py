@@ -469,6 +469,75 @@ class TestLLMEnableThinking(unittest.TestCase):
         self.assertEqual(stdout.getvalue(), 'answer\n')
 
     @patch('llm_utils.lm.llm.get_base_client')
+    def test_stream_print_auto_shows_reasoning_when_enable_thinking_true(self, mock_get_client):
+        mock_client = self._make_mock_client()
+        mock_get_client.return_value = mock_client
+        llm = LLM(enable_thinking=True)
+
+        stream = iter(
+            [
+                SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            delta=SimpleNamespace(reasoning_content='thinking ', content=None)
+                        )
+                    ]
+                ),
+                SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            delta=SimpleNamespace(content='answer', reasoning_content=None)
+                        )
+                    ]
+                ),
+            ]
+        )
+
+        with patch.object(llm, 'stream_text_completion', return_value=stream):
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                result = llm.stream_print('prompt')
+
+        self.assertEqual(result, 'answer')
+        self.assertEqual(
+            stdout.getvalue(),
+            'thinking \n\n========================================\n\nanswer\n',
+        )
+
+    @patch('llm_utils.lm.llm.get_base_client')
+    def test_stream_print_explicit_false_hides_reasoning_even_when_thinking_enabled(self, mock_get_client):
+        mock_client = self._make_mock_client()
+        mock_get_client.return_value = mock_client
+        llm = LLM(enable_thinking=True)
+
+        stream = iter(
+            [
+                SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            delta=SimpleNamespace(reasoning_content='thinking ', content=None)
+                        )
+                    ]
+                ),
+                SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            delta=SimpleNamespace(content='answer', reasoning_content=None)
+                        )
+                    ]
+                ),
+            ]
+        )
+
+        with patch.object(llm, 'stream_text_completion', return_value=stream):
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                result = llm.stream_print('prompt', show_reasoning=False)
+
+        self.assertEqual(result, 'answer')
+        self.assertEqual(stdout.getvalue(), 'answer\n')
+
+    @patch('llm_utils.lm.llm.get_base_client')
     def test_runtime_enable_thinking_overrides_instance_default(
         self, mock_get_client
     ):
