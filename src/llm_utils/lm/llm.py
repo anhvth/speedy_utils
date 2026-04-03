@@ -27,7 +27,8 @@ if TYPE_CHECKING:
         OpenAI,
         RateLimitError,
     )
-    from openai.types.chat import ChatCompletionMessageParam
+    from openai.types.chat import ChatCompletionMessage, ChatCompletionMessageParam
+    from openai.types.completion import CompletionChoice
 
 # Type aliases for better readability
 Messages = list[dict]  # Simplified type, actual type validated at runtime
@@ -183,6 +184,57 @@ class LLM:
             message = choice.get("message")
         return message
 
+    @staticmethod
+    def _coerce_completion_choice(choice: Any) -> "CompletionChoice":
+        """Normalize a choice-like object into an OpenAI CompletionChoice."""
+        from openai.types.completion import CompletionChoice
+
+        if isinstance(choice, CompletionChoice):
+            return choice
+
+        if hasattr(choice, "model_dump"):
+            choice_data = dict(choice.model_dump())
+        elif isinstance(choice, dict):
+            choice_data = dict(choice)
+        elif hasattr(choice, "__dict__"):
+            choice_data = dict(vars(choice))
+        else:
+            choice_data = {}
+
+        choice_data.setdefault("finish_reason", getattr(choice, "finish_reason", None))
+        choice_data.setdefault("index", getattr(choice, "index", 0))
+        choice_data.setdefault("logprobs", getattr(choice, "logprobs", None))
+        choice_data.setdefault("text", getattr(choice, "text", None))
+
+        for extra_name in (
+            "stop_reason",
+            "token_ids",
+            "prompt_logprobs",
+            "prompt_token_ids",
+        ):
+            if extra_name not in choice_data and hasattr(choice, extra_name):
+                choice_data[extra_name] = getattr(choice, extra_name)
+
+        return CompletionChoice(**choice_data)
+
+    @staticmethod
+    def _get_completion_choice(completion: Any) -> "CompletionChoice":
+        """Return the first normalized choice from a completion-like object."""
+        choices = getattr(completion, "choices", None)
+        if choices is None and isinstance(completion, dict):
+            choices = completion.get("choices")
+        if not choices:
+            raise ValueError("No choices returned from completion.")
+        return LLM._coerce_completion_choice(choices[0])
+
+    @staticmethod
+    def _get_completion_usage(completion: Any) -> Any | None:
+        """Return the usage payload from a completion-like object."""
+        usage = getattr(completion, "usage", None)
+        if usage is None and isinstance(completion, dict):
+            usage = completion.get("usage")
+        return usage
+
     def _set_cache(self, cache: bool | None) -> None:
         """Update client-side caching when supported."""
         if cache is None:
@@ -294,7 +346,7 @@ class LLM:
         cache: bool | None = None,
         enable_thinking: bool | None = None,
         **runtime_kwargs,
-    ) -> Any:
+    ) -> "ChatCompletionMessage":
         """Execute a chat completion and return the first assistant message."""
         self._text_completion(
             input_data,
@@ -313,15 +365,15 @@ class LLM:
             raise ValueError("No message returned from completion.")
         return message
 
-    def _generate_response(
+    def generate(
         self,
         prompt: str,
         *,
         cache: bool | None = None,
         enable_thinking: bool | None = None,
         **runtime_kwargs,
-    ) -> dict[str, Any]:
-        """Return normalized generation metadata for raw prompt usage."""
+    ) -> "CompletionChoice":
+        """Generate a raw completion choice from a prompt string."""
         if not isinstance(prompt, str):
             raise TypeError("generate expects `prompt` to be a string")
 
@@ -369,154 +421,18 @@ class LLM:
                 ) from exc
             raise
 
-        choices = getattr(completion, "choices", None)
-        if not choices:
-            raise ValueError("No choices returned from completion.")
-
-        choice = choices[0]
-        text = getattr(choice, "text", None)
-        if text is None and isinstance(choice, dict):
-            text = choice.get("text")
-        finish_reason = getattr(choice, "finish_reason", None)
-        if finish_reason is None and isinstance(choice, dict):
-            finish_reason = choice.get("finish_reason")
+        choice = self._get_completion_choice(completion)
+        usage = self._get_completion_usage(completion)
+        if usage is not None:
+            choice.usage = usage
 
         choice_messages = cast(
             Messages,
             self._prepare_input(prompt)
-            + [{"role": "assistant", "content": str(text or "")}],
+            + [{"role": "assistant", "content": str(choice.text or "")}],
         )
         self._record_history(choice_messages)
-
-        output = {
-            "text": str(text or ""),
-            "finish_reason": finish_reason,
-        }
-        if finish_reason is not None:
-            output["stop"] = finish_reason
-        return output
-
-    def generate(
-        self,
-        prompt: str,
-        *,
-        cache: bool | None = None,
-        enable_thinking: bool | None = None,
-        **runtime_kwargs,
-    ) -> str:
-        """Generate text from a raw prompt string via the completions API."""
-        result = self._generate_response(
-            prompt,
-            cache=cache,
-            enable_thinking=enable_thinking,
-            **runtime_kwargs,
-        )
-        return str(result.get("text") or "")
-
-    def _stream_chat_completion(
-        self,
-        input_data: str | BaseModel | list[dict],
-        enable_thinking: bool | None = None,
-        **runtime_kwargs,
-    ):
-        """
-        Stream text completion directly from the API.
-
-        Note: Caching is not supported when streaming to avoid compatibility
-        issues with providers that don't support the /tokenize endpoint.
-
-        Args:
-            input_data: Input data (string, BaseModel, or message list)
-            **runtime_kwargs: Additional runtime parameters
-
-        Returns:
-            Raw stream response object from the API. Caller should iterate over
-            it using `for chunk in response`.
-        """
-        messages = self._prepare_input(input_data)
-        effective_kwargs = {**self.model_kwargs, **runtime_kwargs}
-        model_name, api_kwargs = self._build_api_kwargs(
-            effective_kwargs,
-            enable_thinking=enable_thinking,
-            drop_keys=("stream",),
-        )
-
-        # Disable caching for streaming - streaming responses cannot be cached
-        if hasattr(self.client, "set_cache"):
-            self.client.set_cache(False)
-
-        # Stream directly from API (caching not supported in streaming mode)
-        return self.client.chat.completions.create(
-            model=model_name, messages=messages, stream=True, **api_kwargs
-        )
-
-    def _stream_print(
-        self,
-        input_data: str | BaseModel | list[dict],
-        show_reasoning: bool | None = None,
-        **runtime_kwargs,
-    ) -> str:
-        """
-        Stream and print completion with clean output formatting.
-
-        When thinking is enabled, reasoning tokens are streamed by default.
-        Callers can still override that behavior by passing show_reasoning explicitly.
-
-        Args:
-            input_data: Input data (string, BaseModel, or message list)
-            show_reasoning: Whether to print reasoning tokens while streaming.
-                When omitted, this follows the effective enable_thinking value.
-            **runtime_kwargs: Additional runtime parameters (e.g., max_tokens=500)
-
-        Returns:
-            The complete response text (final answer only)
-        """
-        import sys
-
-        effective_enable_thinking = runtime_kwargs.get(
-            "enable_thinking",
-            self.enable_thinking,
-        )
-        should_show_reasoning = (
-            bool(effective_enable_thinking)
-            if show_reasoning is None
-            else show_reasoning
-        )
-
-        stream = self._stream_chat_completion(input_data, **runtime_kwargs)
-
-        content_parts: list[str] = []
-        reasoning_printed = False
-
-        for chunk in stream:
-            if not chunk.choices:
-                continue
-            delta = chunk.choices[0].delta
-
-            # Only show reasoning if explicitly requested
-            if should_show_reasoning:
-                reasoning = self._extract_reasoning_content(delta)
-                if reasoning:
-                    reasoning_printed = True
-                    sys.stdout.write(reasoning)
-                    sys.stdout.flush()
-
-            content = delta.content
-            if content:
-                # Add separator if we showed reasoning
-                if should_show_reasoning and reasoning_printed and not content_parts:
-                    sys.stdout.write("\n\n" + "=" * 40 + "\n\n")
-                    sys.stdout.flush()
-                content_parts.append(content)
-                sys.stdout.write(content)
-                sys.stdout.flush()
-
-        # Final newline
-        if content_parts or reasoning_printed:
-            sys.stdout.write("\n")
-            sys.stdout.flush()
-
-        return "".join(content_parts)
+        return choice
 
     @clean_traceback
     def pydantic_parse(
@@ -594,6 +510,8 @@ class LLM:
         if isinstance(parsed_content, dict):
             # Cached response: validate dict back to Pydantic model
             parsed_content = pydantic_model_to_use.model_validate(parsed_content)
+        elif isinstance(parsed_content, str):
+            parsed_content = pydantic_model_to_use.model_validate_json(parsed_content)
         elif not isinstance(parsed_content, pydantic_model_to_use):
             # Fallback: ensure it's the correct type
             parsed_content = pydantic_model_to_use.model_validate(parsed_content)
@@ -641,10 +559,18 @@ class LLM:
             # Explicitly disable caching on the client to prevent pickle errors
             if hasattr(self.client, "set_cache"):
                 self.client.set_cache(False)
-            return self._stream_chat_completion(
-                input_data,
+            messages = self._prepare_input(input_data)
+            effective_kwargs = {**self.model_kwargs, **openai_client_kwargs}
+            model_name, api_kwargs = self._build_api_kwargs(
+                effective_kwargs,
                 enable_thinking=enable_thinking,
-                **openai_client_kwargs,
+                drop_keys=("stream",),
+            )
+            return self.client.chat.completions.create(
+                model=model_name,
+                messages=messages,
+                stream=True,
+                **api_kwargs,
             )
 
         pydantic_model = response_model
@@ -724,12 +650,6 @@ class LLM:
                 conv = conv[-k_last_messages:]
             return show_chat(conv)
         raise ValueError("No message history available. Make a call first.")
-
-    def _inspect_history(
-        self, idx: int = -1, k_last_messages: int = 2
-    ) -> list[dict[str, Any]]:
-        """Compatibility alias for older internal call sites."""
-        return self.inspect_history(idx=idx, k_last_messages=k_last_messages)
 
 
 from .llm_qwen3 import Qwen3LLM

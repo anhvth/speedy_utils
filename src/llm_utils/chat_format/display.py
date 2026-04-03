@@ -126,6 +126,30 @@ def _is_notebook() -> bool:
         return False
 
 
+def _message_value(msg: Any, key: str, default: Any = None) -> Any:
+    """Read a message field from a mapping or OpenAI-style object."""
+    if isinstance(msg, dict):
+        return msg.get(key, default)
+    return getattr(msg, key, default)
+
+
+def _split_embedded_think(content: str) -> tuple[str | None, str]:
+    """Extract reasoning and answer text from an embedded <think> block."""
+    if "<think>" not in content:
+        return None, content
+
+    start = content.find("<think>")
+    body = content[start + len("<think>") :]
+    end = body.find("</think>")
+    if end == -1:
+        reasoning = body.strip()
+        return reasoning or None, ""
+
+    reasoning = body[:end].strip()
+    answer = body[end + len("</think>") :].strip()
+    return reasoning or None, answer
+
+
 # Color configurations
 ROLE_COLORS_HTML = {
     'system': 'red',
@@ -164,14 +188,22 @@ def _build_assistant_content_parts(
         Tuple of (reasoning_formatted, answer_content)
         reasoning_formatted is None if no reasoning present
     """
-    content = msg.get('content', '')
-    reasoning = msg.get('reasoning_content')
+    content = _message_value(msg, 'content', '')
+    if content is None:
+        content = ''
+    reasoning = _message_value(msg, 'reasoning_content')
+
+    if reasoning is None and isinstance(content, str):
+        embedded_reasoning, embedded_answer = _split_embedded_think(content)
+        if embedded_reasoning is not None:
+            reasoning = embedded_reasoning
+            content = embedded_answer
 
     if reasoning:
         formatted_reasoning = _format_reasoning_content(reasoning, max_reasoning_length)
-        return formatted_reasoning, content
+        return formatted_reasoning, str(content)
 
-    return None, content
+    return None, str(content)
 
 
 def _show_chat_html(
@@ -186,7 +218,7 @@ def _show_chat_html(
     separator = "<div style='color:#888; margin:0.5em 0;'>───────────────────────────────────────────────────</div>"
 
     for i, msg in enumerate(messages):
-        role = msg.get('role', 'unknown').lower()
+        role = str(_message_value(msg, 'role', 'unknown')).lower()
         color = ROLE_COLORS_HTML.get(role, 'black')
         label = ROLE_LABELS.get(role, f'{role.capitalize()}:')
 
@@ -209,7 +241,7 @@ def _show_chat_html(
                 )
             html_parts.append('</div>')
         else:
-            content = msg.get('content', '')
+            content = _message_value(msg, 'content', '') or ''
             escaped_content = _escape_html(content)
             html_parts.append(
                 f"<div style='color:{color}'><strong>{label}</strong><br>{escaped_content}</div>"
@@ -229,7 +261,7 @@ def _show_chat_terminal(
     separator = f'{TERMINAL_GRAY}─────────────────────────────────────────────────────────{TERMINAL_RESET}'
 
     for i, msg in enumerate(messages):
-        role = msg.get('role', 'unknown').lower()
+        role = str(_message_value(msg, 'role', 'unknown')).lower()
         color = ROLE_COLORS_TERMINAL.get(role, '')
         label = ROLE_LABELS.get(role, f'{role.capitalize()}:')
 
@@ -247,7 +279,7 @@ def _show_chat_terminal(
             if answer:
                 print(f'{color}{answer.strip()}{TERMINAL_RESET}')
         else:
-            content = msg.get('content', '')
+            content = _message_value(msg, 'content', '') or ''
             print(f'{color}{content}{TERMINAL_RESET}')
 
         if i < len(messages) - 1:

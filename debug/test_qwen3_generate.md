@@ -1,6 +1,6 @@
 # Qwen3 Debug Runner
 
-This script is a small local helper for exercising `Qwen3LLM.generate_with_prefix()`.
+This script is a small local helper for exercising `Qwen3LLM.chat_completion()`.
 It is useful when you want to control how many tokens are spent on reasoning versus the final answer.
 
 ## What It Does
@@ -8,7 +8,7 @@ It is useful when you want to control how many tokens are spent on reasoning ver
 `debug/test_qwen3_generate.py` starts a Qwen3 reasoning client and calls:
 
 ```python
-llm.generate_with_prefix(
+llm.chat_completion(
     [{"role": "user", "content": "hi"}],
     thinking_max_tokens=10,
     content_max_tokens=1000,

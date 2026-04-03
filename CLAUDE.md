@@ -18,10 +18,10 @@ uv run pytest tests/test_thread.py
 uv run pytest -v
 
 # Check import time (must be < 0.4s)
-python -c "import time; start=time.perf_counter(); import speedy_utils; print(f'{time.perf_counter()-start:.3f}s')"
+uv run python -c "import time; start=time.perf_counter(); import speedy_utils; print(f'{time.perf_counter()-start:.3f}s')"
 
 # Detailed import analysis
-python scripts/debug_import_time.py speedy_utils --min-sec 0.05 --no-stdlib
+uv run python scripts/debug_import_time.py speedy_utils --min-sec 0.05 --no-stdlib
 
 # Lint with ruff
 uv run ruff check .

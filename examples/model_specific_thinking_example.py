@@ -12,7 +12,7 @@ def main():
     from llm_utils import Qwen3LLM
 
     llm = Qwen3LLM(client=8000)
-    message = llm.generate_with_prefix(
+    message = llm.chat_completion(
         [{"role": "user", "content": "hi"}],
         thinking_max_tokens=10,
         content_max_tokens=1000,

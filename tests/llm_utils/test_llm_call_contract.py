@@ -5,6 +5,8 @@ from unittest import TestCase
 from unittest.mock import MagicMock, patch
 
 from openai.types.chat import ChatCompletionMessage
+from openai.types.completion import CompletionChoice
+from openai.types.completion_usage import CompletionUsage
 from pydantic import BaseModel
 
 from llm_utils.lm.llm import LLM
@@ -30,8 +32,18 @@ class TestLLMCallContract(TestCase):
 
     @staticmethod
     def _make_text_completion(text, finish_reason="stop"):
-        choice = SimpleNamespace(text=text, finish_reason=finish_reason)
-        return SimpleNamespace(choices=[choice])
+        usage = CompletionUsage(
+            completion_tokens=7,
+            prompt_tokens=11,
+            total_tokens=18,
+        )
+        choice = CompletionChoice(
+            finish_reason=finish_reason,
+            index=0,
+            logprobs=None,
+            text=text,
+        )
+        return SimpleNamespace(choices=[choice], usage=usage)
 
     @patch("llm_utils.lm.llm.get_base_client")
     def test_chat_completion_returns_first_message(self, mock_get_client):
@@ -49,7 +61,9 @@ class TestLLMCallContract(TestCase):
         self.assertIs(llm.last_ai_response, completion)
 
     @patch("llm_utils.lm.llm.get_base_client")
-    def test_generate_returns_text_for_string_prompt(self, mock_get_client):
+    def test_generate_returns_completion_choice_for_string_prompt(
+        self, mock_get_client
+    ):
         mock_client = self._make_mock_client()
         mock_get_client.return_value = mock_client
         llm = LLM()
@@ -59,8 +73,20 @@ class TestLLMCallContract(TestCase):
 
         result = llm.generate("prompt")
 
-        self.assertEqual(result, "hello")
+        self.assertIsInstance(result, CompletionChoice)
+        self.assertEqual(result.text, "hello")
+        self.assertEqual(result.finish_reason, "stop")
+        self.assertIs(result.usage, completion.usage)
+        self.assertEqual(result.usage.total_tokens, 18)
         self.assertIs(llm.last_ai_response, completion)
+        self.assertEqual(len(llm._last_conversations), 1)
+        self.assertEqual(
+            llm._last_conversations[0],
+            [
+                {"role": "user", "content": "prompt"},
+                {"role": "assistant", "content": "hello"},
+            ],
+        )
         self.assertEqual(
             mock_client.completions.create.call_args.kwargs["prompt"],
             "prompt",
@@ -77,7 +103,7 @@ class TestLLMCallContract(TestCase):
 
         result = llm.generate("prompt", max_tokens=3)
 
-        self.assertEqual(result, "hello")
+        self.assertEqual(result.text, "hello")
         mock_client.completions.create.assert_called_once()
         mock_client.chat.completions.create.assert_not_called()
 
@@ -110,6 +136,29 @@ class TestLLMCallContract(TestCase):
         self.assertIsInstance(result, self.ParsedOutput)
         self.assertEqual(result.answer, "yes")
         self.assertIs(llm.last_ai_response, completion)
+
+    @patch("llm_utils.lm.llm.get_base_client")
+    def test_pydantic_parse_accepts_json_string_in_parsed_message(
+        self, mock_get_client
+    ):
+        mock_client = self._make_mock_client()
+        mock_get_client.return_value = mock_client
+        llm = LLM()
+
+        parsed_message = SimpleNamespace(
+            content='{"answer": "green"}',
+            parsed='{"answer": "green"}',
+        )
+        completion = self._make_completion(parsed_message)
+        mock_client.chat.completions.parse.return_value = completion
+
+        result = llm.pydantic_parse(
+            "prompt",
+            response_model=self.ParsedOutput,
+        )
+
+        self.assertIsInstance(result, self.ParsedOutput)
+        self.assertEqual(result.answer, "green")
 
     @patch("llm_utils.lm.llm.get_base_client")
     def test_call_can_return_dict_for_text_completion(self, mock_get_client):
@@ -246,3 +295,18 @@ class TestLLMCallContract(TestCase):
 
         with self.assertRaises(ValueError):
             llm("prompt", stream=True, return_dict=True)
+
+    @patch("llm_utils.lm.llm.get_base_client")
+    def test_call_streams_from_chat_api(self, mock_get_client):
+        mock_client = self._make_mock_client()
+        mock_get_client.return_value = mock_client
+        llm = LLM()
+
+        stream = object()
+        mock_client.chat.completions.create.return_value = stream
+
+        result = llm("prompt", stream=True)
+
+        self.assertIs(result, stream)
+        mock_client.chat.completions.create.assert_called_once()
+        mock_client.completions.create.assert_not_called()

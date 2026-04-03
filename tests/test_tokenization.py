@@ -3,6 +3,9 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from openai.types.completion import CompletionChoice
+from openai.types.completion_usage import CompletionUsage
+
 from llm_utils.lm.llm_qwen3 import (
     ASSISTANT_END,
     ASSISTANT_PREFIX,
@@ -53,7 +56,7 @@ def test_build_assistant_prefix_normalizes_both_phases():
 
 
 @patch("llm_utils.lm.llm.get_base_client")
-def test_generate_with_prefix_step_uses_tokenizer_and_generate_response(
+def test_generate_with_prefix_step_uses_tokenizer_and_completion_api(
     mock_get_client,
 ):
     mock_get_client.return_value = _make_mock_client()
@@ -68,16 +71,26 @@ def test_generate_with_prefix_step_uses_tokenizer_and_generate_response(
             return "TOK_PROMPT"
 
     fake_tokenizer = FakeTokenizer()
+    choice = CompletionChoice(
+        finish_reason="stop",
+        index=0,
+        logprobs=None,
+        text="reasoning step",
+    )
+    usage = CompletionUsage(
+        completion_tokens=4,
+        prompt_tokens=9,
+        total_tokens=13,
+    )
+    completion = SimpleNamespace(choices=[choice], usage=usage)
 
     with (
         patch.object(Qwen3LLM, "_get_tokenizer", return_value=fake_tokenizer),
         patch.object(
-            llm,
-            "_generate_response",
-            return_value={"text": "reasoning step", "stop": "stop"},
-        ) as mock_generate_response,
+            llm.client.completions, "create", return_value=completion
+        ) as mock_completion_create,
     ):
-        text, stop_reason = llm._generate_with_prefix_step(
+        result = llm._generate_with_prefix_step(
             [{"role": "user", "content": "hi"}],
             "<think>\nseed",
             temperature=0.2,
@@ -92,10 +105,13 @@ def test_generate_with_prefix_step_uses_tokenizer_and_generate_response(
             False,
         )
     ]
-    assert mock_generate_response.call_args.args == ("TOK_PROMPT<think>\nseed",)
-    assert mock_generate_response.call_args.kwargs == {
+    assert mock_completion_create.call_args.kwargs == {
+        "model": "test-model",
+        "prompt": "TOK_PROMPT<think>\nseed",
+        "extra_body": {"chat_template_kwargs": {"enable_thinking": True}},
         "temperature": 0.2,
         "max_tokens": 99,
     }
-    assert text == "reasoning step"
-    assert stop_reason == "stop"
+    assert result.text == "reasoning step"
+    assert result.finish_reason == "stop"
+    assert result.usage is usage
