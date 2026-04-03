@@ -149,6 +149,8 @@ The package provides these CLI commands:
 - Ruff handles linting and formatting (config in `ruff.toml` and `pyproject.toml`)
 - Ignore rules `E402`, `F401`, `F403` in `__init__.py` files for lazy import patterns
 - Quote style: double quotes
+- Avoid hacky workarounds like sys.path.insert
+
 
 ## Version Management
 

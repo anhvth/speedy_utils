@@ -69,13 +69,14 @@ def test_generate_with_prefix_step_uses_tokenizer_and_generate_response(
 
     fake_tokenizer = FakeTokenizer()
 
-    with patch.object(
-        Qwen3LLM, "_get_tokenizer", return_value=fake_tokenizer
-    ), patch.object(
-        llm,
-        "_generate_response",
-        return_value={"text": "reasoning step", "stop": "stop"},
-    ) as mock_generate_response:
+    with (
+        patch.object(Qwen3LLM, "_get_tokenizer", return_value=fake_tokenizer),
+        patch.object(
+            llm,
+            "_generate_response",
+            return_value={"text": "reasoning step", "stop": "stop"},
+        ) as mock_generate_response,
+    ):
         text, stop_reason = llm._generate_with_prefix_step(
             [{"role": "user", "content": "hi"}],
             "<think>\nseed",
@@ -91,12 +92,10 @@ def test_generate_with_prefix_step_uses_tokenizer_and_generate_response(
             False,
         )
     ]
-    assert mock_generate_response.call_args.args == (
-        "TOK_PROMPT<think>\nseed",
-    )
+    assert mock_generate_response.call_args.args == ("TOK_PROMPT<think>\nseed",)
     assert mock_generate_response.call_args.kwargs == {
         "temperature": 0.2,
-        "max_tokens": 1,
+        "max_tokens": 99,
     }
     assert text == "reasoning step"
     assert stop_reason == "stop"

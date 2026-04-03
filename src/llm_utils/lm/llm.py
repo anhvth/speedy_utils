@@ -552,9 +552,7 @@ class LLM:
             enable_thinking=enable_thinking,
         )
 
-        pydantic_model_to_use: type[BaseModel] = cast(
-            type[BaseModel], response_model
-        )
+        pydantic_model_to_use: type[BaseModel] = cast(type[BaseModel], response_model)
         try:
             completion = self.client.chat.completions.parse(
                 model=model_name,
@@ -714,7 +712,7 @@ class LLM:
             **openai_client_kwargs,
         )
 
-    def _inspect_history(
+    def inspect_history(
         self, idx: int = -1, k_last_messages: int = 2
     ) -> list[dict[str, Any]]:
         """Inspect the message history of a specific response choice."""
@@ -726,5 +724,12 @@ class LLM:
                 conv = conv[-k_last_messages:]
             return show_chat(conv)
         raise ValueError("No message history available. Make a call first.")
+
+    def _inspect_history(
+        self, idx: int = -1, k_last_messages: int = 2
+    ) -> list[dict[str, Any]]:
+        """Compatibility alias for older internal call sites."""
+        return self.inspect_history(idx=idx, k_last_messages=k_last_messages)
+
 
 from .llm_qwen3 import Qwen3LLM

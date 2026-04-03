@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import warnings
+import os
 from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple
 
 from pydantic import BaseModel
@@ -16,6 +16,9 @@ ASSISTANT_PREFIX = "<|im_start|>assistant"
 THINK_START = "<think>"
 THINK_END = "</think>"
 ASSISTANT_END = "<|im_end|>"
+DEFAULT_THINKING_MAX_TOKENS = 8192
+DEFAULT_CONTENT_MAX_TOKENS = 2048
+TRANSFORMERS_NO_ADVISORY_WARNINGS_ENV = "TRANSFORMERS_NO_ADVISORY_WARNINGS"
 
 
 class PrefixCompletionState(NamedTuple):
@@ -98,11 +101,6 @@ class Qwen3LLM(LLM):
 
     TOKENIZER_NAME: ClassVar[str] = "Qwen/Qwen3-0.6B"
     _tokenizer: ClassVar[Any | None] = None
-    _TRANSFORMERS_BACKEND_WARNING: ClassVar[str] = (
-        r"^None of PyTorch, TensorFlow >= 2\.0, or Flax have been found\."
-        r" Models won't be available and only tokenizers, configuration and "
-        r"file/data utilities can be used\."
-    )
 
     def __init__(self, *args, enable_thinking: bool = True, **kwargs):
         super().__init__(*args, enable_thinking=enable_thinking, **kwargs)
@@ -111,18 +109,23 @@ class Qwen3LLM(LLM):
     def _get_tokenizer(cls):
         tokenizer = cls._tokenizer
         if tokenizer is None:
-            with warnings.catch_warnings():
-                warnings.filterwarnings(
-                    "ignore",
-                    message=cls._TRANSFORMERS_BACKEND_WARNING,
-                    category=UserWarning,
-                )
+            # Transformers emits an import-time advisory when no backend
+            # framework is installed; suppress it only while loading the
+            # tokenizer helper.
+            previous = os.environ.get(TRANSFORMERS_NO_ADVISORY_WARNINGS_ENV)
+            os.environ[TRANSFORMERS_NO_ADVISORY_WARNINGS_ENV] = "1"
+            try:
                 from transformers import AutoTokenizer
 
                 tokenizer = AutoTokenizer.from_pretrained(
                     cls.TOKENIZER_NAME,
                     trust_remote_code=True,
                 )
+            finally:
+                if previous is None:
+                    os.environ.pop(TRANSFORMERS_NO_ADVISORY_WARNINGS_ENV, None)
+                else:
+                    os.environ[TRANSFORMERS_NO_ADVISORY_WARNINGS_ENV] = previous
             cls._tokenizer = tokenizer
         return tokenizer
 
@@ -156,9 +159,7 @@ class Qwen3LLM(LLM):
         *,
         stop_reason: str | None = None,
     ) -> PrefixCompletionState:
-        reasoning, content, think_done = split_assistant_parts(
-            assistant_prompt_prefix
-        )
+        reasoning, content, think_done = split_assistant_parts(assistant_prompt_prefix)
         return PrefixCompletionState(
             assistant_prompt_prefix=build_assistant_prefix(
                 reasoning,
@@ -185,14 +186,15 @@ class Qwen3LLM(LLM):
         )
         prompt_to_continue = prompt + assistant_prompt_prefix
 
-        call_kwargs = {
-            k: v
-            for k, v in runtime_kwargs.items()
-            if k not in {"extra_body", "max_tokens"}
-        }
-        call_kwargs.setdefault("max_tokens", 1)
+        call_kwargs = {k: v for k, v in runtime_kwargs.items() if k != "extra_body"}
+        if call_kwargs.get("max_tokens") is None:
+            call_kwargs["max_tokens"] = 1
 
         result = self._generate_response(prompt_to_continue, **call_kwargs)
+        if os.environ.get("LLM_UTILS_DEBUG_PREFIX_COMPLETION", "0") == "1":
+            print(
+                f"INPUT:\n```{prompt_to_continue}```\n----\nOUTPUT:\n```{result}```\n{'-' * 40}",
+            )
         text = str(result.get("text") or "")
         stop_reason = result.get("stop", result.get("finish_reason"))
         return text, stop_reason
@@ -273,7 +275,7 @@ class Qwen3LLM(LLM):
         input_data: str | BaseModel | list[dict],
         assistant_prompt_prefix: str = "<think>\n",
         *,
-        thinking_max_tokens: int | None = None,
+        thinking_max_tokens: int | None = DEFAULT_THINKING_MAX_TOKENS,
         **runtime_kwargs,
     ) -> PrefixCompletionState:
         """
@@ -302,7 +304,7 @@ class Qwen3LLM(LLM):
         input_data: str | BaseModel | list[dict],
         completion_state: PrefixCompletionState | str,
         *,
-        content_max_tokens: int | None = None,
+        content_max_tokens: int | None = DEFAULT_CONTENT_MAX_TOKENS,
         **runtime_kwargs,
     ) -> "ChatCompletionMessage":
         """
@@ -331,8 +333,8 @@ class Qwen3LLM(LLM):
         input_data: str | BaseModel | list[dict],
         assistant_prompt_prefix: str = "<think>\n",
         *,
-        thinking_max_tokens: int | None = None,
-        content_max_tokens: int | None = None,
+        thinking_max_tokens: int | None = DEFAULT_THINKING_MAX_TOKENS,
+        content_max_tokens: int | None = DEFAULT_CONTENT_MAX_TOKENS,
         **runtime_kwargs,
     ) -> "ChatCompletionMessage":
         """
