@@ -35,6 +35,7 @@ dependencies = [
     "rich>=14.3.1",
     "chainlit>=2.0",
     "transformers>=4.57.6",
+    "datasets",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -75,13 +76,14 @@ fast-vllm = "llm_utils.scripts.fast_vllm:main"
 kill-mpython = "speedy_utils.scripts.kill_mpython:main"
 spu-prefetch-large-model = "speedy_utils.scripts.prefetch_large_model:main"
 sp_chat = "llm_utils.scripts.sp_chat:main"
+viz_chat = "datasets_utils.viz_chat:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/speedy_utils", "src/llm_utils", "src/vision_utils"]
+packages = ["src/speedy_utils", "src/llm_utils", "src/vision_utils", "src/datasets_utils"]
 
 [tool.black]
 line-length = 88

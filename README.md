@@ -217,6 +217,66 @@ results = multi_process(
 print(results)  # [0, 1, 4, 9, 16, None, 36, 49, 64, 81, None, 121]
 ```
 
+#### Multi-Process with Inner Thread Pools
+
+For maximum parallelism, `multi_process` supports nested parallelism where each process has its own thread pool. This is ideal for CPU-bound tasks that also benefit from I/O parallelism.
+
+```python
+from speedy_utils import multi_process
+
+def process_data(item):
+    """Process a data item with potential I/O operations."""
+    # Simulate CPU work
+    result = item ** 2
+    # Simulate I/O (each thread can do I/O in parallel)
+    time.sleep(0.01)
+    return result
+
+data = list(range(100))
+
+# 4 processes, each with 4 threads = 16 concurrent workers
+results = multi_process(
+    process_data,
+    data,
+    num_procs=4,      # Number of processes
+    num_threads=4,    # Threads per process
+    backend='mp',
+    progress=True,
+)
+```
+
+**Backend Options:**
+
+| Backend | Description | Use Case |
+|---------|-------------|----------|
+| `'mp'` | Multi-processing with optional inner threads | CPU-bound work, bypasses GIL |
+| `'safe'` | In-process thread pool (for testing) | Debugging, unit tests |
+| `'seq'` | Sequential execution | Debugging, reproducibility |
+| `'ray'` | Ray distributed backend | Distributed computing |
+
+**When to use `num_procs` vs `num_threads`:**
+
+- **CPU-bound tasks**: Use `num_procs` > 1, `num_threads` = 1 (processes bypass GIL)
+- **I/O-bound tasks**: Use `num_procs` = 1, `num_threads` > 1 (threads are lighter)
+- **Mixed workloads**: Use both (e.g., `num_procs=4, num_threads=4`)
+
+```python
+# Example: Web scraping with multi-process + multi-thread
+def fetch_and_parse(url):
+    response = requests.get(url)  # I/O bound
+    return parse_content(response.text)  # CPU bound
+
+# 4 processes for parsing, 8 threads per process for fetching
+results = multi_process(
+    fetch_and_parse,
+    urls,
+    num_procs=4,
+    num_threads=8,
+    backend='mp',
+    error_handler='log',  # Continue on failed URLs
+)
+```
+
 #### mpython (CLI Tool)
 
 `mpython` is a CLI tool for running Python scripts in multiple tmux windows with automatic GPU/CPU allocation for parallel processing.

@@ -5,6 +5,7 @@ Error handling utilities for clean, user-focused tracebacks.
 import inspect
 import linecache
 import sys
+import threading
 import traceback
 from typing import Any, Callable, TypeVar
 
@@ -247,8 +248,12 @@ def clean_traceback(func: F) -> F:
                         caller_context,
                         func_name,
                     )
+                    # In worker threads, return a catchable exception so callers can
+                    # downgrade item-level failures instead of terminating the process.
+                    if threading.current_thread() is not threading.main_thread():
+                        raise clean_error from exc
                     clean_error.format_rich()
-                    sys.exit(1)  # Exit after formatting
+                    sys.exit(1)  # Exit after formatting in the main thread only
 
             # Fallback: re-raise original if we couldn't extract frames
             raise
