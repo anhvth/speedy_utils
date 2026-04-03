@@ -2,6 +2,7 @@
 
 from llm_utils.lm import LLM
 import json
+import requests
 
 lm = LLM(client=8000)
 
@@ -19,7 +20,7 @@ if isinstance(result, list):
     print()
     
 # Get actual response
-import requests
+
 base_url = 'http://localhost:8000'
 token_ids = lm.encode('Test')
 response = requests.post(

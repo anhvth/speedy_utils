@@ -114,6 +114,8 @@ __all__ = [
     "multi_process_dataset",
     "WorkerResources",
     "report_progress",
+    "parallel",
+    "cleanup_parallel_cache",
     # Notebook utilities
     "change_dir",
 ]
@@ -180,6 +182,11 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
         "multi_process_dataset",
     ),
     "report_progress": ("speedy_utils.multi_worker.progress", "report_progress"),
+    "parallel": ("speedy_utils.multi_worker.parallel", "parallel"),
+    "cleanup_parallel_cache": (
+        "speedy_utils.multi_worker.parallel",
+        "cleanup_parallel_cache",
+    ),
 }
 
 _IMPORTS_MODULE = None
