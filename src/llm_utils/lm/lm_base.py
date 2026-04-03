@@ -7,6 +7,7 @@ from typing import (
     List,
     Optional,
     Type,
+    TypeVar,
     Union,
     cast,
     overload,
@@ -18,12 +19,11 @@ from pydantic import BaseModel
 
 from llm_utils.lm.openai_memoize import MOpenAI
 
-from .async_lm._utils import (
-    LegacyMsgs,
-    Messages,
-    RawMsgs,
-    TModel,
-)
+
+TModel = TypeVar("TModel", bound=BaseModel)
+Messages = list[dict]
+LegacyMsgs = list[dict[str, str]]
+RawMsgs = Union[Messages, LegacyMsgs]
 
 # Lazy import openai types for type checking only
 if TYPE_CHECKING:

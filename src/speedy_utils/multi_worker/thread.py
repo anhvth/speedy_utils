@@ -237,7 +237,6 @@ def _worker(
                 'concurrent/futures/',
                 'threading.py',
                 'multiprocessing/',
-                'site-packages/ray/',
             ]
 
             for frame in tb_list:

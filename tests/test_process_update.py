@@ -32,15 +32,14 @@ def test_process_update_interval():
     # Create a list of 20 items to process
     test_input = list(range(20))
 
-    # Run multi_process with progress=True and process_update_interval=5
-    # Note: process_update_interval is accepted for compatibility but not implemented for safe backend
+    # Run multi_process with progress=True and process_update_interval=5.
     result = multi_process(
         slow_identity,
         test_input,
         num_threads=2,
         progress=False,  # Disable progress to avoid fastcore's progress bar
         process_update_interval=5,
-        backend="safe",
+        backend="thread",
     )
 
     # Check results
@@ -49,15 +48,19 @@ def test_process_update_interval():
 
 def test_worker_error_handling():
     """Test error handling in the worker process."""
-    # Since stop_on_error is not implemented for safe backend,
-    # errors are logged but not raised (error_handler='log' by default)
+    # Errors are logged but not raised (error_handler='log' by default).
 
     # Test with a smaller set that should fail (returns None for failed items)
-    result = multi_process(failing_function, [5], backend="safe", progress=False)
+    result = multi_process(failing_function, [5], backend="thread", progress=False)
     assert result == [None]  # Failed item returns None
 
     # Test with a set that should succeed
-    result = multi_process(failing_function, [1, 2, 3, 4], backend="safe", progress=False)
+    result = multi_process(
+        failing_function,
+        [1, 2, 3, 4],
+        backend="thread",
+        progress=False,
+    )
     assert result == [1, 2, 3, 4]
 
 
@@ -67,7 +70,7 @@ def test_batch_parameter():
     test_input = list(range(20))
 
     # Process with batch=5
-    result = multi_process(identity, test_input, batch=5, backend="safe")
+    result = multi_process(identity, test_input, batch=5, backend="thread")
 
     # Check results
     assert result == test_input

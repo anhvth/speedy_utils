@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
-"""Minimalist Chainlit chat UI for quickly testing vLLM servers."""
+"""Minimalist Chainlit chat UI for quickly testing OpenAI-compatible servers."""
 
 from __future__ import annotations
 
-import os
-import sys
-import subprocess
-import time
 import html
+import os
+import subprocess
+import sys
+import time
 from pathlib import Path
 from typing import Any, Iterable, List
 from urllib.parse import urlparse
 
+
 # --- Configuration & CLI Parsing ---
 
 HELP_TEXT = """\
-sp_chat: Chainlit chat UI for vLLM
+sp_chat: Chainlit chat UI for an OpenAI-compatible server
 
 Usage:
   sp_chat
@@ -23,7 +24,7 @@ Usage:
   sp_chat client=http://10.0.0.3:8000/v1 port=5010 model=Qwen/Qwen2.5-7B-Instruct
 
 Supported key=value args:
-  client   vLLM client endpoint or port (default: http://localhost:4343/v1)
+  client   client endpoint or port (default: http://localhost:4343/v1)
   port     web port (default: 5009)
   host     bind host (default: 0.0.0.0)
   model    fixed model id (default: auto-detect from /v1/models)
@@ -34,6 +35,7 @@ Supported key=value args:
 DEFAULT_MAX_TOKENS = 4096
 DEFAULT_TEMPERATURE = 0.7
 DEFAULT_SYSTEM_PROMPT = ""
+
 
 class ChatConfig:
     __slots__ = ("client", "app_port", "app_host", "model", "api_key", "thinking")
@@ -135,30 +137,31 @@ def _render_streaming_blocks(
 ) -> None:
     parts: list[str] = []
     cursor = (
-        "<span style=\"display:inline-block;width:4px;height:1em;"
-        "background:#ECECEC;animation:blink 1s step-end infinite;\"></span>"
+        '<span style="display:inline-block;width:4px;height:1em;'
+        'background:#ECECEC;animation:blink 1s step-end infinite;"></span>'
     )
 
     if thinking_text.strip():
         parts.append(
-            "<details class=\"sp-thinking-stream\" "
-            "style=\"color:#A3A3A3;font-size:0.9em;margin-bottom:1rem;"
-            "padding:0.5rem;border-left:2px solid #444;\">"
-            "<summary style=\"cursor:pointer;margin-bottom:0.5rem;\">"
+            '<details class="sp-thinking-stream" '
+            'style="color:#A3A3A3;font-size:0.9em;margin-bottom:1rem;'
+            'padding:0.5rem;border-left:2px solid #444;">'
+            '<summary style="cursor:pointer;margin-bottom:0.5rem;">'
             "Thought Process</summary>"
-            f"<div style=\"white-space:pre-wrap;\">{html.escape(thinking_text)}"
+            f'<div style="white-space:pre-wrap;">{html.escape(thinking_text)}'
             f"{cursor if not answer_text else ''}</div></details>"
         )
 
     if answer_text.strip():
         parts.append(
-            f"<div style=\"white-space:pre-wrap;line-height:1.6;\">"
+            f'<div style="white-space:pre-wrap;line-height:1.6;">'
             f"{html.escape(answer_text)}{cursor}</div>"
         )
     elif not thinking_text.strip():
         parts.append(f"<div>{cursor}</div>")
 
     placeholder.markdown("\n".join(parts), unsafe_allow_html=True)
+
 
 def normalize_client_base_url(client: str | int | None) -> str:
     if client is None:
@@ -182,16 +185,22 @@ def normalize_client_base_url(client: str | int | None) -> str:
         return f"{base_url}/v1"
     return base_url
 
+
 def _parse_positive_int(name: str, value: str) -> int:
     parsed = int(value)
-    if parsed <= 0: raise ValueError(f"{name} must be > 0.")
+    if parsed <= 0:
+        raise ValueError(f"{name} must be > 0.")
     return parsed
+
 
 def _parse_bool(name: str, value: str) -> bool:
     normalized = value.strip().lower()
-    if normalized in {"1", "true", "yes", "on", "enabled"}: return True
-    if normalized in {"0", "false", "no", "off", "disabled"}: return False
+    if normalized in {"1", "true", "yes", "on", "enabled"}:
+        return True
+    if normalized in {"0", "false", "no", "off", "disabled"}:
+        return False
     raise ValueError(f"{name} must be a boolean.")
+
 
 def parse_cli_args(argv: Iterable[str]) -> ChatConfig:
     config = ChatConfig()
@@ -213,20 +222,31 @@ def parse_cli_args(argv: Iterable[str]) -> ChatConfig:
         key = key.strip().lower().replace("-", "_")
         value = value.strip()
 
-        if key == "client": config.client = value or "http://localhost:4343/v1"
-        elif key in {"port", "app_port"}: config.app_port = _parse_positive_int("port", value)
-        elif key in {"host", "app_host"}: config.app_host = value or "0.0.0.0"
-        elif key == "model": config.model = value or None
-        elif key == "api_key": config.api_key = value or "abc"
-        elif key == "thinking": config.thinking = _parse_bool("thinking", value)
+        if key == "client":
+            config.client = value or "http://localhost:4343/v1"
+        elif key in {"port", "app_port"}:
+            config.app_port = _parse_positive_int("port", value)
+        elif key in {"host", "app_host"}:
+            config.app_host = value or "0.0.0.0"
+        elif key == "model":
+            config.model = value or None
+        elif key == "api_key":
+            config.api_key = value or "abc"
+        elif key == "thinking":
+            config.thinking = _parse_bool("thinking", value)
         else:
-            raise ValueError(f"Unknown argument '{key}'. Supported keys: client, port, host, model, api_key, thinking.")
+            raise ValueError(
+                f"Unknown argument '{key}'. Supported keys: client, port, host, model, api_key, thinking."
+            )
     return config
+
 
 # --- Chainlit App Logic ---
 
+
 def _is_running_in_chainlit() -> bool:
     return os.environ.get("SP_CHAT_RUNNING") == "1"
+
 
 async def _list_models_async(client: Any) -> tuple[List[str], str | None]:
     try:
@@ -235,9 +255,11 @@ async def _list_models_async(client: Any) -> tuple[List[str], str | None]:
     except Exception as exc:
         return [], str(exc)
 
+
 def _list_models_sync(base_url: str, api_key: str) -> tuple[List[str], str | None]:
     """Synchronous model listing used during startup info."""
     from openai import OpenAI
+
     try:
         c = OpenAI(base_url=base_url, api_key=api_key)
         resp = c.models.list()
@@ -245,9 +267,10 @@ def _list_models_sync(base_url: str, api_key: str) -> tuple[List[str], str | Non
     except Exception as exc:
         return [], str(exc)
 
+
 def _setup_chainlit():
     import chainlit as cl
-    from chainlit.input_widget import Select, Slider, TextInput, Switch
+    from chainlit.input_widget import Select, Slider, Switch, TextInput
     from openai import AsyncOpenAI
 
     base_url = os.environ.get("SP_CHAT_CLIENT", "http://localhost:4343/v1")
@@ -314,7 +337,9 @@ def _setup_chainlit():
         cl.user_session.set("client", client)
         if error:
             # Keep startup clean (no hardcoded first message), only surface real errors.
-            await cl.Message(content=f"⚠️ Model fetch error: {error}", author="system").send()
+            await cl.Message(
+                content=f"⚠️ Model fetch error: {error}", author="system"
+            ).send()
 
     @cl.on_settings_update
     async def on_settings_update(settings):
@@ -344,8 +369,10 @@ def _setup_chainlit():
             "stream": True,
         }
         if enable_thinking:
-            call_kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": True}}
-    
+            call_kwargs["extra_body"] = {
+                "chat_template_kwargs": {"enable_thinking": True}
+            }
+
         start_time = time.time()
 
         try:
@@ -360,7 +387,9 @@ def _setup_chainlit():
                         continue
                     delta = chunk.choices[0].delta
 
-                    reasoning = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
+                    reasoning = getattr(delta, "reasoning_content", None) or getattr(
+                        delta, "reasoning", None
+                    )
                     content = delta.content
 
                     if reasoning and not thinking_completed:
@@ -395,7 +424,9 @@ def _setup_chainlit():
         except Exception as e:
             await cl.Message(content=f"Error: {str(e)}").send()
 
+
 # --- Launcher ---
+
 
 def _launch_chainlit(config: ChatConfig) -> int:
     try:
@@ -413,17 +444,23 @@ def _launch_chainlit(config: ChatConfig) -> int:
     env["SP_CHAT_THINKING"] = "true" if config.thinking else "false"
     # Marker to indicate we are running the app logic
     env["SP_CHAT_RUNNING"] = "1"
-    
+
     # We use "chainlit run" on THIS file
     script_path = str(Path(__file__).resolve())
-    
+
     cmd = [
-        sys.executable, "-m", "chainlit", "run", script_path,
-        "--port", str(config.app_port),
-        "--host", config.app_host,
-        "--headless"
+        sys.executable,
+        "-m",
+        "chainlit",
+        "run",
+        script_path,
+        "--port",
+        str(config.app_port),
+        "--host",
+        config.app_host,
+        "--headless",
     ]
-    
+
     base_url = env["SP_CHAT_CLIENT"]
     # Print detected models at launch for visibility
     models, err = _list_models_sync(base_url, config.api_key)
@@ -432,10 +469,13 @@ def _launch_chainlit(config: ChatConfig) -> int:
     elif err:
         print(f"⚠️  Could not list models ({err}). Will retry in browser.")
 
-    host_display = "localhost" if config.app_host in {"0.0.0.0", "::"} else config.app_host
+    host_display = (
+        "localhost" if config.app_host in {"0.0.0.0", "::"} else config.app_host
+    )
     print(f"Chat UI → http://{host_display}:{config.app_port}")
 
     return subprocess.run(cmd, env=env, check=False).returncode
+
 
 def main() -> int:
     try:
@@ -448,6 +488,7 @@ def main() -> int:
         return 2
 
     return _launch_chainlit(config)
+
 
 # --- Module‑level dispatch ---
 # When chainlit imports this file, __name__ != "__main__" but our env marker is set.

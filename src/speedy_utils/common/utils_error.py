@@ -163,7 +163,6 @@ def _filter_traceback_frames(tb_list: list[traceback.FrameSummary]) -> list[trac
         'speedy_utils/multi_worker/',
         'llm_utils/lm/',
         'llm_utils/chat_format/',
-        'llm_utils/vector_cache/',
     ]
 
     skip_functions = [

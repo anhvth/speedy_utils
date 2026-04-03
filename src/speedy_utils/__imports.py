@@ -86,7 +86,7 @@ from loguru import logger
 from tqdm import tqdm
 
 
-tabulate = __import__('tabulate').tabulate
+tabulate = __import__("tabulate").tabulate
 import xxhash
 
 
@@ -97,16 +97,6 @@ def _get_pandas():
         import pandas as pd
 
         return pd
-    except ImportError:
-        return None
-
-
-def _get_ray():
-    """Lazy import ray."""
-    try:
-        import ray
-
-        return ray
     except ImportError:
         return None
 
@@ -143,7 +133,6 @@ def _get_ipython_core():
 
 # Cache for lazy imports
 _pandas_cache = None
-_ray_cache = None
 _matplotlib_cache = None
 _plt_cache = None
 _get_ipython_cache = None
@@ -181,35 +170,37 @@ class _LazyModule:
 
     def __repr__(self):
         if self._module is None:
-            return '<LazyModule: not loaded>'
+            return "<LazyModule: not loaded>"
         return repr(self._module)
 
 
 # Create lazy loaders for top slow imports (import only when accessed)
-pd = _LazyModule(_get_pandas, '_pandas_cache')
-ray = _LazyModule(_get_ray, '_ray_cache')
-matplotlib = _LazyModule(_get_matplotlib, '_matplotlib_cache')
-plt = _LazyModule(_get_matplotlib_pyplot, '_plt_cache')
-get_ipython = _LazyModule(_get_ipython_core, '_get_ipython_cache')
+pd = _LazyModule(_get_pandas, "_pandas_cache")
+matplotlib = _LazyModule(_get_matplotlib, "_matplotlib_cache")
+plt = _LazyModule(_get_matplotlib_pyplot, "_plt_cache")
+get_ipython = _LazyModule(_get_ipython_core, "_get_ipython_cache")
+
 
 # Other optional imports (lazy loaded)
 def _get_torch():
     """Lazy import torch."""
     try:
         import torch
+
         return torch
     except ImportError:
         return None
 
 
 _torch_cache = None
-torch = _LazyModule(_get_torch, '_torch_cache')
+torch = _LazyModule(_get_torch, "_torch_cache")
 
 
 def _get_ipython_display():
     """Lazy import IPython.display."""
     try:
         from IPython.display import HTML, display
+
         return HTML, display
     except ImportError:
         return None, None
@@ -238,8 +229,8 @@ def _get_display():
     return _display
 
 
-HTML = _LazyModule(_get_HTML, '_HTML')  # type: ignore
-display = _LazyModule(_get_display, '_display')  # type: ignore
+HTML = _LazyModule(_get_HTML, "_HTML")  # type: ignore
+display = _LazyModule(_get_display, "_display")  # type: ignore
 
 try:
     from PIL import Image
@@ -254,7 +245,6 @@ if TYPE_CHECKING:
     import matplotlib.pyplot as plt
     import numpy as np
     import pandas as pd
-    import ray
     import torch
 
     # xxhash
@@ -271,111 +261,110 @@ __all__ = [
     # ------------------------------------------------------------------
     # Direct imports (previously lazy-loaded)
     # ------------------------------------------------------------------
-    'torch',
-    'np',
-    'pd',
-    'tqdm',
-    'tabulate',
-    'xxhash',
-    'get_ipython',
-    'HTML',
-    'display',
-    'BaseModel',
-    'Image',
-    'ray',
-    'matplotlib',
-    'plt',
+    "torch",
+    "np",
+    "pd",
+    "tqdm",
+    "tabulate",
+    "xxhash",
+    "get_ipython",
+    "HTML",
+    "display",
+    "BaseModel",
+    "Image",
+    "matplotlib",
+    "plt",
     # ------------------------------------------------------------------
     # Standard library modules imported
     # ------------------------------------------------------------------
-    'asyncio',
-    'contextlib',
-    'copy',
-    'ctypes',
-    'datetime',
-    'functools',
-    'gc',
-    'inspect',
-    'io',
-    'json',
-    'multiprocessing',
-    'os',
-    'osp',
-    'pathlib',
-    'pickle',
-    'pprint',
-    'random',
-    're',
-    'sys',
-    'textwrap',
-    'threading',
-    'time',
-    'traceback',
-    'types',
-    'uuid',
-    'weakref',
-    'warnings',
+    "asyncio",
+    "contextlib",
+    "copy",
+    "ctypes",
+    "datetime",
+    "functools",
+    "gc",
+    "inspect",
+    "io",
+    "json",
+    "multiprocessing",
+    "os",
+    "osp",
+    "pathlib",
+    "pickle",
+    "pprint",
+    "random",
+    "re",
+    "sys",
+    "textwrap",
+    "threading",
+    "time",
+    "traceback",
+    "types",
+    "uuid",
+    "weakref",
+    "warnings",
     # ------------------------------------------------------------------
     # Data structures
     # ------------------------------------------------------------------
-    'Counter',
-    'OrderedDict',
-    'defaultdict',
-    'MappingProxyType',
+    "Counter",
+    "OrderedDict",
+    "defaultdict",
+    "MappingProxyType",
     # ------------------------------------------------------------------
     # File & path utilities
     # ------------------------------------------------------------------
-    'Path',
-    'glob',
+    "Path",
+    "glob",
     # ------------------------------------------------------------------
     # Concurrency / parallelism
     # ------------------------------------------------------------------
-    'ThreadPoolExecutor',
-    'as_completed',
-    'wait',
-    'FIRST_COMPLETED',
-    'Future',
-    'Pool',
-    'Lock',
+    "ThreadPoolExecutor",
+    "as_completed",
+    "wait",
+    "FIRST_COMPLETED",
+    "Future",
+    "Pool",
+    "Lock",
     # ------------------------------------------------------------------
     # Algorithms / heap helpers
     # ------------------------------------------------------------------
-    'heappop',
-    'heappush',
-    'islice',
+    "heappop",
+    "heappush",
+    "islice",
     # ------------------------------------------------------------------
     # Typing
     # ------------------------------------------------------------------
-    'Annotated',
-    'Any',
-    'Awaitable',
-    'Callable',
-    'Dict',
-    'Generic',
-    'IO',
-    'Iterable',
-    'List',
-    'Literal',
-    'Mapping',
-    'Optional',
-    'ParamSpec',
-    'Sequence',
-    'Set',
-    'Tuple',
-    'Type',
-    'TYPE_CHECKING',
-    'TypeVar',
-    'TypingCallable',
-    'Union',
-    'cast',
-    'overload',
+    "Annotated",
+    "Any",
+    "Awaitable",
+    "Callable",
+    "Dict",
+    "Generic",
+    "IO",
+    "Iterable",
+    "List",
+    "Literal",
+    "Mapping",
+    "Optional",
+    "ParamSpec",
+    "Sequence",
+    "Set",
+    "Tuple",
+    "Type",
+    "TYPE_CHECKING",
+    "TypeVar",
+    "TypingCallable",
+    "Union",
+    "cast",
+    "overload",
     # ------------------------------------------------------------------
     # Third-party modules
     # ------------------------------------------------------------------
-    'cachetools',
-    'psutil',
-    'parallel',
-    'jloads',
-    'logger',
-    'plt',
+    "cachetools",
+    "psutil",
+    "parallel",
+    "jloads",
+    "logger",
+    "plt",
 ]

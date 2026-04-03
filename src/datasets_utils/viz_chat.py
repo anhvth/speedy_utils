@@ -43,6 +43,7 @@ Usage:
     # Show tools if present
     viz_chat data/with_tools.jsonl --show-tools
 """
+
 from __future__ import annotations
 
 import argparse
@@ -57,6 +58,7 @@ from rich.console import Console, Group
 from rich.panel import Panel
 from rich.text import Text
 
+
 # Lazy import for datasets
 _dataset_module = None
 
@@ -70,7 +72,11 @@ def _get_dataset_module():
         _dataset_module = type(
             "DatasetModule",
             (),
-            {"Dataset": Dataset, "DatasetDict": DatasetDict, "load_from_disk": load_from_disk},
+            {
+                "Dataset": Dataset,
+                "DatasetDict": DatasetDict,
+                "load_from_disk": load_from_disk,
+            },
         )()
     return _dataset_module
 
@@ -157,7 +163,9 @@ def load_data(source: str | Path) -> list[tuple[str | None, int, dict[str, Any]]
     if path.suffix == ".json":
         return _load_json(path)
 
-    raise ValueError(f"Unsupported file type: {path.suffix}. Expected .jsonl, .json, or directory.")
+    raise ValueError(
+        f"Unsupported file type: {path.suffix}. Expected .jsonl, .json, or directory."
+    )
 
 
 def _load_directory(path: Path) -> list[tuple[str | None, int, dict[str, Any]]]:
@@ -182,15 +190,19 @@ def _load_hf_dataset(path: Path) -> list[tuple[str | None, int, dict[str, Any]]]
     try:
         dataset = load_from_disk(str(path))
     except Exception as exc:
-        raise RuntimeError(f"Failed to load HuggingFace dataset from {path}: {exc}") from exc
+        raise RuntimeError(
+            f"Failed to load HuggingFace dataset from {path}: {exc}"
+        ) from exc
 
     items: list[tuple[str | None, int, dict[str, Any]]] = []
 
     if isinstance(dataset, DatasetDict):
-        for split_name in dataset.keys():
+        for split_name in dataset:
             for row_index, row in enumerate(dataset[split_name]):
                 if not isinstance(row, Mapping):
-                    raise ValueError(f"Row {row_index} in split '{split_name}' is not a mapping.")
+                    raise ValueError(
+                        f"Row {row_index} in split '{split_name}' is not a mapping."
+                    )
                 items.append((split_name, row_index, dict(row)))
     else:
         for row_index, row in enumerate(dataset):
@@ -308,7 +320,9 @@ def decode_tokenized_row(
         # Replace -100 with pad token id for decoding
         pad_token_id = tokenizer.pad_token_id or tokenizer.eos_token_id or 0
         labels_for_decode = [t if t != -100 else pad_token_id for t in labels]
-        result["labels_text"] = tokenizer.decode(labels_for_decode, skip_special_tokens=False)
+        result["labels_text"] = tokenizer.decode(
+            labels_for_decode, skip_special_tokens=False
+        )
 
         # Also show which positions are masked
         masked_positions = [i for i, t in enumerate(labels) if t == -100]
@@ -443,13 +457,21 @@ def _normalize_message_list(messages: Any) -> list[dict[str, Any]]:
             role = msg["role"]
             content = msg.get("content", "")
         else:
-            raise ValueError(f"Message missing 'role' or 'from' field: {list(msg.keys())}")
+            raise ValueError(
+                f"Message missing 'role' or 'from' field: {list(msg.keys())}"
+            )
 
-        normalized.append({
-            "role": str(role),
-            "content": content,
-            **{k: v for k, v in msg.items() if k not in {"role", "content", "from", "value"}},
-        })
+        normalized.append(
+            {
+                "role": str(role),
+                "content": content,
+                **{
+                    k: v
+                    for k, v in msg.items()
+                    if k not in {"role", "content", "from", "value"}
+                },
+            }
+        )
 
     return normalized
 
@@ -508,12 +530,12 @@ def sample_items(
     count: int,
     seed: int,
 ) -> list[tuple[str | None, int, dict[str, Any]]]:
-    """Sample items randomly. count=-1 means all items."""
-    if count < -1:
-        raise ValueError("--count must be >= -1.")
+    """Sample items randomly."""
+    if count < 0:
+        raise ValueError("--count must be non-negative.")
     if not items or count == 0:
         return []
-    if count == -1 or count >= len(items):
+    if count >= len(items):
         return list(items)
 
     rng = random.Random(seed)
@@ -576,10 +598,14 @@ def _build_message_panel(message: Mapping[str, Any], *, msg_index: int) -> Panel
     body_parts: list[Any] = [role_header, Text(_format_content(message.get("content")))]
 
     # Show extra fields (like reasoning_content)
-    extras = {key: value for key, value in message.items() if key not in {"role", "content"}}
+    extras = {
+        key: value for key, value in message.items() if key not in {"role", "content"}
+    }
     if extras:
         body_parts.append(Text("\nExtras", style="dim bold"))
-        body_parts.append(Text(json.dumps(extras, ensure_ascii=False, indent=2), style="dim"))
+        body_parts.append(
+            Text(json.dumps(extras, ensure_ascii=False, indent=2), style="dim")
+        )
 
     return Panel(
         Group(*body_parts),
@@ -667,7 +693,11 @@ def print_item(
     """Print a single item with all its messages."""
     branch_messages = _extract_branch_messages(row)
 
-    console.rule(Text(f"Item {item_number}/{total_items} (idx={dataset_index})", style="bold blue"))
+    console.rule(
+        Text(
+            f"Item {item_number}/{total_items} (idx={dataset_index})", style="bold blue"
+        )
+    )
     _print_metadata(console, row, source_name=source_name, row_index=row_index)
 
     # Show metadata
@@ -710,7 +740,11 @@ def print_tokenized_item(
     row: Mapping[str, Any],
 ) -> None:
     """Print a single tokenized item with decoded text."""
-    console.rule(Text(f"Item {item_number}/{total_items} (idx={dataset_index})", style="bold blue"))
+    console.rule(
+        Text(
+            f"Item {item_number}/{total_items} (idx={dataset_index})", style="bold blue"
+        )
+    )
     _print_metadata(console, row, source_name=source_name, row_index=row_index)
 
     # Show token statistics
@@ -822,9 +856,6 @@ def main(argv: list[str] | None = None) -> int:
             decoded_items.append((source_name, row_index, decoded_row))
         items = decoded_items
 
-    # Sample items
-    selected_items = sample_items(items, count=args.count, seed=args.seed)
-
     # Print summary
     console.print(f"Source: {source_path}", soft_wrap=True)
     if is_tokenized:
@@ -868,7 +899,10 @@ def main(argv: list[str] | None = None) -> int:
             )
 
         continue_loop, goto_idx = _wait_for_next_sample(
-            console, item_number=item_number, total_items=len(items), total_in_dataset=len(items)
+            console,
+            item_number=item_number,
+            total_items=len(items),
+            total_in_dataset=len(items),
         )
         if not continue_loop:
             break

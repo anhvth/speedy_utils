@@ -82,15 +82,10 @@ class ErrorStats:
         error: Exception,
         input_value: Any,
         func_name: str,
-        ray_task_error: Exception | None = None,
     ) -> str | None:
         """
         Record an error and write to log file.
         Returns the log file path if written, None otherwise.
-        
-        Args:
-            ray_task_error: Optional RayTaskError for fallback frame extraction
-                            when the native traceback is unavailable.
         """
         with self._lock:
             self._error_count += 1
@@ -104,12 +99,12 @@ class ErrorStats:
         log_path = None
         if should_write:
             log_path = self._write_error_log(
-                idx, error, input_value, func_name, ray_task_error
+                idx, error, input_value, func_name
             )
 
         if should_show_first:
             self._print_first_error(
-                error, input_value, func_name, log_path, ray_task_error
+                error, input_value, func_name, log_path
             )
 
         return log_path
@@ -120,7 +115,6 @@ class ErrorStats:
         error: Exception,
         input_value: Any,
         func_name: str,
-        ray_task_error: Exception | None = None,
     ) -> str:
         """Write error details to a log file."""
         from io import StringIO
@@ -133,7 +127,7 @@ class ErrorStats:
         
         # Format traceback using unified extraction
         tb_lines = _format_traceback_lines(
-            _extract_frames(error, ray_task_error),
+            _extract_frames(error),
             include_locals=False,
         )
         
@@ -168,7 +162,6 @@ class ErrorStats:
         input_value: Any,
         func_name: str,
         log_path: str | None,
-        ray_task_error: Exception | None = None,
     ) -> None:
         """Print the first error to screen with Rich formatting."""
         try:
@@ -178,7 +171,7 @@ class ErrorStats:
             
             # Use unified frame extraction
             tb_lines = _format_traceback_lines(
-                _extract_frames(error, ray_task_error),
+                _extract_frames(error),
                 include_locals=False,
             )
             
@@ -230,9 +223,6 @@ class ErrorStats:
 def _should_skip_frame(filepath: str) -> bool:
     """Check if a frame should be filtered from traceback display."""
     skip_patterns = [
-        'ray/_private',
-        'ray/worker',
-        'site-packages/ray',
         'speedy_utils/multi_worker',
         'concurrent/futures',
         'multiprocessing/',
@@ -412,47 +402,9 @@ def _extract_frames_from_traceback(
     return frames
 
 
-def _extract_frames_from_ray_error(
-    ray_task_error: Exception,
-) -> list[tuple[str, int, str, dict]]:
-    """Extract user frames from Ray's string traceback representation."""
-    import re
-    
-    frames = []
-    error_str = str(ray_task_error)
-    lines = error_str.split('\n')
-    
-    for line in lines:
-        # Match: File "path", line N, in func
-        file_match = re.match(r'\s*File "([^"]+)", line (\d+), in (.+)', line)
-        if file_match:
-            filepath, lineno, funcname = file_match.groups()
-            if not _should_skip_frame(filepath):
-                # Ray doesn't preserve locals, so use empty dict
-                frames.append((filepath, int(lineno), funcname, {}))
-    
-    return frames
-
-
-def _extract_frames(
-    error: Exception,
-    ray_task_error: Exception | None = None,
-) -> list[tuple[str, int, str, dict]]:
-    """
-    Unified frame extraction that works for both native exceptions and Ray errors.
-    
-    First tries to extract frames from the error's __traceback__.
-    If that's empty and ray_task_error is provided, falls back to parsing
-    the Ray error string representation.
-    """
-    # Try native traceback extraction first
-    frames = _extract_frames_from_traceback(error)
-    
-    # If empty and we have a Ray error, try string parsing
-    if not frames and ray_task_error is not None:
-        frames = _extract_frames_from_ray_error(ray_task_error)
-    
-    return frames
+def _extract_frames(error: Exception) -> list[tuple[str, int, str, dict]]:
+    """Extract traceback frames from a standard exception."""
+    return _extract_frames_from_traceback(error)
 
 
 def _display_formatted_error_and_exit(
@@ -464,9 +416,6 @@ def _display_formatted_error_and_exit(
     pbar: tqdm | None = None,
 ) -> None:
     """Display a formatted error and exit the process."""
-    # Suppress additional error logs
-    os.environ['RAY_IGNORE_UNHANDLED_ERRORS'] = '1'
-
     # Close progress bar cleanly if provided
     if pbar is not None:
         pbar.close()
@@ -527,39 +476,6 @@ def _exit_on_worker_error(
     )
 
 
-def _exit_on_ray_error(
-    ray_task_error: Exception,
-    pbar: tqdm | None = None,
-    caller_info: dict | None = None,
-) -> None:
-    """Display a clean traceback for a RayTaskError and exit the process."""
-    # Get the exception info
-    cause = (
-        ray_task_error.cause
-        if hasattr(ray_task_error, 'cause')
-        else None
-    )
-    if cause is None:
-        cause = ray_task_error.__cause__
-
-    exc_type_name = type(cause).__name__ if cause else 'Error'
-    exc_msg = str(cause) if cause else str(ray_task_error)
-    
-    frames = []
-    if cause:
-        frames = _extract_frames_from_traceback(cause)
-    if not frames:
-        frames = _extract_frames_from_ray_error(ray_task_error)
-    _display_formatted_error_and_exit(
-        exc_type_name=exc_type_name,
-        exc_msg=exc_msg,
-        frames=frames,
-        caller_info=caller_info,
-        backend='ray',
-        pbar=pbar,
-    )
-
-
 # ─── Process/thread tracking ────────────────────────────────────
 
 SPEEDY_RUNNING_PROCESSES: list[psutil.Process] = []
@@ -606,24 +522,6 @@ def _track_multiprocessing_processes() -> None:
         _track_processes(new_processes)
     except Exception:
         # Don't fail if process tracking fails
-        pass
-
-
-def _track_ray_processes() -> None:
-    """Track Ray worker processes when Ray is initialized."""
-    try:
-        current_pid = os.getpid()
-        parent = psutil.Process(current_pid)
-        ray_processes = []
-        for child in parent.children(recursive=True):
-            try:
-                name = child.name().lower()
-                if 'ray' in name or 'worker' in name:
-                    ray_processes.append(child)
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
-        _track_processes(ray_processes)
-    except Exception:
         pass
 
 
@@ -923,15 +821,12 @@ __all__ = [
     '_should_skip_frame',
     '_format_traceback_lines',
     '_extract_frames_from_traceback',
-    '_extract_frames_from_ray_error',
     '_display_formatted_error_and_exit',
     '_exit_on_worker_error',
-    '_exit_on_ray_error',
     # Process tracking
     '_prune_dead_processes',
     '_track_processes',
     '_track_multiprocessing_processes',
-    '_track_ray_processes',
     # Log gating
     '_LOG_GATE_CACHE',
     '_should_allow_worker_logs',

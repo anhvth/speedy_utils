@@ -8,9 +8,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Install dependencies
 uv sync
 
-# Install with optional ray extras
-uv sync --extra ray
-
 # Run tests
 uv run pytest
 
@@ -64,7 +61,6 @@ def some_function():
 | Module | Import Time | Strategy |
 |--------|-------------|----------|
 | `torch` | ~5s | Lazy import in GPU functions |
-| `ray` | ~10s | Lazy import in distributed functions |
 | `matplotlib` | ~3.6s | Lazy import in plotting functions |
 | `pandas` | ~1.3s | Lazy import in data functions |
 | `IPython` | ~1s | Lazy import in notebook functions |
@@ -72,7 +68,7 @@ def some_function():
 ### Using the _LazyModule Pattern
 
 ```python
-from speedy_utils.__imports import pd, ray, plt
+from speedy_utils.__imports import pd, plt
 
 def process_data():
     df = pd.DataFrame()  # pandas imports here, not at module load
@@ -87,14 +83,13 @@ Three main packages under `src/`:
 
 - **`speedy_utils`**: Core utilities (caching, IO, parallel processing, timing)
   - `common/`: Cache (`memoize`, `imemoize`), IO (`load_json_or_pickle`), logging, error handling
-  - `multi_worker/`: `multi_thread`, `multi_process`, Ray dataset processing
-  - `__imports.py`: Lazy-loaded heavy dependencies (torch, ray, pandas, matplotlib)
+  - `multi_worker/`: `multi_thread`, `multi_process`, dataset sharding helpers
+  - `__imports.py`: Lazy-loaded heavy dependencies (torch, pandas, matplotlib)
 
 - **`llm_utils`**: LLM integration layer
-  - `lm/llm.py`: Main `LLM` class with OpenAI/VLLM support, structured outputs, caching
+  - `lm/llm.py`: Main `LLM` class with OpenAI-compatible client support, structured outputs, caching
   - `lm/openai_memoize.py`: `MOpenAI` - memoized OpenAI client
   - `chat_format/`: Transform between ChatML, ShareGPT, text formats
-  - `vector_cache/`: Embedding-based response caching
 
 - **`vision_utils`**: Image processing utilities
   - `io_utils.py`: Image loading, video frame extraction
@@ -146,7 +141,6 @@ The package provides these CLI commands:
 - `mpython`: Run Python scripts across multiple tmux windows with GPU/CPU allocation
 - `kill-mpython`: Kill all mpython sessions
 - `sp_chat`: Interactive chat CLI
-- `svllm`: Start VLLM server
 - `spu-prefetch-large-model`: Prefetch models to disk cache
 
 ## Code Style

@@ -1,9 +1,9 @@
 """
 Dataset sharding utilities for parallel processing with merge.
 
-This module provides utilities for processing large HuggingFace datasets in parallel
-by sharding them across workers, processing each shard independently, and then
-merging the results back together.
+This module provides utilities for processing large HuggingFace datasets in
+parallel by sharding them across workers, processing each shard independently,
+and then merging the results back together.
 """
 
 import os
@@ -29,7 +29,6 @@ def multi_process_dataset(
     seed: Optional[int] = None,
     debug: bool = False,
     debug_size: int = 10000,
-    backend: str = 'ray'
 ) -> str:
     """
     Process a dataset in parallel using sharding and multiprocessing.
@@ -52,8 +51,6 @@ def multi_process_dataset(
         seed: Random seed for shuffling (if None, no shuffling)
         debug: If True, process only a subset of data for debugging
         debug_size: Number of examples to use in debug mode
-        backend: Backend for multiprocessing ('ray' or 'process')
-        
     Returns:
         str: Path to the final merged dataset
         
@@ -76,7 +73,7 @@ def multi_process_dataset(
             debug=True
         )
     """
-    from ..multi_worker import multi_process
+    from .process import multi_process
     
     # Determine number of workers
     if num_workers is None:
@@ -119,20 +116,12 @@ def multi_process_dataset(
     total_items = len(dataset)
     logger.info(f"Processing {total_items:,} examples using {num_workers} workers...")
     
-    # Enable item-level progress tracking for Ray backend
-    multi_process_kwargs = {
-        'workers': num_workers,
-        'backend': backend,
-    }
-    if backend == 'ray':
-        multi_process_kwargs['total_items'] = total_items
-        multi_process_kwargs['desc'] = f"Processing {total_items:,} items"
-        multi_process_kwargs['poll_interval'] = 0.3
-    
     output_paths = multi_process(
-        _process_shard_wrapper, 
+        _process_shard_wrapper,
         list_args,
-        **multi_process_kwargs
+        workers=num_workers,
+        backend='mp',
+        desc=f"Processing {total_items:,} items",
     )
     
     # Concatenate shards
@@ -182,9 +171,6 @@ def _process_shard_wrapper(args: Dict[str, Any]) -> str:
     Returns:
         str: Path to the processed shard
         
-    Note:
-        Progress tracking is automatically available via report_progress()
-        when using Ray backend with item-level tracking enabled.
     """
     from datasets import Dataset
     
@@ -203,5 +189,4 @@ def _process_shard_wrapper(args: Dict[str, Any]) -> str:
     logger.info(f"Processing shard {shard_idx+1}/{total_shards} with {len(shard)} examples")
     
     # Process the shard with remaining kwargs
-    # User code can call report_progress() directly for centralized tracking
     return process_func(shard, output_path, **args)

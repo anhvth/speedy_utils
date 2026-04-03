@@ -3,9 +3,10 @@ from __future__ import annotations
 import importlib
 from typing import Any
 
+
 # NOTE:
 # Keep `import speedy_utils` fast (<0.4s) by deferring heavy imports (numpy, torch,
-# ray, pandas, matplotlib, etc.) until attributes are actually accessed.
+# pandas, matplotlib, etc.) until attributes are actually accessed.
 #
 # This module preserves the previous "kitchen-sink" namespace behavior via:
 # - explicit lazy exports for Speedy Utils APIs
@@ -110,10 +111,7 @@ __all__ = [
     "multi_process",
     "multi_thread",
     "kill_all_thread",
-    "multi_process_dataset_ray",
     "multi_process_dataset",
-    "WorkerResources",
-    "report_progress",
     # Notebook utilities
     "change_dir",
 ]
@@ -170,16 +168,10 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "multi_process": ("speedy_utils.multi_worker.process", "multi_process"),
     "kill_all_thread": ("speedy_utils.multi_worker.thread", "kill_all_thread"),
     "multi_thread": ("speedy_utils.multi_worker.thread", "multi_thread"),
-    "WorkerResources": ("speedy_utils.multi_worker.dataset_ray", "WorkerResources"),
-    "multi_process_dataset_ray": (
-        "speedy_utils.multi_worker.dataset_ray",
-        "multi_process_dataset_ray",
-    ),
     "multi_process_dataset": (
         "speedy_utils.multi_worker.dataset_sharding",
         "multi_process_dataset",
     ),
-    "report_progress": ("speedy_utils.multi_worker.progress", "report_progress"),
 }
 
 _IMPORTS_MODULE = None
@@ -215,4 +207,3 @@ def __getattr__(name: str) -> Any:
 def __dir__() -> list[str]:
     # Avoid importing speedy_utils.__imports on dir(); keep it cheap.
     return sorted({*globals().keys(), *_LAZY_ATTRS.keys(), *__all__})
-

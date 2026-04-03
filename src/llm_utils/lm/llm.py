@@ -1,34 +1,19 @@
 # type: ignore
 
-"""
-Simplified LLM Task module for handling language model interactions with structured input/output.
-"""
-
-import subprocess
-import warnings
+"""Runtime LLM wrapper for OpenAI-compatible chat and text completions."""
 
 # Typing imports
-from collections.abc import AsyncIterator, Iterator
+import json
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from httpx import Timeout
 from loguru import logger
 from pydantic import BaseModel
 
 from speedy_utils import clean_traceback
-from speedy_utils.common.utils_io import jdumps
 
-from .base_prompt_builder import BasePromptBuilder
-from .mixins import (
-    ModelUtilsMixin,
-    TemperatureRangeMixin,
-    TokenizationMixin,
-    TwoStepPydanticMixin,
-    VLLMMixin,
-)
 from .utils import (
-    _extract_port_from_vllm_cmd,
     get_base_client,
 )
 
@@ -47,54 +32,39 @@ if TYPE_CHECKING:
 # Type aliases for better readability
 Messages = list[dict]  # Simplified type, actual type validated at runtime
 
-class LLM(
-    TemperatureRangeMixin,
-    TwoStepPydanticMixin,
-    VLLMMixin,
-    ModelUtilsMixin,
-    TokenizationMixin,
-):
-    """LLM task with structured input/output handling."""
+
+class LLM:
+    """LLM task with runtime response-model selection."""
+
+    _LEGACY_CONSTRUCTOR_KEYS = {
+        "input_model",
+        "output_model",
+        "response_model",
+        "is_reasoning_model",
+    }
 
     def __init__(
         self,
-        instruction: str | None = None,
-        input_model: type[BaseModel] | type[str] = str,
-        output_model: type[BaseModel] | type[str] = None,
         client: "OpenAI | int | str | None" = None,  # type: ignore[name-defined]
         cache=True,
-        force_lora_unload: bool = False,
-        lora_path: str | None = None,
-        vllm_cmd: str | None = None,
-        vllm_timeout: int = 1200,
-        vllm_reuse: bool = True,
         verbose=False,
         timeout: float | Timeout | None = None,
         enable_thinking: bool | None = None,
         **model_kwargs,
     ):
         """Initialize LLMTask."""
-        if verbose:
-            available_models = LLM.list_models(client=client)
-            logger.info(f"Available models: {available_models}")
-        if "is_reasoning_model" in model_kwargs:
-            model_kwargs.pop("is_reasoning_model")
-            warnings.warn(
-                "`is_reasoning_model` is deprecated and no longer needed. "
-                "Reasoning content is now auto-detected from responses.",
-                FutureWarning,
-                stacklevel=2,
+        legacy_keys = [
+            key for key in self._LEGACY_CONSTRUCTOR_KEYS if key in model_kwargs
+        ]
+        if legacy_keys:
+            legacy_keys = sorted(legacy_keys)
+            raise TypeError(
+                "LLM no longer accepts legacy constructor arguments: "
+                + ", ".join(legacy_keys)
+                + ". Pass response_model at call time or use LLMSignature for "
+                "signature-backed defaults."
             )
-        self.instruction = instruction
-        self.input_model = input_model
-        self.output_model = output_model
         self.model_kwargs = model_kwargs
-        self.force_lora_unload = force_lora_unload
-        self.lora_path = lora_path
-        self.vllm_cmd = vllm_cmd
-        self.vllm_timeout = vllm_timeout
-        self.vllm_reuse = vllm_reuse
-        self.vllm_process: subprocess.Popen | None = None
         self.timeout = timeout
         self.enable_thinking = enable_thinking
         self.last_ai_response = None  # Store raw response from client
@@ -107,21 +77,10 @@ class LLM(
             if isinstance(api_key, str) and api_key:
                 self.api_key = api_key
 
-        # Handle VLLM server startup if vllm_cmd is provided
-        if self.vllm_cmd:
-            self._setup_vllm_server()
-
-            # Set client to use the VLLM server port if not explicitly provided
-            port = _extract_port_from_vllm_cmd(self.vllm_cmd)
-            if client is None:
-                client = port
-
         self.client = get_base_client(
             client,
             cache=cache,
             api_key=self.api_key,
-            vllm_cmd=self.vllm_cmd,
-            vllm_process=self.vllm_process,
         )
         # check connection of client
         try:
@@ -132,12 +91,12 @@ class LLM(
             )
             raise e
 
+        if verbose:
+            available_models = [model.id for model in self.client.models.list().data]
+            logger.info(f"Available models: {available_models}")
+
         if not self.model_kwargs.get("model", ""):
             self.model_kwargs["model"] = self.client.models.list().data[0].id
-
-        # Handle LoRA loading if lora_path is provided
-        if self.lora_path:
-            self._load_lora_adapter()
 
     @property
     def model(self) -> str:
@@ -146,14 +105,6 @@ class LLM(
         if not model:
             logger.warning("No model specified in model_kwargs")
         return model
-
-    def __enter__(self):
-        """Context manager entry."""
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit with cleanup."""
-        self.cleanup_vllm_server()
 
     def _prepare_input(self, input_data: str | BaseModel | list[dict]) -> Messages:
         """Convert input to messages format."""
@@ -168,21 +119,11 @@ class LLM(
         elif hasattr(input_data, "model_dump_json"):
             user_content = input_data.model_dump_json()
         elif isinstance(input_data, dict):
-            user_content = jdumps(input_data)
+            user_content = json.dumps(input_data, ensure_ascii=False, indent=2)
         else:
             user_content = str(input_data)
 
-        # Build messages
-        messages = (
-            [
-                {"role": "system", "content": self.instruction},
-            ]
-            if self.instruction is not None
-            else []
-        )
-
-        messages.append({"role": "user", "content": user_content})
-        return cast(Messages, messages)
+        return cast(Messages, [{"role": "user", "content": user_content}])
 
     def _build_api_kwargs(
         self,
@@ -226,14 +167,58 @@ class LLM(
                 return reasoning
         return None
 
+    @staticmethod
+    def _get_completion_choices(completion: Any) -> Any:
+        """Return the choices collection from a completion-like object."""
+        choices = getattr(completion, "choices", None)
+        if choices is None and isinstance(completion, dict):
+            choices = completion.get("choices")
+        return choices
+
+    @staticmethod
+    def _get_choice_message(choice: Any) -> Any:
+        """Return the assistant message from a choice-like object."""
+        message = getattr(choice, "message", None)
+        if message is None and isinstance(choice, dict):
+            message = choice.get("message")
+        return message
+
+    def _set_cache(self, cache: bool | None) -> None:
+        """Update client-side caching when supported."""
+        if cache is None:
+            return
+        if hasattr(self.client, "set_cache"):
+            self.client.set_cache(cache)
+            return
+        logger.warning("Client does not support caching.")
+
+    @staticmethod
+    def _require_single_choice(runtime_kwargs: dict[str, Any]) -> None:
+        """Reject multi-choice requests in the simplified public API."""
+        n = runtime_kwargs.get("n", 1)
+        if n != 1:
+            raise ValueError("LLM only supports n=1")
+
+    def _record_history(self, choice_messages: Messages) -> None:
+        """Track recent message history for debugging helpers."""
+        if not hasattr(self, "_last_conversations"):
+            self._last_conversations = []
+        else:
+            self._last_conversations = self._last_conversations[-100:]
+        self._last_conversations.append(choice_messages)
+
     @clean_traceback
-    def text_completion(
+    def _text_completion(
         self,
         input_data: str | BaseModel | list[dict],
+        *,
+        cache: bool | None = None,
         enable_thinking: bool | None = None,
         **runtime_kwargs,
     ) -> list[dict[str, Any]]:
-        """Execute LLM task and return text responses."""
+        """Execute a text completion and return normalized internal results."""
+        self._set_cache(cache)
+        self._require_single_choice(runtime_kwargs)
         # Prepare messages
         messages = self._prepare_input(input_data)
 
@@ -280,44 +265,69 @@ class LLM(
             raise
         # print(completion)
 
-        results: list[dict[str, Any]] = []
-        for choice in completion.choices:
-            assistant_message = [
-                {"role": "assistant", "content": choice.message.content}
-            ]
-            reasoning_content = self._extract_reasoning_content(choice.message)
-            if reasoning_content:
-                assistant_message[0]["reasoning_content"] = reasoning_content
+        choices = getattr(completion, "choices", None)
+        if not choices:
+            raise ValueError("No choices returned from completion.")
 
-            choice_messages = cast(
-                Messages,
-                messages + assistant_message,
-            )
-            result_dict = {
-                "parsed": choice.message.content,
-                "messages": choice_messages,
-            }
-            if reasoning_content:
-                result_dict["reasoning_content"] = reasoning_content
+        choice = choices[0]
+        assistant_message = [{"role": "assistant", "content": choice.message.content}]
+        reasoning_content = self._extract_reasoning_content(choice.message)
+        if reasoning_content:
+            assistant_message[0]["reasoning_content"] = reasoning_content
 
-            results.append(result_dict)
-        return results
+        choice_messages = cast(Messages, messages + assistant_message)
+        result = {
+            "parsed": choice.message.content,
+            "messages": choice_messages,
+        }
+        if reasoning_content:
+            result["reasoning_content"] = reasoning_content
+
+        self._record_history(choice_messages)
+        return [result]
 
     @clean_traceback
-    def complete_message(
+    def chat_completion(
         self,
         input_data: str | BaseModel | list[dict],
+        *,
+        cache: bool | None = None,
         enable_thinking: bool | None = None,
         **runtime_kwargs,
     ) -> Any:
-        """
-        Execute LLM task and return only `completion.choices[0].message`.
+        """Execute a chat completion and return the first assistant message."""
+        self._text_completion(
+            input_data,
+            cache=cache,
+            enable_thinking=enable_thinking,
+            **runtime_kwargs,
+        )
+        completion = self.last_ai_response
+        if completion is None:
+            raise ValueError("No completion returned from API.")
+        completion_choices = self._get_completion_choices(completion)
+        if not completion_choices:
+            raise ValueError("No choices returned from completion.")
+        message = self._get_choice_message(completion_choices[0])
+        if message is None:
+            raise ValueError("No message returned from completion.")
+        return message
 
-        This method is intentionally stateless: it does not update
-        `self.last_ai_response` or conversation history attributes, making it
-        safe for concurrent use where shared mutable state is undesirable.
-        """
-        messages = self._prepare_input(input_data)
+    def _generate_response(
+        self,
+        prompt: str,
+        *,
+        cache: bool | None = None,
+        enable_thinking: bool | None = None,
+        **runtime_kwargs,
+    ) -> dict[str, Any]:
+        """Return normalized generation metadata for raw prompt usage."""
+        if not isinstance(prompt, str):
+            raise TypeError("generate expects `prompt` to be a string")
+
+        self._set_cache(cache)
+        self._require_single_choice(runtime_kwargs)
+
         effective_kwargs = {**self.model_kwargs, **runtime_kwargs}
         model_name, api_kwargs = self._build_api_kwargs(
             effective_kwargs,
@@ -325,9 +335,12 @@ class LLM(
         )
 
         try:
-            completion = self.client.chat.completions.create(
-                model=model_name, messages=messages, **api_kwargs
+            completion = self.client.completions.create(
+                model=model_name,
+                prompt=prompt,
+                **api_kwargs,
             )
+            self.last_ai_response = completion
         except Exception as exc:
             from openai import (
                 APITimeoutError,
@@ -356,16 +369,51 @@ class LLM(
                 ) from exc
             raise
 
-        if not completion.choices:
+        choices = getattr(completion, "choices", None)
+        if not choices:
             raise ValueError("No choices returned from completion.")
-        return completion.choices[0].message
 
-    # Backward compatibility alias
-    def first_message_completion(self, *args, **kwargs) -> Any:
-        """Alias for complete_message() for backward compatibility."""
-        return self.complete_message(*args, **kwargs)
+        choice = choices[0]
+        text = getattr(choice, "text", None)
+        if text is None and isinstance(choice, dict):
+            text = choice.get("text")
+        finish_reason = getattr(choice, "finish_reason", None)
+        if finish_reason is None and isinstance(choice, dict):
+            finish_reason = choice.get("finish_reason")
 
-    def stream_text_completion(
+        choice_messages = cast(
+            Messages,
+            self._prepare_input(prompt)
+            + [{"role": "assistant", "content": str(text or "")}],
+        )
+        self._record_history(choice_messages)
+
+        output = {
+            "text": str(text or ""),
+            "finish_reason": finish_reason,
+        }
+        if finish_reason is not None:
+            output["stop"] = finish_reason
+        return output
+
+    def generate(
+        self,
+        prompt: str,
+        *,
+        cache: bool | None = None,
+        enable_thinking: bool | None = None,
+        **runtime_kwargs,
+    ) -> str:
+        """Generate text from a raw prompt string via the completions API."""
+        result = self._generate_response(
+            prompt,
+            cache=cache,
+            enable_thinking=enable_thinking,
+            **runtime_kwargs,
+        )
+        return str(result.get("text") or "")
+
+    def _stream_chat_completion(
         self,
         input_data: str | BaseModel | list[dict],
         enable_thinking: bool | None = None,
@@ -402,7 +450,7 @@ class LLM(
             model=model_name, messages=messages, stream=True, **api_kwargs
         )
 
-    def stream_print(
+    def _stream_print(
         self,
         input_data: str | BaseModel | list[dict],
         show_reasoning: bool | None = None,
@@ -435,7 +483,7 @@ class LLM(
             else show_reasoning
         )
 
-        stream = self.stream_text_completion(input_data, **runtime_kwargs)
+        stream = self._stream_chat_completion(input_data, **runtime_kwargs)
 
         content_parts: list[str] = []
         reasoning_printed = False
@@ -473,12 +521,27 @@ class LLM(
     @clean_traceback
     def pydantic_parse(
         self,
-        input_data: str | BaseModel | list[dict],
-        response_model: type[BaseModel] | None | type[str] = None,
+        input_data: str | list[dict],
+        *,
+        response_model: type[BaseModel],
+        cache: bool | None = None,
         enable_thinking: bool | None = None,
         **runtime_kwargs,
-    ) -> list[dict[str, Any]]:
-        """Execute LLM task and return parsed Pydantic model responses."""
+    ) -> BaseModel:
+        """Execute a structured completion and return the parsed model."""
+        if not isinstance(input_data, str) and not isinstance(input_data, list):
+            raise TypeError(
+                "pydantic_parse expects `input_data` to be a string or message list."
+            )
+        if not isinstance(response_model, type) or not issubclass(
+            response_model, BaseModel
+        ):
+            raise TypeError(
+                "pydantic_parse expects `response_model` to be a Pydantic BaseModel subclass."
+            )
+
+        self._set_cache(cache)
+        self._require_single_choice(runtime_kwargs)
         # Prepare messages
         messages = self._prepare_input(input_data)
 
@@ -489,13 +552,8 @@ class LLM(
             enable_thinking=enable_thinking,
         )
 
-        pydantic_model_to_use_opt = response_model or self.output_model
-        if pydantic_model_to_use_opt is None:
-            raise ValueError(
-                "No response model specified. Either set output_model in constructor or pass response_model parameter."
-            )
         pydantic_model_to_use: type[BaseModel] = cast(
-            type[BaseModel], pydantic_model_to_use_opt
+            type[BaseModel], response_model
         )
         try:
             completion = self.client.chat.completions.parse(
@@ -523,70 +581,54 @@ class LLM(
                 ) from exc
             raise
 
-        results: list[dict[str, Any]] = []
-        for choice in completion.choices:  # type: ignore[attr-defined]
-            choice_messages = cast(
-                Messages,
-                messages + [{"role": "assistant", "content": choice.message.content}],
-            )
+        choices = getattr(completion, "choices", None)
+        if not choices:
+            raise ValueError("No choices returned from completion.")
 
-            # Ensure consistent Pydantic model output for both fresh and cached responses
-            parsed_content = choice.message.parsed  # type: ignore[attr-defined]
-            if isinstance(parsed_content, dict):
-                # Cached response: validate dict back to Pydantic model
-                parsed_content = pydantic_model_to_use.model_validate(parsed_content)
-            elif not isinstance(parsed_content, pydantic_model_to_use):
-                # Fallback: ensure it's the correct type
-                parsed_content = pydantic_model_to_use.model_validate(parsed_content)
+        choice = choices[0]
+        choice_messages = cast(
+            Messages,
+            messages + [{"role": "assistant", "content": choice.message.content}],
+        )
 
-            result_dict = {"parsed": parsed_content, "messages": choice_messages}
+        # Ensure consistent Pydantic model output for both fresh and cached responses
+        parsed_content = choice.message.parsed  # type: ignore[attr-defined]
+        if isinstance(parsed_content, dict):
+            # Cached response: validate dict back to Pydantic model
+            parsed_content = pydantic_model_to_use.model_validate(parsed_content)
+        elif not isinstance(parsed_content, pydantic_model_to_use):
+            # Fallback: ensure it's the correct type
+            parsed_content = pydantic_model_to_use.model_validate(parsed_content)
 
-            reasoning_content = self._extract_reasoning_content(choice.message)
-            if reasoning_content:
-                choice_messages[-1]["reasoning_content"] = reasoning_content
-                result_dict["reasoning_content"] = reasoning_content
-
-            results.append(result_dict)
-        return results
+        reasoning_content = self._extract_reasoning_content(choice.message)
+        if reasoning_content:
+            choice_messages[-1]["reasoning_content"] = reasoning_content
+        self._record_history(choice_messages)
+        return cast(BaseModel, parsed_content)
 
     def __call__(
         self,
         input_data: str | BaseModel | list[dict],
         response_model: type[BaseModel] | type[str] | None = None,
-        two_step_parse_pydantic: bool = False,
-        temperature_ranges: tuple[float, float] | None = None,
         n: int = 1,
         cache=None,
         stream: bool = False,
         enable_thinking: bool | None = None,
+        return_dict: bool = False,
         **openai_client_kwargs,
-    ) -> list[dict[str, Any]] | Any:
-        """
-        Execute LLM task.
+    ) -> Any:
+        """Convenience wrapper around the explicit runtime methods."""
 
-        Args:
-            input_data: Input data (string, BaseModel, or message list)
-            response_model: Optional response model override
-            two_step_parse_pydantic: Use two-step parsing (text then parse)
-            temperature_ranges: If set, tuple of (min_temp, max_temp) to sample
-            n: Number of temperature samples (only used with temperature_ranges, must be >= 2)
-            stream: If True, stream text completion with cache support (only for text output)
-            cache: Whether to use caching (default None uses instance setting)
-            **runtime_kwargs: Additional runtime parameters
-
-        Returns:
-            List of response dictionaries, or raw stream response object if stream=True.
-            When stream=True, the caller should iterate over the response using `for chunk in response`.
-        """
-        if cache is not None:
-            if hasattr(self.client, "set_cache"):
-                self.client.set_cache(cache)
-            else:
-                logger.warning("Client does not support caching.")
+        if n != 1:
+            raise ValueError("LLM only supports n=1")
 
         # Handle streaming (only for text completion)
         if stream:
-            pydantic_model = response_model or self.output_model
+            if return_dict:
+                raise ValueError(
+                    "Streaming is only supported with the default return value."
+                )
+            pydantic_model = response_model
             if pydantic_model not in (str, None):
                 raise ValueError(
                     "Streaming is only supported for text completions, not structured outputs. "
@@ -601,56 +643,78 @@ class LLM(
             # Explicitly disable caching on the client to prevent pickle errors
             if hasattr(self.client, "set_cache"):
                 self.client.set_cache(False)
-            return self.stream_text_completion(
+            return self._stream_chat_completion(
                 input_data,
                 enable_thinking=enable_thinking,
                 **openai_client_kwargs,
             )
 
-        # Handle temperature range sampling
-        if temperature_ranges is not None:
-            if n < 2:
-                raise ValueError(
-                    f"n must be >= 2 when using temperature_ranges, got {n}"
+        pydantic_model = response_model
+        if return_dict:
+            if pydantic_model in (str, None):
+                result = self._text_completion(
+                    input_data,
+                    cache=cache,
+                    enable_thinking=enable_thinking,
+                    **openai_client_kwargs,
+                )[0]
+            else:
+                parsed = self.pydantic_parse(
+                    input_data,
+                    response_model=cast(type[BaseModel], pydantic_model),
+                    cache=cache,
+                    enable_thinking=enable_thinking,
+                    **openai_client_kwargs,
                 )
-            return self.temperature_range_sampling(
+                completion = self.last_ai_response
+                if completion is None:
+                    raise ValueError("No completion returned from API.")
+                completion_choices = self._get_completion_choices(completion)
+                if not completion_choices:
+                    raise ValueError("No choices returned from completion.")
+                message = self._get_choice_message(completion_choices[0])
+                if message is None:
+                    raise ValueError("No message returned from completion.")
+                result = {
+                    "parsed": parsed,
+                    "messages": self._last_conversations[-1],
+                    "completion": completion,
+                    "message": message,
+                }
+                reasoning_content = self._extract_reasoning_content(message)
+                if reasoning_content:
+                    result["reasoning_content"] = reasoning_content
+                return result
+
+            completion = self.last_ai_response
+            if completion is None:
+                raise ValueError("No completion returned from API.")
+            completion_choices = self._get_completion_choices(completion)
+            if not completion_choices:
+                raise ValueError("No choices returned from completion.")
+            message = self._get_choice_message(completion_choices[0])
+            if message is None:
+                raise ValueError("No message returned from completion.")
+            result["completion"] = completion
+            result["message"] = message
+            return result
+
+        if pydantic_model in (str, None):
+            return self.chat_completion(
                 input_data,
-                temperature_ranges=temperature_ranges,
-                n=n,
-                response_model=response_model,
+                cache=cache,
                 enable_thinking=enable_thinking,
                 **openai_client_kwargs,
             )
-        openai_client_kwargs["n"] = n
+        return self.pydantic_parse(
+            input_data,
+            response_model=cast(type[BaseModel], pydantic_model),
+            cache=cache,
+            enable_thinking=enable_thinking,
+            **openai_client_kwargs,
+        )
 
-        # Handle two-step Pydantic parsing
-        pydantic_model = response_model or self.output_model
-        if two_step_parse_pydantic and pydantic_model not in (str, None):
-            choices = self.two_step_pydantic_parse(
-                input_data,
-                response_model=pydantic_model,
-                enable_thinking=enable_thinking,
-                **openai_client_kwargs,
-            )
-        else:
-            choices = self.__inner_call__(
-                input_data,
-                response_model=response_model,
-                two_step_parse_pydantic=False,
-                enable_thinking=enable_thinking,
-                **openai_client_kwargs,
-            )
-
-        # Track conversation history
-        _last_conv = choices[0]["messages"] if choices else []
-        if not hasattr(self, "_last_conversations"):
-            self._last_conversations = []
-        else:
-            self._last_conversations = self._last_conversations[-100:]
-        self._last_conversations.append(_last_conv)
-        return choices
-
-    def inspect_history(
+    def _inspect_history(
         self, idx: int = -1, k_last_messages: int = 2
     ) -> list[dict[str, Any]]:
         """Inspect the message history of a specific response choice."""
@@ -663,85 +727,4 @@ class LLM(
             return show_chat(conv)
         raise ValueError("No message history available. Make a call first.")
 
-    def __inner_call__(
-        self,
-        input_data: str | BaseModel | list[dict],
-        response_model: type[BaseModel] | type[str] | None = None,
-        two_step_parse_pydantic: bool = False,
-        **runtime_kwargs,
-    ) -> list[dict[str, Any]]:
-        """
-        Internal call handler. Delegates to text() or parse() based on model.
-
-        Note: two_step_parse_pydantic is deprecated here; use the public
-        __call__ method which routes to the mixin.
-        """
-        pydantic_model_to_use = response_model or self.output_model
-
-        if pydantic_model_to_use is str or pydantic_model_to_use is None:
-            return self.text_completion(input_data, **runtime_kwargs)
-        return self.pydantic_parse(
-            input_data,
-            response_model=response_model,
-            **runtime_kwargs,
-        )
-
-    # Backward compatibility aliases
-    def text(self, *args, **kwargs) -> list[dict[str, Any]]:
-        """Alias for text_completion() for backward compatibility."""
-        return self.text_completion(*args, **kwargs)
-
-    def parse(self, *args, **kwargs) -> list[dict[str, Any]]:
-        """Alias for pydantic_parse() for backward compatibility."""
-        return self.pydantic_parse(*args, **kwargs)
-
-    @classmethod
-    def from_prompt_builder(
-        cls: BasePromptBuilder,
-        client: "OpenAI | int | str | None" = None,  # type: ignore[name-defined]
-        cache=True,
-        lora_path: str | None = None,
-        vllm_cmd: str | None = None,
-        vllm_timeout: int = 0.1,
-        vllm_reuse: bool = True,
-        timeout: float | Timeout | None = None,
-        **model_kwargs,
-    ) -> "LLM":
-        """
-        Create an LLMTask instance from a BasePromptBuilder instance.
-
-        This method extracts the instruction, input model, and output model
-        from the provided builder and initializes an LLMTask accordingly.
-
-        Args:
-            builder: BasePromptBuilder instance
-            client: OpenAI client, port number, or base_url string
-            cache: Whether to use cached responses (default True)
-            lora_path: Optional path to LoRA adapter directory
-            vllm_cmd: Optional VLLM command to start server automatically
-            vllm_timeout: Timeout in seconds to wait for VLLM server (default 120)
-            vllm_reuse: If True (default), reuse existing server on target port
-            timeout: Optional OpenAI client timeout in seconds
-            **model_kwargs: Additional model parameters
-        """
-        instruction = cls.get_instruction()
-        input_model = cls.get_input_model()
-        output_model = cls.get_output_model()
-
-        # Extract data from the builder to initialize LLMTask
-        return LLM(
-            instruction=instruction,
-            input_model=input_model,
-            output_model=output_model,
-            client=client,
-            cache=cache,
-            lora_path=lora_path,
-            vllm_cmd=vllm_cmd,
-            vllm_timeout=vllm_timeout,
-            vllm_reuse=vllm_reuse,
-            timeout=timeout,
-            **model_kwargs,
-        )
-
-
-from .llm_qwen3 import LLM_Qwen3, LLM_Qwen3_Reasoning
+from .llm_qwen3 import Qwen3LLM

@@ -1,6 +1,6 @@
 # Qwen3 Debug Runner
 
-This script is a small local helper for exercising `LLM_Qwen3_Reasoning.generate_with_prefix()`.
+This script is a small local helper for exercising `Qwen3LLM.generate_with_prefix()`.
 It is useful when you want to control how many tokens are spent on reasoning versus the final answer.
 
 ## What It Does
@@ -30,7 +30,7 @@ The helper:
 The current script uses:
 
 ```python
-llm = LLM_Qwen3_Reasoning(client=8001)
+llm = Qwen3LLM(client=8001)
 ```
 
 So `8001` is the expected backend port unless you change it in the script.
@@ -44,9 +44,9 @@ So `8001` is the expected backend port unless you change it in the script.
 Example workflow:
 
 ```python
-from llm_utils import LLM_Qwen3_Reasoning
+from llm_utils import Qwen3LLM
 
-llm = LLM_Qwen3_Reasoning(client=8001)
+llm = Qwen3LLM(client=8001)
 ```
 
 Then adjust the budgets:
@@ -85,4 +85,3 @@ If you need tool calling, use the higher-level chat flow instead of this debug s
 - Use a larger `content_max_tokens` when you want long answers
 - Change the initial user message in the script to test prompts that are closer to your real workload
 - Keep `n=1`; this helper is designed for a single continuation path
-

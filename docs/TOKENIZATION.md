@@ -271,7 +271,7 @@ print(f'Total tokens: {len(prompt_tokens) + len(generated_tokens)}')
 
 ## Requirements
 
-The tokenization and generation functionality requires a VLLM server (or compatible API) that implements:
+The tokenization and generation functionality requires an OpenAI-compatible server that implements:
 - `/tokenize` endpoint (accepts `TokenizeCompletionRequest`)
 - `/detokenize` endpoint (accepts `DetokenizeRequest`)
 - `/inference/v1/generate` endpoint (accepts `GenerateRequest`)

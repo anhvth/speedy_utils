@@ -10,7 +10,7 @@ from llm_utils.lm import LLM
 
 def main():
     """Demonstrate encode/decode functionality."""
-    # Initialize LLM with your VLLM server
+    # Initialize LLM with your OpenAI-compatible server
     lm = LLM(base_url='http://localhost:8000/v1')
     
     # Example text

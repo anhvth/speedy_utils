@@ -92,7 +92,7 @@ python examples/tokenization_example.py
 
 ## Requirements
 
-- VLLM server (or compatible) running with tokenization endpoints
+- OpenAI-compatible server running with tokenization endpoints
 - `requests` library (already a dependency)
 
 ## Benefits

@@ -64,9 +64,6 @@ def import_pandas():
 def import_torch():
     import torch
 
-def import_ray():
-    import ray
-
 def import_matplotlib():
     import matplotlib
     import matplotlib.pyplot
@@ -159,7 +156,6 @@ def main():
         ("numpy", import_numpy),
         ("pandas", import_pandas),
         ("torch", import_torch),
-        ("ray", import_ray),
         ("matplotlib", import_matplotlib),
 
         # IPython/Jupyter (optional)

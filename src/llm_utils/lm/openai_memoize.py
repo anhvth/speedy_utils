@@ -4,8 +4,6 @@ from urllib.parse import urlparse
 
 from loguru import logger
 
-from speedy_utils.common.utils_cache import memoize
-
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI, OpenAI
@@ -97,6 +95,8 @@ def _get_mopenai_class():
 
         def set_cache(self, cache: bool) -> None:
             """Enable or disable caching of the post method."""
+            from speedy_utils.common.utils_cache import memoize
+
             if cache and self.post == self._orig_post:
                 self.post = memoize(self._orig_post)  # type: ignore
             elif not cache and self.post != self._orig_post:
@@ -141,6 +141,8 @@ def _get_masyncopenai_class():
 
         def set_cache(self, cache: bool) -> None:
             """Enable or disable caching of the post method."""
+            from speedy_utils.common.utils_cache import memoize
+
             if cache and self.post == self._orig_post:
                 self.post = memoize(self._orig_post)  # type: ignore
             elif not cache and self.post != self._orig_post:

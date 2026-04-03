@@ -82,7 +82,7 @@ def test_scalar_single_param():
         inp,
         num_threads=2,
         progress=False,
-        backend="safe",
+        backend="thread",
     ) == [
         2,
         4,
@@ -92,7 +92,10 @@ def test_scalar_single_param():
 
 def test_string_scalar():
     inp = ["ab", "cd"]
-    assert multi_process(to_upper, inp, progress=False, backend="safe") == ["AB", "CD"]
+    assert multi_process(to_upper, inp, progress=False, backend="thread") == [
+        "AB",
+        "CD",
+    ]
 
 
 def test_batch_ordered():
@@ -104,7 +107,7 @@ def test_batch_ordered():
         ordered=True,
         num_threads=4,
         progress=False,
-        backend="safe",
+        backend="thread",
     )
     assert out == [i * i for i in inp]
 
@@ -117,7 +120,7 @@ def test_unordered():
         ordered=False,
         num_threads=8,
         progress=False,
-        backend="safe",
+        backend="thread",
     )
     assert sorted(out) == [i * i for i in inp]
 
@@ -125,19 +128,15 @@ def test_unordered():
 def test_stop_on_error_false():
     """Test that with stop_on_error=False, errors don't halt processing."""
     inp = list(range(5))
-    # With error_handler='log' (default), errors are logged but processing continues
-    # Items that error return None
     result = multi_process(
         maybe_fail,
         inp,
-        stop_on_error=False,
+        error_handler="log",
         num_threads=2,
         progress=False,
-        backend="safe",
+        backend="thread",
     )
-    # Item at index 3 should fail and return None (maybe_fail raises at x==3)
     assert result[3] is None
-    # Other items should process successfully
     assert result[0] == 0
     assert result[1] == 1
     assert result[2] == 2
@@ -152,7 +151,7 @@ def test_multi_process_vs_serial():
         inp,
         num_threads=4,
         progress=False,
-        backend="safe",
+        backend="thread",
     )
     dur_mp = time.perf_counter() - start_mp
 
@@ -182,7 +181,7 @@ def test_process_vs_thread_heavy():
         inp,
         num_threads=4,
         progress=False,
-        backend="safe",
+        backend="thread",
     )
     dur_proc = time.perf_counter() - start_proc
 
@@ -266,9 +265,9 @@ def test_workers_alias_maps_to_num_procs():
     assert out == [i * i for i in inp]
 
 
-def test_workers_and_num_procs_conflict_raises():
-    with pytest.raises(ValueError, match="must match"):
-        multi_process(
+def test_workers_and_num_procs_prefers_num_procs():
+    with pytest.deprecated_call(match="num_procs"):
+        out = multi_process(
             square,
             [1, 2, 3],
             workers=2,
@@ -276,6 +275,7 @@ def test_workers_and_num_procs_conflict_raises():
             progress=False,
             backend="mp",
         )
+    assert out == [1, 4, 9]
 
 
 def test_safe_backend_ignores_num_procs_and_honors_num_threads():
@@ -286,7 +286,7 @@ def test_safe_backend_ignores_num_procs_and_honors_num_threads():
         num_procs=8,
         num_threads=2,
         progress=False,
-        backend="safe",
+        backend="thread",
     )
     assert out == [i * i for i in inp]
 

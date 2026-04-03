@@ -142,21 +142,12 @@ def test_stop_on_error_false():
         return _sleepy(x)
 
     inp = list(range(5))
-    out = multi_thread(f, inp, stop_on_error=False, workers=2, progress=False)
-    print('Input:', inp)
-    print('Output:', out)
-    num_errors = out.count(None)
-    print('Number of errors (None):', num_errors)
-    for idx, val in enumerate(out):
-        if idx == 3:
-            print(f'Index {idx}: Expected None, got {val}')
-        else:
-            print(f'Index {idx}: Expected {idx}, got {val}')
-    assert num_errors == 1, f'Expected 1 error, got {num_errors}'
-    assert out[3] is None, f'Expected None at index 3, got {out[3]}'
+    out = multi_thread(f, inp, error_handler='log', workers=2, progress=False)
+    assert out.count(None) == 1
+    assert out[3] is None
     for i, val in enumerate(out):
         if i != 3:
-            assert val == i, f'Expected {i} at index {i}, got {val}'
+            assert val == i
 
 
 def test_kill_all_thread_interrupts_sleepy_workers():
@@ -263,7 +254,7 @@ def test_speedy_vs_normal():
 
     # First try: Basic configuration - no progress bar
     start_time = time.time()
-    out1 = multi_thread(f, inp, workers=4, progress=True, stop_on_error=False)
+    out1 = multi_thread(f, inp, workers=4, progress=True, error_handler='log')
     mt_time = time.time() - start_time
     print(f'Speedy multi-threading took: {mt_time:.4f} seconds')
 

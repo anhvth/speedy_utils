@@ -94,20 +94,6 @@ cd speedy
 uv sync
 ```
 
-### Extras
-
-Optional dependencies can be installed via extras. For the `ray` backend
-support (requires Python >= 3.9):
-
-```bash
-pip install 'speedy-utils[ray]'
-# or
-uv pip install 'speedy-utils[ray]'
-
-# developing this repo
-uv sync --extra ray
-```
-
 ## Updating from previous versions
 
 To update from previous versions or switch to v1.x, first uninstall any old
@@ -252,7 +238,6 @@ results = multi_process(
 | `'mp'` | Multi-processing with optional inner threads | CPU-bound work, bypasses GIL |
 | `'safe'` | In-process thread pool (for testing) | Debugging, unit tests |
 | `'seq'` | Sequential execution | Debugging, reproducibility |
-| `'ray'` | Ray distributed backend | Distributed computing |
 
 **When to use `num_procs` vs `num_threads`:**
 
@@ -500,7 +485,7 @@ clock.log()
 
 ### LLM
 
-The `LLM` class provides a unified interface for language model interactions with structured input/output handling. It supports text completion, structured outputs, caching, streaming, and VLLM integration.
+The `LLM` class provides a unified interface for language model interactions with structured input/output handling. It supports text completion, structured outputs, caching, streaming, and OpenAI-compatible client integration.
 
 #### Basic Text Completion
 
@@ -513,9 +498,8 @@ llm = LLM(
 )
 
 # Simple text completion
-results = llm("What is Python?")
-print(results[0]["parsed"])  # The text response
-print(results[0]["messages"])  # Full conversation history
+message = llm.chat_completion("What is Python?")
+print(message.content)  # The text response
 ```
 
 #### Structured Output with Pydantic
@@ -530,12 +514,13 @@ class Sentiment(BaseModel):
 
 llm = LLM(
     instruction="Analyze the sentiment of the input.",
-    output_model=Sentiment,
     model="gpt-4o-mini"
 )
 
-results = llm("I love this product!")
-parsed: Sentiment = results[0]["parsed"]
+parsed: Sentiment = llm.pydantic_parse(
+    "I love this product!",
+    response_model=Sentiment,
+)
 print(f"Sentiment: {parsed.sentiment}, Confidence: {parsed.confidence}")
 ```
 
@@ -566,31 +551,11 @@ from openai import OpenAI
 custom_client = OpenAI(base_url="http://localhost:8000/v1", api_key="your-key")
 llm = LLM(client=custom_client, model="llama-2-7b")
 
-# Using a port number (for VLLM servers)
+# Using a port number
 llm = LLM(client=8000, model="llama-2-7b")
 
 # Using a base URL string
 llm = LLM(client="http://localhost:8000/v1", model="llama-2-7b")
-```
-
-#### VLLM Integration
-
-Start and manage VLLM servers automatically:
-
-```python
-from llm_utils import LLM
-
-llm = LLM(
-    vllm_cmd="vllm serve meta-llama/Llama-2-7b-chat-hf --port 8000",
-    model="meta-llama/Llama-2-7b-chat-hf"
-)
-
-# The server starts automatically and is cleaned up on exit
-results = llm("Hello!")
-
-# Cleanup is automatic when using context manager
-with LLM(vllm_cmd="vllm serve ...") as llm:
-    results = llm("Hello!")
 ```
 
 #### Caching
@@ -623,13 +588,13 @@ from llm_utils import LLM
 # For models like DeepSeek-R1 that output reasoning
 llm = LLM(model="deepseek-reasoner")
 
-results = llm("Solve this math problem: 15 * 23")
+message = llm.chat_completion("Solve this math problem: 15 * 23")
 
 # Access the final answer
-answer = results[0]["parsed"]
+answer = message.content
 
 # Access reasoning content when the response includes it
-reasoning = results[0].get("reasoning_content")
+reasoning = getattr(message, "reasoning_content", None)
 ```
 
 #### Conversation History

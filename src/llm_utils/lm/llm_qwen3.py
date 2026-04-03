@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import warnings
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple
 
 from pydantic import BaseModel
 
@@ -16,6 +16,14 @@ ASSISTANT_PREFIX = "<|im_start|>assistant"
 THINK_START = "<think>"
 THINK_END = "</think>"
 ASSISTANT_END = "<|im_end|>"
+
+
+class PrefixCompletionState(NamedTuple):
+    assistant_prompt_prefix: str
+    reasoning: str | None
+    content: str | None
+    think_done: bool
+    stop_reason: str | None
 
 
 def split_assistant_parts(text: str) -> tuple[str | None, str | None, bool]:
@@ -85,7 +93,7 @@ def strip_assistant_end(text: str) -> str:
     return text
 
 
-class LLM_Qwen3_Reasoning(LLM):
+class Qwen3LLM(LLM):
     """Qwen3 helper for staged generation with a partial assistant prefix."""
 
     TOKENIZER_NAME: ClassVar[str] = "Qwen/Qwen3-0.6B"
@@ -118,6 +126,51 @@ class LLM_Qwen3_Reasoning(LLM):
             cls._tokenizer = tokenizer
         return tokenizer
 
+    @staticmethod
+    def _validate_prefix_completion_kwargs(
+        *,
+        n: int,
+        thinking_max_tokens: int | None = None,
+        content_max_tokens: int | None = None,
+        require_thinking_max_tokens: bool = False,
+        require_content_max_tokens: bool = False,
+    ) -> None:
+        if n != 1:
+            raise ValueError("generate_with_prefix only supports n=1")
+
+        if thinking_max_tokens is None:
+            if require_thinking_max_tokens:
+                raise ValueError("thinking_max_tokens must not be None")
+        elif thinking_max_tokens <= 0:
+            raise ValueError("thinking_max_tokens must be > 0")
+
+        if content_max_tokens is None:
+            if require_content_max_tokens:
+                raise ValueError("content_max_tokens must not be None")
+        elif content_max_tokens <= 0:
+            raise ValueError("content_max_tokens must be > 0")
+
+    @staticmethod
+    def _build_prefix_state(
+        assistant_prompt_prefix: str,
+        *,
+        stop_reason: str | None = None,
+    ) -> PrefixCompletionState:
+        reasoning, content, think_done = split_assistant_parts(
+            assistant_prompt_prefix
+        )
+        return PrefixCompletionState(
+            assistant_prompt_prefix=build_assistant_prefix(
+                reasoning,
+                content,
+                think_done,
+            ),
+            reasoning=reasoning,
+            content=content,
+            think_done=think_done,
+            stop_reason=stop_reason,
+        )
+
     def _generate_with_prefix_step(
         self,
         messages: Messages,
@@ -133,14 +186,72 @@ class LLM_Qwen3_Reasoning(LLM):
         prompt_to_continue = prompt + assistant_prompt_prefix
 
         call_kwargs = {
-            k: v for k, v in runtime_kwargs.items() if k != "extra_body"
+            k: v
+            for k, v in runtime_kwargs.items()
+            if k not in {"extra_body", "max_tokens"}
         }
         call_kwargs.setdefault("max_tokens", 1)
 
-        result = self.generate(prompt_to_continue, **call_kwargs)
+        result = self._generate_response(prompt_to_continue, **call_kwargs)
         text = str(result.get("text") or "")
         stop_reason = result.get("stop", result.get("finish_reason"))
         return text, stop_reason
+
+    def _complete_reasoning(
+        self,
+        messages: Messages,
+        assistant_prompt_prefix: str,
+        *,
+        thinking_max_tokens: int,
+        **runtime_kwargs,
+    ) -> PrefixCompletionState:
+        state = self._build_prefix_state(assistant_prompt_prefix)
+        if state.think_done:
+            return state._replace(stop_reason=None)
+
+        ret, stop_reason = self._generate_with_prefix_step(
+            messages,
+            state.assistant_prompt_prefix,
+            max_tokens=thinking_max_tokens,
+            **runtime_kwargs,
+        )
+
+        state = self._build_prefix_state(
+            state.assistant_prompt_prefix + strip_assistant_end(ret),
+            stop_reason=stop_reason,
+        )
+
+        if not state.think_done:
+            state = self._build_prefix_state(
+                state.assistant_prompt_prefix + "\n</think>\n\n",
+                stop_reason=stop_reason,
+            )
+
+        return state
+
+    def _complete_content(
+        self,
+        messages: Messages,
+        completion_state: PrefixCompletionState,
+        *,
+        content_max_tokens: int,
+        **runtime_kwargs,
+    ) -> "ChatCompletionMessage":
+        ret, _ = self._generate_with_prefix_step(
+            messages,
+            completion_state.assistant_prompt_prefix,
+            max_tokens=content_max_tokens,
+            **runtime_kwargs,
+        )
+
+        state = self._build_prefix_state(
+            completion_state.assistant_prompt_prefix + strip_assistant_end(ret)
+        )
+
+        return self._build_openai_message(
+            reasoning=state.reasoning,
+            content=state.content or "",
+        )
 
     def _build_openai_message(
         self,
@@ -157,6 +268,64 @@ class LLM_Qwen3_Reasoning(LLM):
             message_kwargs["reasoning_content"] = reasoning
         return ChatCompletionMessage(**message_kwargs)
 
+    def complete_reasoning(
+        self,
+        input_data: str | BaseModel | list[dict],
+        assistant_prompt_prefix: str = "<think>\n",
+        *,
+        thinking_max_tokens: int | None = None,
+        **runtime_kwargs,
+    ) -> PrefixCompletionState:
+        """
+        Complete the reasoning phase and return the updated prefix state.
+
+        The returned state can be passed to `complete_content()` to finish the
+        answer generation.
+        """
+        self._validate_prefix_completion_kwargs(
+            n=runtime_kwargs.get("n", 1),
+            thinking_max_tokens=thinking_max_tokens,
+            require_thinking_max_tokens=True,
+        )
+        assert thinking_max_tokens is not None
+
+        messages = self._prepare_input(input_data)
+        return self._complete_reasoning(
+            messages,
+            assistant_prompt_prefix,
+            thinking_max_tokens=thinking_max_tokens,
+            **runtime_kwargs,
+        )
+
+    def complete_content(
+        self,
+        input_data: str | BaseModel | list[dict],
+        completion_state: PrefixCompletionState | str,
+        *,
+        content_max_tokens: int | None = None,
+        **runtime_kwargs,
+    ) -> "ChatCompletionMessage":
+        """
+        Complete the visible answer from an already completed reasoning state.
+        """
+        self._validate_prefix_completion_kwargs(
+            n=runtime_kwargs.get("n", 1),
+            content_max_tokens=content_max_tokens,
+            require_content_max_tokens=True,
+        )
+        assert content_max_tokens is not None
+
+        if isinstance(completion_state, str):
+            completion_state = self._build_prefix_state(completion_state)
+
+        messages = self._prepare_input(input_data)
+        return self._complete_content(
+            messages,
+            completion_state,
+            content_max_tokens=content_max_tokens,
+            **runtime_kwargs,
+        )
+
     def generate_with_prefix(
         self,
         input_data: str | BaseModel | list[dict],
@@ -172,83 +341,35 @@ class LLM_Qwen3_Reasoning(LLM):
         This is useful for Qwen3-style reasoning traces where we want to seed
         or continue a `<think>...</think>` block before the final answer.
         """
-        if runtime_kwargs.get("n", 1) != 1:
-            raise ValueError("generate_with_prefix only supports n=1")
-        if thinking_max_tokens is None:
-            raise ValueError("thinking_max_tokens must not be None")
-        if content_max_tokens is None:
-            raise ValueError("content_max_tokens must not be None")
-        if thinking_max_tokens <= 0:
-            raise ValueError("thinking_max_tokens must be > 0")
-        if content_max_tokens <= 0:
-            raise ValueError("content_max_tokens must be > 0")
+        self._validate_prefix_completion_kwargs(
+            n=runtime_kwargs.get("n", 1),
+            thinking_max_tokens=thinking_max_tokens,
+            content_max_tokens=content_max_tokens,
+            require_thinking_max_tokens=True,
+            require_content_max_tokens=True,
+        )
+        assert thinking_max_tokens is not None
+        assert content_max_tokens is not None
 
         messages = self._prepare_input(input_data)
-        reasoning, content, think_done = split_assistant_parts(
-            assistant_prompt_prefix
-        )
-        assistant_prompt_prefix = build_assistant_prefix(
-            reasoning,
-            content,
-            think_done,
-        )
-
-        thinking_stop_reason: str | None = None
-
-        if not think_done:
-            ret, thinking_stop_reason = self._generate_with_prefix_step(
-                messages,
-                assistant_prompt_prefix,
-                max_tokens=thinking_max_tokens,
-                **runtime_kwargs,
-            )
-
-            ret = strip_assistant_end(ret)
-            assistant_prompt_prefix += ret
-            reasoning, content, think_done = split_assistant_parts(
-                assistant_prompt_prefix
-            )
-
-            if not think_done:
-                # Force the model out of the reasoning phase once the
-                # dedicated thinking budget is exhausted.
-                assistant_prompt_prefix += "\n</think>\n\n"
-                reasoning, content, think_done = split_assistant_parts(
-                    assistant_prompt_prefix
-                )
-
-            if is_content_done(content, thinking_stop_reason):
-                return self._build_openai_message(
-                    reasoning=reasoning,
-                    content=content,
-                )
-
-        ret, _ = self._generate_with_prefix_step(
+        reasoning_state = self._complete_reasoning(
             messages,
             assistant_prompt_prefix,
-            max_tokens=content_max_tokens,
+            thinking_max_tokens=thinking_max_tokens,
             **runtime_kwargs,
         )
+        if is_content_done(
+            reasoning_state.content,
+            reasoning_state.stop_reason,
+        ):
+            return self._build_openai_message(
+                reasoning=reasoning_state.reasoning,
+                content=reasoning_state.content,
+            )
 
-        ret = strip_assistant_end(ret)
-        assistant_prompt_prefix += ret
-        reasoning, content, think_done = split_assistant_parts(
-            assistant_prompt_prefix
+        return self._complete_content(
+            messages,
+            reasoning_state,
+            content_max_tokens=content_max_tokens,
+            **runtime_kwargs,
         )
-
-        return self._build_openai_message(
-            reasoning=reasoning,
-            content=content or "",
-        )
-
-    def generate_with_think_prefix(
-        self,
-        input_data: str | BaseModel | list[dict],
-        **runtime_kwargs,
-    ) -> "ChatCompletionMessage":
-        """Backward-compatible alias for prefilling a `<think>` block."""
-        runtime_kwargs.setdefault("assistant_prompt_prefix", "<think>\n")
-        return self.generate_with_prefix(input_data, **runtime_kwargs)
-
-
-LLM_Qwen3 = LLM_Qwen3_Reasoning

@@ -1,6 +1,7 @@
-from llm_utils import LLM_Qwen3_Reasoning
+from llm_utils import Qwen3LLM
 
-llm = LLM_Qwen3_Reasoning(client=8001)
+
+llm = Qwen3LLM(client=8001)
 
 msg = llm.generate_with_prefix(
     [{"role": "user", "content": "hi"}],

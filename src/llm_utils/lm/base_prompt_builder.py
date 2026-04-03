@@ -4,11 +4,24 @@
 Simplified LLM Task module for handling language model interactions with structured input/output.
 """
 
+import json
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    Type,
+    TypeVar,
+    Union,
+    cast,
+)
 
 from pydantic import BaseModel, create_model
+
 
 # Lazy import openai types for type checking only
 if TYPE_CHECKING:
@@ -18,9 +31,6 @@ if TYPE_CHECKING:
 
 # Type aliases for better readability
 Messages = list[dict]  # Simplified type, actual type validated at runtime
-
-import json
-from typing import TypeVar
 
 
 B = TypeVar('B', bound='BasePromptBuilder')
@@ -263,6 +273,23 @@ class BasePromptBuilder(BaseModel, ABC):
                 ]
             }
         raise ValueError("format must be either 'json' or 'markdown'")
+
+    def init_llm(
+        self,
+        client=None,
+        cache=True,
+        timeout=None,
+        **model_kwargs,
+    ):
+        """Create an LLM instance using this builder's prompt data."""
+        from .llm import LLM
+
+        return LLM(
+            client=client,
+            cache=cache,
+            timeout=timeout,
+            **model_kwargs,
+        )
 
     def __str__(self) -> str:
         # Return clean format without explicit role prefixes
