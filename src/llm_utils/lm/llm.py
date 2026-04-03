@@ -6,10 +6,10 @@ Simplified LLM Task module for handling language model interactions with structu
 
 import subprocess
 import warnings
-from copy import deepcopy
 
 # Typing imports
 from collections.abc import AsyncIterator, Iterator
+from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 
 from httpx import Timeout
@@ -470,46 +470,6 @@ class LLM(
 
         return "".join(content_parts)
 
-    @staticmethod
-    def _strip_think_tags(text: str) -> str:
-        """Remove <think> tags if present, returning only the reasoning body."""
-        cleaned = text.strip()
-        if cleaned.startswith("<think>"):
-            cleaned = cleaned[len("<think>") :].lstrip()
-        if "</think>" in cleaned:
-            cleaned = cleaned.split("</think>", 1)[0].rstrip()
-        return cleaned
-
-    def generate_with_think_prefix(
-        self, input_data: str | BaseModel | list[dict], **runtime_kwargs
-    ) -> list[dict[str, Any]]:
-        """
-        Generate text and format output as:
-        <think>reasoning</think>
-        """
-        results = self.text_completion(input_data, **runtime_kwargs)
-
-        for result in results:
-            content = result.get("parsed") or ""
-            reasoning = result.get("reasoning_content") or ""
-
-            if not reasoning and str(content).lstrip().startswith("<think>"):
-                formatted = str(content)
-            else:
-                reasoning_body = self._strip_think_tags(str(reasoning))
-                formatted = (
-                    f"<think>\n{reasoning_body}\n</think>\n\n{str(content).lstrip()}"
-                )
-
-            result["parsed"] = formatted
-            messages = result.get("messages")
-            if isinstance(messages, list) and messages:
-                last_msg = messages[-1]
-                if isinstance(last_msg, dict) and last_msg.get("role") == "assistant":
-                    last_msg["content"] = formatted
-
-        return results
-
     @clean_traceback
     def pydantic_parse(
         self,
@@ -784,78 +744,4 @@ class LLM(
         )
 
 
-# class LLM_NEMOTRON3(LLM):
-#     """
-#     Custom implementation for NVIDIA Nemotron-3 reasoning models.
-#     Supports thinking budget control and native reasoning tags.
-#     """
-
-#     def __init__(
-#         self,
-#         model: str = "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
-#         thinking_budget: int = 1024,
-#         enable_thinking: bool = True,
-#         **kwargs,
-#     ):
-#         # Force reasoning_model to True to enable reasoning_content extraction
-#         kwargs["is_reasoning_model"] = True
-#         super().__init__(**kwargs)
-
-#         self.model_kwargs["model"] = model
-#         self.thinking_budget = thinking_budget
-#         self.enable_thinking = enable_thinking
-
-#     def _prepare_input(self, input_data: str | BaseModel | list[dict]) -> Messages:
-#         """Override to ensure Nemotron chat template requirements are met."""
-#         messages = super()._prepare_input(input_data)
-#         return messages
-
-#     def __call__(
-#         self,
-#         input_data: str | BaseModel | list[dict],
-#         thinking_budget: Optional[int] = None,
-#         **kwargs,
-#     ) -> List[Dict[str, Any]]:
-#         budget = thinking_budget or self.thinking_budget
-
-#         if not self.enable_thinking:
-#             # Simple pass with thinking disabled in template
-#             return super().__call__(
-#                 input_data, chat_template_kwargs={"enable_thinking": False}, **kwargs
-#             )
-
-#         # --- STEP 1: Generate Thinking Trace ---
-#         # We manually append <think> to force the reasoning MoE layers
-#         messages = self._prepare_input(input_data)
-
-#         # We use the raw text completion for the budget phase
-#         # Stop at the closing tag or budget limit
-#         thinking_response = self.text_completion(
-#             input_data, max_tokens=budget, stop=["</think>"], **kwargs
-#         )[0]
-
-#         reasoning_content = thinking_response["parsed"]
-
-#         # Ensure proper tag closing for the second pass
-#         if "</think>" not in reasoning_content:
-#             reasoning_content = f"{reasoning_content}\n</think>"
-#         elif not reasoning_content.endswith("</think>"):
-#             # Ensure it ends exactly with the tag for continuity
-#             reasoning_content = reasoning_content.split("</think>")[0] + "</think>"
-
-#         # --- STEP 2: Generate Final Answer ---
-#         # Append the thought to the assistant role and continue
-#         final_messages = messages + [
-#             {"role": "assistant", "content": f"<think>\n{reasoning_content}\n"}
-#         ]
-
-#         # Use continue_final_message to prevent the model from repeating the header
-#         results = super().__call__(
-#             final_messages, extra_body={"continue_final_message": True}, **kwargs
-#         )
-
-#         # Inject the reasoning back into the result for the UI/API
-#         for res in results:
-#             res["reasoning_content"] = reasoning_content
-
-#         return results
+from .llm_qwen3 import LLM_Qwen3, LLM_Qwen3_Reasoning

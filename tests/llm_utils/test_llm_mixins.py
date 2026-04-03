@@ -2,20 +2,25 @@
 
 import io
 import unittest
+import warnings
 from contextlib import redirect_stdout
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
+from openai.types.chat import ChatCompletionMessage
 from pydantic import BaseModel
 
+
 try:
-    from llm_utils.lm.llm import LLM
+    from llm_utils.lm.llm import LLM, LLM_Qwen3, LLM_Qwen3_Reasoning
     from llm_utils.lm.mixins import TemperatureRangeMixin, TwoStepPydanticMixin
     LLM_AVAILABLE = True
 except ImportError:
     LLM_AVAILABLE = False
     LLM = None
+    LLM_Qwen3 = None
+    LLM_Qwen3_Reasoning = None
     TemperatureRangeMixin = None
     TwoStepPydanticMixin = None
 
@@ -223,6 +228,291 @@ class TestLLMTimeout(unittest.TestCase):
         _, kwargs = mock_client.chat.completions.create.call_args
         self.assertIn('timeout', kwargs)
         self.assertEqual(kwargs['timeout'], 1.0)
+
+
+class TestLLMQwen3Reasoning(unittest.TestCase):
+    """Verify prefix continuation flow for Qwen3 reasoning models."""
+
+    def test_llm_qwen3_alias_points_to_reasoning_helper(self):
+        self.assertIs(LLM_Qwen3, LLM_Qwen3_Reasoning)
+
+    @staticmethod
+    def _make_mock_client():
+        mock_client = MagicMock()
+        mock_model = MagicMock(id='test-model')
+        mock_client.models.list.return_value = MagicMock(data=[mock_model])
+        return mock_client
+
+    class _StrictCompletions:
+        def __init__(self, completion):
+            self.calls = []
+            self._completion = completion
+
+        def create(
+            self,
+            *,
+            model,
+            messages,
+            extra_body=None,
+            timeout=None,
+            n=1,
+            max_tokens=None,
+        ):
+            self.calls.append(
+                {
+                    'model': model,
+                    'messages': messages,
+                    'extra_body': extra_body,
+                    'timeout': timeout,
+                    'n': n,
+                    'max_tokens': max_tokens,
+                }
+            )
+            return self._completion
+
+    class _StrictChat:
+        def __init__(self, completion):
+            self.completions = TestLLMQwen3Reasoning._StrictCompletions(
+                completion
+            )
+
+    class _StrictClient:
+        def __init__(self, completion, model='test-model'):
+            self.chat = TestLLMQwen3Reasoning._StrictChat(completion)
+            self.models = MagicMock()
+            self.models.list.return_value = MagicMock(
+                data=[MagicMock(id=model)]
+            )
+            self.base_url = 'http://worker-10:8002/v1'
+
+    @staticmethod
+    def _make_text_completion(content='hello', finish_reason='stop'):
+        mock_choice = MagicMock()
+        mock_choice.message.content = content
+        mock_choice.finish_reason = finish_reason
+        return MagicMock(choices=[mock_choice])
+
+    @patch('llm_utils.lm.llm.get_base_client')
+    def test_generate_with_prefix_returns_reasoning_and_content(
+        self, mock_get_client
+    ):
+        mock_get_client.return_value = self._make_mock_client()
+        llm = LLM_Qwen3_Reasoning()
+
+        with patch.object(
+            llm,
+            '_generate_with_prefix_step',
+            side_effect=[
+                ('reasoning step</think> final answer', 'stop'),
+            ],
+        ):
+            result = llm.generate_with_prefix(
+                'prompt',
+                assistant_prompt_prefix='<think>\nseed',
+                thinking_max_tokens=32,
+                content_max_tokens=64,
+            )
+
+        self.assertIsInstance(result, ChatCompletionMessage)
+        self.assertEqual(result.role, 'assistant')
+        self.assertEqual(result.content, 'final answer')
+        self.assertEqual(result.reasoning_content, 'seedreasoning step')
+
+    @patch('llm_utils.lm.llm.get_base_client')
+    def test_generate_with_prefix_force_closes_thinking_after_limit(
+        self, mock_get_client
+    ):
+        mock_get_client.return_value = self._make_mock_client()
+        llm = LLM_Qwen3_Reasoning()
+
+        with patch.object(
+            llm,
+            '_generate_with_prefix_step',
+            side_effect=[
+                ('still thinking', 'length'),
+                ('final answer', 'stop'),
+            ],
+        ):
+            result = llm.generate_with_prefix(
+                'prompt',
+                assistant_prompt_prefix='<think>\nseed',
+                thinking_max_tokens=32,
+                content_max_tokens=64,
+            )
+
+        self.assertEqual(result.content, 'final answer')
+        self.assertEqual(result.reasoning_content, 'seedstill thinking')
+
+    @patch('llm_utils.lm.llm.get_base_client')
+    def test_generate_with_prefix_requires_explicit_token_budgets(
+        self, mock_get_client
+    ):
+        mock_get_client.return_value = self._make_mock_client()
+        llm = LLM_Qwen3_Reasoning()
+
+        with self.assertRaises(ValueError):
+            llm.generate_with_prefix(
+                'prompt',
+                content_max_tokens=64,
+            )
+
+        with self.assertRaises(ValueError):
+            llm.generate_with_prefix(
+                'prompt',
+                thinking_max_tokens=32,
+            )
+
+    @patch('llm_utils.lm.llm.get_base_client')
+    def test_generate_with_prefix_returns_openai_message(
+        self, mock_get_client
+    ):
+        mock_get_client.return_value = self._make_mock_client()
+        llm = LLM_Qwen3_Reasoning()
+
+        with patch.object(
+            llm,
+            '_generate_with_prefix_step',
+            side_effect=[
+                ('reasoning step</think> final answer', 'stop'),
+            ],
+        ):
+            result = llm.generate_with_prefix(
+                'prompt',
+                assistant_prompt_prefix='<think>\nseed',
+                thinking_max_tokens=32,
+                content_max_tokens=64,
+            )
+
+        self.assertIsInstance(result, ChatCompletionMessage)
+        self.assertEqual(result.role, 'assistant')
+        self.assertEqual(result.content, 'final answer')
+        self.assertEqual(result.reasoning_content, 'seedreasoning step')
+
+    @patch('llm_utils.lm.llm.get_base_client')
+    def test_generate_with_prefix_uses_prompt_generation(
+        self, mock_get_client
+    ):
+        mock_get_client.return_value = self._make_mock_client()
+        llm = LLM_Qwen3_Reasoning()
+
+        fake_tokenizer = MagicMock()
+        fake_tokenizer.apply_chat_template.return_value = 'PROMPT::user'
+
+        with (
+            patch.object(
+                LLM_Qwen3_Reasoning,
+                '_get_tokenizer',
+                return_value=fake_tokenizer,
+            ),
+            patch.object(
+                llm,
+                'generate',
+                return_value={
+                    'text': ' reasoning step</think> final answer',
+                    'finish_reason': 'stop',
+                },
+            ) as mock_generate,
+        ):
+            text, stop_reason = llm._generate_with_prefix_step(
+                [{'role': 'user', 'content': 'hi'}],
+                '<think>\nseed',
+                max_tokens=64,
+            )
+
+        self.assertEqual(text, ' reasoning step</think> final answer')
+        self.assertEqual(stop_reason, 'stop')
+        fake_tokenizer.apply_chat_template.assert_called_once_with(
+            [{'role': 'user', 'content': 'hi'}],
+            tokenize=False,
+            add_generation_prompt=False,
+        )
+        mock_generate.assert_called_once_with(
+            'PROMPT::user<think>\nseed',
+            max_tokens=64,
+        )
+
+    @patch('llm_utils.lm.llm.get_base_client')
+    def test_tokenizer_is_cached_at_class_level(self, mock_get_client):
+        mock_get_client.return_value = self._make_mock_client()
+        llm_a = LLM_Qwen3_Reasoning()
+        llm_b = LLM_Qwen3_Reasoning()
+
+        fake_tokenizer = MagicMock()
+        with (
+            patch.object(LLM_Qwen3_Reasoning, '_tokenizer', None),
+            patch(
+                'transformers.AutoTokenizer.from_pretrained',
+                return_value=fake_tokenizer,
+            ) as mock_from_pretrained,
+        ):
+            self.assertIs(llm_a._get_tokenizer(), fake_tokenizer)
+            self.assertIs(llm_b._get_tokenizer(), fake_tokenizer)
+
+        mock_from_pretrained.assert_called_once_with(
+            LLM_Qwen3_Reasoning.TOKENIZER_NAME,
+            trust_remote_code=True,
+        )
+
+    @patch('llm_utils.lm.llm.get_base_client')
+    def test_tokenizer_warning_is_suppressed(self, mock_get_client):
+        mock_get_client.return_value = self._make_mock_client()
+        llm = LLM_Qwen3_Reasoning()
+
+        fake_tokenizer = MagicMock()
+
+        def _emit_warning(*args, **kwargs):
+            import warnings
+
+            warnings.warn(
+                'None of PyTorch, TensorFlow >= 2.0, or Flax have been found. '
+                'Models won\'t be available and only tokenizers, configuration '
+                'and file/data utilities can be used.',
+                UserWarning,
+                stacklevel=2,
+            )
+            return fake_tokenizer
+
+        with (
+            patch.object(LLM_Qwen3_Reasoning, '_tokenizer', None),
+            patch(
+                'transformers.AutoTokenizer.from_pretrained',
+                side_effect=_emit_warning,
+            ),
+            warnings.catch_warnings(record=True) as caught,
+        ):
+            warnings.simplefilter('always')
+            self.assertIs(llm._get_tokenizer(), fake_tokenizer)
+
+        self.assertEqual(caught, [])
+
+    @patch('llm_utils.lm.llm.get_base_client')
+    def test_generate_with_think_prefix_alias_uses_prefix_generation(
+        self, mock_get_client
+    ):
+        mock_get_client.return_value = self._make_mock_client()
+        llm = LLM_Qwen3_Reasoning()
+
+        with patch.object(
+            llm,
+            'generate_with_prefix',
+            return_value=ChatCompletionMessage(
+                role='assistant',
+                content='final answer',
+            ),
+        ) as mock_generate_with_prefix:
+            result = llm.generate_with_think_prefix(
+                'prompt',
+                thinking_max_tokens=32,
+                content_max_tokens=64,
+            )
+
+        self.assertEqual(result.content, 'final answer')
+        mock_generate_with_prefix.assert_called_once_with(
+            'prompt',
+            assistant_prompt_prefix='<think>\n',
+            thinking_max_tokens=32,
+            content_max_tokens=64,
+        )
 
 
 class TestLLMEnableThinking(unittest.TestCase):

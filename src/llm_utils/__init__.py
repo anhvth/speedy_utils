@@ -21,6 +21,8 @@ __all__ = [
     "AsyncLM_DeepSeekR1",
     "AsyncLLMTask",
     "LLM",
+    "LLM_Qwen3",
+    "LLM_Qwen3_Reasoning",
     "LLMRay",
     "MOpenAI",
     "get_model_name",
@@ -42,6 +44,8 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "LLMRay": ("llm_utils.llm_ray", "LLMRay"),
     # lm exports
     "LLM": ("llm_utils.lm", "LLM"),
+    "LLM_Qwen3": ("llm_utils.lm", "LLM_Qwen3"),
+    "LLM_Qwen3_Reasoning": ("llm_utils.lm", "LLM_Qwen3_Reasoning"),
     "AsyncLLMTask": ("llm_utils.lm", "AsyncLLMTask"),
     "AsyncLM": ("llm_utils.lm", "AsyncLM"),
     "AsyncLM_Qwen3": ("llm_utils.lm", "AsyncLM_Qwen3"),
