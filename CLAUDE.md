@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 uv sync
 
 # Run tests
-uv run pytest
+uv run pytest -n 32
 
 # Run a single test file
 uv run pytest tests/test_thread.py

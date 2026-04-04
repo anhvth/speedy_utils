@@ -143,3 +143,8 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 # Exclude debug and example directories from test discovery
 norecursedirs = ["debug", "examples", "experiments", "notebooks", "scripts", ".git", "__pycache__"]
+
+[dependency-groups]
+dev = [
+    "pytest-xdist>=3.8.0",
+]
