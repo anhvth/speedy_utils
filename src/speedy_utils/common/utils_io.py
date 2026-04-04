@@ -60,8 +60,11 @@ def dump_json_or_pickle(
                 pickle.dump(obj, f)
         except Exception as e:
             if isinstance(obj, BaseModel):
-                data = obj.model_dump()  # type: ignore
-                from fastcore.all import dict2obj, obj2dict
+                try:
+                    data = obj.model_dump(mode='python', round_trip=True)  # type: ignore
+                except TypeError:
+                    data = obj.model_dump()  # type: ignore
+                from fastcore.all import dict2obj
 
                 obj2 = dict2obj(data)
                 with open(fname, 'wb') as f:

@@ -45,6 +45,31 @@ class TestLLMCallContract(TestCase):
         )
         return SimpleNamespace(choices=[choice], usage=usage)
 
+    @staticmethod
+    def _make_vllm_text_completion():
+        usage = SimpleNamespace(
+            completion_tokens=7,
+            prompt_tokens=11,
+            total_tokens=18,
+        )
+        choice = {
+            "finish_reason": "stop",
+            "index": 0,
+            "text": "True",
+            "logprobs": {
+                "text_offset": [0, 4],
+                "token_logprobs": [-0.11, -0.22],
+                "tokens": ["True", "False"],
+                "top_logprobs": [{"True": -0.11}, {"False": -0.22}],
+                "extra_old_field": 123,
+            },
+            "prompt_logprobs": [{"True": -0.33}],
+            "token_ids": [11, 22],
+            "prompt_token_ids": [33, 44],
+            "extra_choice_field": "vllm-extra",
+        }
+        return SimpleNamespace(choices=[choice], usage=usage)
+
     @patch("llm_utils.lm.llm.get_base_client")
     def test_chat_completion_returns_first_message(self, mock_get_client):
         mock_client = self._make_mock_client()
@@ -93,6 +118,32 @@ class TestLLMCallContract(TestCase):
         )
 
     @patch("llm_utils.lm.llm.get_base_client")
+    def test_generate_preserves_vllm_completion_metadata(self, mock_get_client):
+        mock_client = self._make_mock_client()
+        mock_get_client.return_value = mock_client
+        llm = LLM(model="test-model")
+
+        completion = self._make_vllm_text_completion()
+        mock_client.completions.create.return_value = completion
+
+        result = llm.generate("prompt")
+
+        self.assertEqual(result.text, "True")
+        self.assertEqual(result.finish_reason, "stop")
+        self.assertEqual(result.logprobs.token_logprobs, [-0.11, -0.22])
+        self.assertEqual(result.logprobs.tokens, ["True", "False"])
+        self.assertEqual(
+            result.logprobs.top_logprobs,
+            [{"True": -0.11}, {"False": -0.22}],
+        )
+        self.assertEqual(result.logprobs.extra_old_field, 123)
+        self.assertEqual(result.prompt_logprobs, [{"True": -0.33}])
+        self.assertEqual(result.token_ids, [11, 22])
+        self.assertEqual(result.prompt_token_ids, [33, 44])
+        self.assertEqual(result.extra_choice_field, "vllm-extra")
+        self.assertIs(llm.last_ai_response, completion)
+
+    @patch("llm_utils.lm.llm.get_base_client")
     def test_generate_uses_completions_api_not_chat_api(self, mock_get_client):
         mock_client = self._make_mock_client()
         mock_get_client.return_value = mock_client
@@ -106,6 +157,39 @@ class TestLLMCallContract(TestCase):
         self.assertEqual(result.text, "hello")
         mock_client.completions.create.assert_called_once()
         mock_client.chat.completions.create.assert_not_called()
+
+    @patch("llm_utils.lm.llm.get_base_client")
+    def test_generate_smoke_with_vllm_logprobs_kwargs(self, mock_get_client):
+        mock_client = self._make_mock_client()
+        mock_get_client.return_value = mock_client
+        llm = LLM(model="test-model")
+
+        completion = self._make_vllm_text_completion()
+        mock_client.completions.create.return_value = completion
+
+        result = llm.generate(
+            "prompt",
+            max_tokens=0,
+            echo=True,
+            logprobs=1,
+            temperature=0,
+        )
+
+        self.assertEqual(
+            mock_client.completions.create.call_args.kwargs,
+            {
+                "model": "test-model",
+                "prompt": "prompt",
+                "max_tokens": 0,
+                "echo": True,
+                "logprobs": 1,
+                "temperature": 0,
+            },
+        )
+        self.assertEqual(result.logprobs.token_logprobs, [-0.11, -0.22])
+        self.assertEqual(result.prompt_logprobs, [{"True": -0.33}])
+        self.assertEqual(result.token_ids, [11, 22])
+        self.assertEqual(result.prompt_token_ids, [33, 44])
 
     @patch("llm_utils.lm.llm.get_base_client")
     def test_generate_requires_string_prompt(self, mock_get_client):
@@ -263,7 +347,8 @@ class TestLLMCallContract(TestCase):
         )
 
         for kwargs in legacy_kwargs:
-            with self.subTest(kwargs=kwargs), self.assertRaises(TypeError):
+            label = next(iter(kwargs.keys()))  # Use just the key name for subTest
+            with self.subTest(kwarg=label), self.assertRaises(TypeError):
                 LLM(**kwargs)
 
     @patch("llm_utils.lm.llm.get_base_client")

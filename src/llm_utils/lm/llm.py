@@ -190,10 +190,21 @@ class LLM:
         from openai.types.completion import CompletionChoice
 
         if isinstance(choice, CompletionChoice):
-            return choice
+            return deepcopy(choice)
 
+        choice_data = LLM._completion_choice_data(choice)
+        return CompletionChoice.model_validate(choice_data)
+
+    @staticmethod
+    def _completion_choice_data(choice: Any) -> dict[str, Any]:
+        """Extract completion choice data while preserving backend metadata."""
         if hasattr(choice, "model_dump"):
-            choice_data = dict(choice.model_dump())
+            try:
+                choice_data = dict(
+                    choice.model_dump(mode="python", round_trip=True)
+                )
+            except TypeError:
+                choice_data = dict(choice.model_dump())
         elif isinstance(choice, dict):
             choice_data = dict(choice)
         elif hasattr(choice, "__dict__"):
@@ -201,7 +212,9 @@ class LLM:
         else:
             choice_data = {}
 
-        choice_data.setdefault("finish_reason", getattr(choice, "finish_reason", None))
+        choice_data.setdefault(
+            "finish_reason", getattr(choice, "finish_reason", None)
+        )
         choice_data.setdefault("index", getattr(choice, "index", 0))
         choice_data.setdefault("logprobs", getattr(choice, "logprobs", None))
         choice_data.setdefault("text", getattr(choice, "text", None))
@@ -215,7 +228,12 @@ class LLM:
             if extra_name not in choice_data and hasattr(choice, extra_name):
                 choice_data[extra_name] = getattr(choice, extra_name)
 
-        return CompletionChoice(**choice_data)
+        model_extra = getattr(choice, "model_extra", None)
+        if isinstance(model_extra, dict):
+            for key, value in model_extra.items():
+                choice_data.setdefault(key, value)
+
+        return choice_data
 
     @staticmethod
     def _get_completion_choice(completion: Any) -> "CompletionChoice":
