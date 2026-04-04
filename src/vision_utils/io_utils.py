@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-# type: ignore
 import os
 import time
+from contextlib import suppress
 from multiprocessing import cpu_count
 from pathlib import Path
 from typing import TYPE_CHECKING, Sequence, Tuple
@@ -79,7 +79,6 @@ def read_images_cpu(
         hw: Optional (height, width) for resizing.
     """
     import numpy as np
-    import numpy as np
     from PIL import Image
     from tqdm import tqdm
 
@@ -137,7 +136,6 @@ def read_images_gpu(
         device_id: GPU device id.
         verbose: If True, show progress bar.
     """
-    import numpy as np
     import numpy as np
     from nvidia.dali import fn, pipeline_def
     from nvidia.dali import types as dali_types
@@ -383,32 +381,22 @@ class ImageMmap:  # Removed Dataset base class to avoid torch import at module l
 
         self.mmap_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Try to acquire lock file
-        lock_fd = None
         try:
-            lock_fd = open(self.lock_path, "w")
-            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-
-            # We got the lock, build the cache
-            self._build_cache(current_hash, num_workers)
-
-        except BlockingIOError:
-            # Another process is building, wait for it
-            print("Another process is building the cache, waiting...")
-            if lock_fd:
-                lock_fd.close()
-            lock_fd = open(self.lock_path, "w")
-            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)  # Wait for lock
-            print("Cache built by another process!")
-
-        finally:
-            if lock_fd:
-                lock_fd.close()
-            if self.lock_path.exists():
+            with open(self.lock_path, "w") as lock_fd:
                 try:
+                    fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    # Another process is building, wait for it
+                    print("Another process is building the cache, waiting...")
+                    fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
+                    print("Cache built by another process!")
+
+                # We got the lock, build the cache
+                self._build_cache(current_hash, num_workers)
+        finally:
+            if self.lock_path.exists():
+                with suppress(Exception):
                     self.lock_path.unlink()
-                except:
-                    pass
 
     def _build_cache(self, current_hash: str, num_workers: int = None) -> None:
         from tqdm import tqdm
@@ -613,33 +601,24 @@ class ImageMmapDynamic:  # Removed Dataset base class to avoid torch import at m
         """Build dynamic mmap with a lock file to prevent concurrent writes."""
         self.mmap_path.parent.mkdir(parents=True, exist_ok=True)
 
-        lock_fd = None
+        import fcntl  # POSIX only, same as ImageMmap
+
         try:
-            import fcntl  # POSIX only, same as ImageMmap
-
-            lock_fd = open(self.lock_path, "w")
-            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-
-            # We got the lock -> build cache
-            self._build_cache(current_hash)
-        except BlockingIOError:
-            # Another process is building -> wait
-            print("Another process is building the dynamic mmap cache, waiting...")
-            if lock_fd:
-                lock_fd.close()
-            lock_fd = open(self.lock_path, "w")
-            import fcntl as _fcntl
-
-            _fcntl.flock(lock_fd.fileno(), _fcntl.LOCK_EX)  # block until released
-            print("Dynamic mmap cache built by another process!")
-        finally:
-            if lock_fd:
-                lock_fd.close()
-            if self.lock_path.exists():
+            with open(self.lock_path, "w") as lock_fd:
                 try:
+                    fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    # Another process is building -> wait
+                    print("Another process is building the dynamic mmap cache, waiting...")
+                    fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
+                    print("Dynamic mmap cache built by another process!")
+
+                # We got the lock -> build cache
+                self._build_cache(current_hash)
+        finally:
+            if self.lock_path.exists():
+                with suppress(Exception):
                     self.lock_path.unlink()
-                except Exception:
-                    pass
 
     def _build_cache(self, current_hash: str, batch_size: int = 4096) -> None:
         """
