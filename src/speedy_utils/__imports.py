@@ -39,7 +39,7 @@ import types
 import uuid
 import weakref
 from collections import Counter, OrderedDict, defaultdict
-from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from collections.abc import Callable as TypingCallable
 from concurrent.futures import (
     FIRST_COMPLETED,
@@ -343,6 +343,7 @@ __all__ = [
     "Generic",
     "IO",
     "Iterable",
+    "Iterator",
     "List",
     "Literal",
     "Mapping",
