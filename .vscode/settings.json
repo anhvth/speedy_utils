@@ -5,10 +5,34 @@
         "${workspaceFolder}/src"
     ],
     "python.analysis.exclude": [
-        "${workspaceFolder}/src/vision_utils/**"
+        "${workspaceFolder}/.venv/**",
+        // "${workspaceFolder}/src/vision_utils/**",
+        "**/node_modules",
+        "**/__pycache__",
+        "**/.*",
+        ".venv"
     ],
+    "files.exclude": {
+        "**/.venv": true,
+        "**/node_modules": true,
+        "**/__pycache__": true,
+        "**/.*": true
+    },
+    "search.exclude": {
+        "**/.venv": true,
+        "**/node_modules": true,
+        "**/__pycache__": true,
+        "**/.*": true
+    },
+    "files.watcherExclude": {
+        "**/.venv/**": true,
+        "**/node_modules/**": true,
+        "**/__pycache__/**": true,
+        "**/.*": true
+    },
     "python.analysis.diagnosticSeverityOverrides": {
         "reportAttributeAccessIssue": "none",
+        "reportInvalidTypeForm": "none",
         "reportMissingImports": "none"
     },
     "[python]": {
