@@ -786,7 +786,7 @@ def print_tokenized_item(
 
 
 def _wait_for_next_sample(
-    console: Console, *, item_number: int, total_items: int, total_in_dataset: int
+    console: Console, *, item_number: int, total_items: int, total_in_dataset: int, current_index: int
 ) -> tuple[bool, int | None]:
     """
     Wait for user input before showing next sample.
@@ -800,7 +800,7 @@ def _wait_for_next_sample(
         return False, None
     response = (
         console.input(
-            f"[dim]Press Enter for next item, 'g' to go to index (0-{total_in_dataset - 1}), or 'q' to quit: [/]"
+            f"[dim]Current idx={current_index} | Press Enter for next, 'g' to goto (0-{total_in_dataset - 1}), 'q' quit: [/]"
         )
         .strip()
         .lower()
@@ -903,6 +903,7 @@ def main(argv: list[str] | None = None) -> int:
             item_number=item_number,
             total_items=len(items),
             total_in_dataset=len(items),
+            current_index=idx,
         )
         if not continue_loop:
             break
