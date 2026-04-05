@@ -79,10 +79,13 @@ def test_batch_parameter():
 class _FakeTqdm:
     created: list["_FakeTqdm"] = []
 
-    def __init__(self, *args, total=None, **kwargs):
+    def __init__(self, *args, total=None, desc=None, **kwargs):
         self.total = total
+        self.desc = desc
+        self.kwargs = kwargs
         self.updated = 0
         self.postfix = None
+        self.postfix_calls: list[tuple[dict | None, bool | None]] = []
         _FakeTqdm.created.append(self)
 
     def __enter__(self):
@@ -94,8 +97,9 @@ class _FakeTqdm:
     def update(self, value):
         self.updated += value
 
-    def set_postfix(self, postfix):
+    def set_postfix(self, postfix, refresh=None):
         self.postfix = postfix
+        self.postfix_calls.append((postfix, refresh))
 
     def close(self):
         return None
@@ -115,5 +119,11 @@ def test_mp_progress_uses_single_parent_bar():
 
     assert result == list(range(8))
     assert len(_FakeTqdm.created) == 1
-    assert _FakeTqdm.created[0].updated == 8
-    assert _FakeTqdm.created[0].total == 8
+    bar = _FakeTqdm.created[0]
+    assert bar.updated == 8
+    assert bar.total == 8
+    assert bar.desc == "Multi-process [mp: 2p x 2t]"
+    assert bar.kwargs["dynamic_ncols"] is True
+    assert bar.postfix is not None
+    assert bar.postfix["proc"].endswith("/2")
+    assert all(refresh is False for _, refresh in bar.postfix_calls)

@@ -87,6 +87,53 @@ def _terminate_processes(processes: list[mp.Process]) -> None:
     _prune_dead_processes()
 
 
+def _build_progress_desc(
+    *,
+    desc: str | None,
+    backend: Literal["seq", "mp", "thread"],
+    num_procs: int | None = None,
+    num_threads: int | None = None,
+    workers: int | None = None,
+) -> str:
+    """Build a compact progress label with backend topology."""
+    base_desc = desc.strip() if desc and desc.strip() else "Multi-process"
+
+    if backend == "mp":
+        proc_count = max(1, num_procs or 1)
+        thread_count = max(1, num_threads or 1)
+        if thread_count > 1:
+            return f"{base_desc} [mp: {proc_count}p x {thread_count}t]"
+        return f"{base_desc} [mp: {proc_count}p]"
+
+    if backend == "thread":
+        thread_count = max(1, workers or num_threads or 1)
+        return f"{base_desc} [thread: {thread_count}t]"
+
+    return f"{base_desc} [seq]"
+
+
+def _set_progress_postfix(pbar: tqdm, postfix: dict[str, Any]) -> None:
+    """Update tqdm postfix without forcing an immediate redraw."""
+    try:
+        pbar.set_postfix(postfix, refresh=False)
+    except TypeError:
+        pbar.set_postfix(postfix)
+
+
+def _build_multiprocess_postfix(
+    *,
+    error_stats: ErrorStats,
+    processes: list[mp.Process],
+) -> dict[str, Any]:
+    """Return compact parent-owned status for the multiprocessing bar."""
+    postfix: dict[str, Any] = error_stats.get_postfix_dict()
+    total_processes = len(processes)
+    if total_processes:
+        live_processes = sum(1 for proc in processes if proc.exitcode is None)
+        postfix["proc"] = f"{live_processes}/{total_processes}"
+    return postfix
+
+
 def _run_seq_backend(
     *,
     f_wrapped: Callable[[Any], Any],
@@ -104,7 +151,13 @@ def _run_seq_backend(
 ) -> list[Any]:
     """Run sequential execution in the current process."""
     results: list[Any] = []
-    with tqdm(total=total, desc=desc, disable=not progress, file=sys.stdout) as pbar:
+    with tqdm(
+        total=total,
+        desc=desc,
+        disable=not progress,
+        file=sys.stdout,
+        dynamic_ncols=True,
+    ) as pbar:
         for idx, item in enumerate(items):
             try:
                 result = _call_with_log_control(
@@ -172,7 +225,11 @@ def _run_threadpool_backend(
     try:
         results: list[Any] = [None] * total
         with tqdm(
-            total=total, desc=desc, disable=not progress, file=sys.stdout
+            total=total,
+            desc=desc,
+            disable=not progress,
+            file=sys.stdout,
+            dynamic_ncols=True,
         ) as pbar:
             with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
                 if _track_executor_threads is not None:
@@ -350,7 +407,6 @@ def _run_multiprocess_backend(
     error_handler: ErrorHandlerType,
     error_stats: ErrorStats,
     func_name: str,
-    update_pbar_postfix: Callable[[tqdm], None],
     max_error_files: int,
 ) -> list[Any]:
     """Run the multiprocessing backend with one parent-owned progress bar."""
@@ -410,7 +466,11 @@ def _run_multiprocess_backend(
         done_processes = 0
 
         with tqdm(
-            total=total, desc=desc, disable=not progress, file=sys.stdout
+            total=total,
+            desc=desc,
+            disable=not progress,
+            file=sys.stdout,
+            dynamic_ncols=True,
         ) as pbar:
             while done_processes < len(processes):
                 try:
@@ -431,7 +491,13 @@ def _run_multiprocess_backend(
                         error_stats.record_success()
                     _bump_error_count(error_stats, err_inc)
                     pbar.update(ok_inc + err_inc)
-                    update_pbar_postfix(pbar)
+                    _set_progress_postfix(
+                        pbar,
+                        _build_multiprocess_postfix(
+                            error_stats=error_stats,
+                            processes=processes,
+                        ),
+                    )
                     continue
                 if tag == "process_done":
                     done_processes += 1
@@ -531,10 +597,13 @@ def multi_process(
     f_wrapped = wrap_dump(func, cache_dir, dump_in_thread)
     log_gate_path = create_log_gate_path(log_worker)
     total = len(items)
-    if desc:
-        desc = desc.strip() + f"[{backend}]"
-    else:
-        desc = f"Multi-process [{backend}]"
+    desc = _build_progress_desc(
+        desc=desc,
+        backend=backend,
+        num_procs=num_procs,
+        num_threads=num_threads,
+        workers=workers,
+    )
 
     func_name = getattr(func, "__name__", repr(func))
     error_stats = ErrorStats(
@@ -544,7 +613,7 @@ def multi_process(
     )
 
     def _update_pbar_postfix(pbar: tqdm) -> None:
-        pbar.set_postfix(error_stats.get_postfix_dict())
+        _set_progress_postfix(pbar, error_stats.get_postfix_dict())
 
     if backend == "seq":
         return _run_seq_backend(
@@ -599,7 +668,6 @@ def multi_process(
         error_handler=error_handler,
         error_stats=error_stats,
         func_name=func_name,
-        update_pbar_postfix=_update_pbar_postfix,
         max_error_files=max_error_files,
     )
 

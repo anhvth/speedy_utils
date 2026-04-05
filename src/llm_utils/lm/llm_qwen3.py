@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple, cast
 
 from loguru import logger
@@ -23,6 +24,8 @@ ASSISTANT_END = "<|im_end|>"
 DEFAULT_THINKING_MAX_TOKENS = 8192
 DEFAULT_CONTENT_MAX_TOKENS = 2048
 TRANSFORMERS_NO_ADVISORY_WARNINGS_ENV = "TRANSFORMERS_NO_ADVISORY_WARNINGS"
+_TOKENIZER_CACHE_ROOT = Path("/tmp/tokenizers")
+_AUTO_TOKENIZER_CLS = None
 
 
 class _PrefixCompletionState(NamedTuple):
@@ -102,6 +105,60 @@ def strip_assistant_end(text: str) -> str:
     return text
 
 
+def _load_auto_tokenizer():
+    """Import AutoTokenizer lazily so tests can monkeypatch it cheaply."""
+    global _AUTO_TOKENIZER_CLS
+    if _AUTO_TOKENIZER_CLS is None:
+        try:
+            from transformers import AutoTokenizer as tokenizer_cls
+        except ImportError:
+            from transformers.models.auto.tokenization_auto import (
+                AutoTokenizer as tokenizer_cls,
+            )
+        _AUTO_TOKENIZER_CLS = tokenizer_cls
+    return _AUTO_TOKENIZER_CLS
+
+
+def _get_tokenizer(name_or_path: str | os.PathLike[str]):
+    """Load and cache a tokenizer from a local path or remote model name."""
+    # Transformers emits an import-time advisory when no backend framework is
+    # installed; suppress it only while loading tokenizer helpers.
+    previous = os.environ.get(TRANSFORMERS_NO_ADVISORY_WARNINGS_ENV)
+    os.environ[TRANSFORMERS_NO_ADVISORY_WARNINGS_ENV] = "1"
+    try:
+        AutoTokenizer = _load_auto_tokenizer()
+
+        source = Path(name_or_path).expanduser()
+        if source.is_dir() or source.is_file():
+            local_tokenizer = source
+        else:
+            cache_name = str(name_or_path).replace("/", "_")
+            local_tokenizer = _TOKENIZER_CACHE_ROOT / cache_name
+            local_tokenizer.parent.mkdir(parents=True, exist_ok=True)
+            lock_path = local_tokenizer.with_suffix(local_tokenizer.suffix + ".lock")
+            import fcntl
+
+            with open(lock_path, "w") as lock_fd:
+                fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
+                if not local_tokenizer.exists():
+                    tokenizer = AutoTokenizer.from_pretrained(
+                        str(name_or_path),
+                        trust_remote_code=True,
+                    )
+                    tokenizer.save_pretrained(str(local_tokenizer))
+
+        tokenizer = AutoTokenizer.from_pretrained(
+            str(local_tokenizer),
+            trust_remote_code=True,
+        )
+        return tokenizer
+    finally:
+        if previous is None:
+            os.environ.pop(TRANSFORMERS_NO_ADVISORY_WARNINGS_ENV, None)
+        else:
+            os.environ[TRANSFORMERS_NO_ADVISORY_WARNINGS_ENV] = previous
+
+
 class Qwen3LLM(LLM):
     """Qwen3 helper for staged generation with a partial assistant prefix."""
 
@@ -115,23 +172,7 @@ class Qwen3LLM(LLM):
     def _get_tokenizer(cls):
         tokenizer = cls._tokenizer
         if tokenizer is None:
-            # Transformers emits an import-time advisory when no backend
-            # framework is installed; suppress it only while loading the
-            # tokenizer helper.
-            previous = os.environ.get(TRANSFORMERS_NO_ADVISORY_WARNINGS_ENV)
-            os.environ[TRANSFORMERS_NO_ADVISORY_WARNINGS_ENV] = "1"
-            try:
-                from transformers import AutoTokenizer
-
-                tokenizer = AutoTokenizer.from_pretrained(
-                    cls.TOKENIZER_NAME,
-                    trust_remote_code=True,
-                )
-            finally:
-                if previous is None:
-                    os.environ.pop(TRANSFORMERS_NO_ADVISORY_WARNINGS_ENV, None)
-                else:
-                    os.environ[TRANSFORMERS_NO_ADVISORY_WARNINGS_ENV] = previous
+            tokenizer = _get_tokenizer(cls.TOKENIZER_NAME)
             cls._tokenizer = tokenizer
         return tokenizer
 

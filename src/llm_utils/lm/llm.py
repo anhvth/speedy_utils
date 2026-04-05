@@ -4,6 +4,7 @@
 
 # Typing imports
 import json
+import random
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, cast
 
@@ -46,7 +47,7 @@ class LLM:
 
     def __init__(
         self,
-        client: "OpenAI | int | str | None" = None,  # type: ignore[name-defined]
+        client: "OpenAI | int | str | list | None" = None,  # type: ignore[name-defined]
         cache=True,
         verbose=False,
         timeout: float | Timeout | None = None,
@@ -73,31 +74,77 @@ class LLM:
         # Avoid importing OpenAI client class at module import time.
         # If a client object provides an api_key attribute, use it.
         self.api_key = "abc"
-        if client is not None:
+        if client is not None and not isinstance(client, list):
             api_key = getattr(client, "api_key", None)
             if isinstance(api_key, str) and api_key:
                 self.api_key = api_key
 
-        self.client = get_base_client(
+        raw_clients = get_base_client(
             client,
             cache=cache,
             api_key=self.api_key,
         )
-        # check connection of client
-        try:
-            self.client.models.list()
-        except Exception as e:
-            logger.error(
-                f"Failed to connect to OpenAI client: {str(e)}, base_url={self.client.base_url}"
-            )
-            raise e
+
+        # Handle list of clients for load balancing
+        if isinstance(raw_clients, list):
+            self._clients = raw_clients
+            self._alive_clients: list[Any] = []
+            self._check_clients_health()
+            if not self._alive_clients:
+                raise RuntimeError(
+                    f"None of the {len(self._clients)} provided clients are alive."
+                )
+        else:
+            # Single client mode
+            self._clients = [raw_clients]
+            # check connection of client
+            try:
+                raw_clients.models.list()
+                self._alive_clients = [raw_clients]
+            except Exception as e:
+                logger.error(
+                    f"Failed to connect to OpenAI client: {str(e)}, base_url={raw_clients.base_url}"
+                )
+                raise e
 
         if verbose:
-            available_models = [model.id for model in self.client.models.list().data]
+            available_models = [
+                model.id for model in self._alive_clients[0].models.list().data
+            ]
             logger.info(f"Available models: {available_models}")
 
         if not self.model_kwargs.get("model", ""):
-            self.model_kwargs["model"] = self.client.models.list().data[0].id
+            self.model_kwargs["model"] = self._alive_clients[0].models.list().data[0].id
+
+    def _check_clients_health(self) -> None:
+        """Check health of all clients and populate _alive_clients list."""
+        self._alive_clients = []
+        dead_urls = []
+
+        for client in self._clients:
+            try:
+                client.models.list()
+                self._alive_clients.append(client)
+            except Exception as e:
+                url = getattr(client, "base_url", str(client))
+                dead_urls.append(url)
+                logger.debug(f"Client {url} is not alive: {e}")
+
+        if dead_urls:
+            logger.warning(
+                f"{len(dead_urls)} of {len(self._clients)} clients are not alive. "
+                f"Using {len(self._alive_clients)} alive clients. "
+                f"Dead clients: {dead_urls}"
+            )
+
+    @property
+    def client(self) -> Any:
+        """Return a random alive client for load balancing."""
+        if not self._alive_clients:
+            raise RuntimeError("No alive clients available.")
+        if len(self._alive_clients) == 1:
+            return self._alive_clients[0]
+        return random.choice(self._alive_clients)
 
     @property
     def model(self) -> str:
