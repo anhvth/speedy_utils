@@ -51,7 +51,9 @@ import json
 import random
 import sys
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from rich.console import Console, Group
@@ -69,15 +71,11 @@ def _get_dataset_module():
     if _dataset_module is None:
         from datasets import Dataset, DatasetDict, load_from_disk
 
-        _dataset_module = type(
-            "DatasetModule",
-            (),
-            {
-                "Dataset": Dataset,
-                "DatasetDict": DatasetDict,
-                "load_from_disk": load_from_disk,
-            },
-        )()
+        _dataset_module = SimpleNamespace(
+            Dataset=Dataset,
+            DatasetDict=DatasetDict,
+            load_from_disk=load_from_disk,
+        )
     return _dataset_module
 
 
@@ -139,7 +137,78 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 # =============================================================================
 
 
-def load_data(source: str | Path) -> list[tuple[str | None, int, dict[str, Any]]]:
+@dataclass(frozen=True)
+class HFDatasetItems(Sequence[tuple[str | None, int, dict[str, Any]]]):
+    """Lazy indexed view over a Hugging Face Dataset or DatasetDict."""
+
+    dataset: Any
+    split_names: tuple[str | None, ...]
+    split_offsets: tuple[int, ...]
+    total_items: int
+
+    @classmethod
+    def from_dataset(cls, dataset: Any, split: str | None = None) -> "HFDatasetItems":
+        dataset_module = _get_dataset_module()
+        dataset_dict_type = dataset_module.DatasetDict
+
+        if isinstance(dataset, dataset_dict_type):
+            available_splits = tuple(dataset.keys())
+            if split is not None:
+                if split not in dataset:
+                    raise ValueError(
+                        f"Split '{split}' not found. Available splits: {', '.join(available_splits)}"
+                    )
+                split_names = (split,)
+            else:
+                split_names = available_splits
+        else:
+            if split is not None:
+                raise ValueError("--split is only valid for Hugging Face DatasetDict sources.")
+            split_names = (None,)
+
+        split_offsets: list[int] = []
+        total_items = 0
+        for split_name in split_names:
+            split_offsets.append(total_items)
+            split_dataset = dataset if split_name is None else dataset[split_name]
+            total_items += len(split_dataset)
+
+        return cls(
+            dataset=dataset,
+            split_names=split_names,
+            split_offsets=tuple(split_offsets),
+            total_items=total_items,
+        )
+
+    def __len__(self) -> int:
+        return self.total_items
+
+    def __getitem__(self, index: int | slice) -> Any:
+        if isinstance(index, slice):
+            return [self[i] for i in range(*index.indices(len(self)))]
+
+        if index < 0:
+            index += len(self)
+        if index < 0 or index >= len(self):
+            raise IndexError(index)
+
+        split_idx = 0
+        while split_idx + 1 < len(self.split_offsets) and self.split_offsets[split_idx + 1] <= index:
+            split_idx += 1
+
+        split_name = self.split_names[split_idx]
+        row_index = index - self.split_offsets[split_idx]
+        split_dataset = self.dataset if split_name is None else self.dataset[split_name]
+        row = split_dataset[row_index]
+        if not isinstance(row, Mapping):
+            raise ValueError(f"Row {row_index} in split '{split_name}' is not a mapping.")
+
+        return split_name, row_index, dict(row)
+
+
+def load_data(
+    source: str | Path, *, split: str | None = None
+) -> Sequence[tuple[str | None, int, dict[str, Any]]]:
     """
     Load data from various sources into a normalized format.
 
@@ -155,7 +224,7 @@ def load_data(source: str | Path) -> list[tuple[str | None, int, dict[str, Any]]
         raise FileNotFoundError(f"Source not found: {path}")
 
     if path.is_dir():
-        return _load_directory(path)
+        return _load_directory(path, split=split)
 
     if path.suffix == ".jsonl":
         return _load_jsonl(path)
@@ -168,7 +237,9 @@ def load_data(source: str | Path) -> list[tuple[str | None, int, dict[str, Any]]
     )
 
 
-def _load_directory(path: Path) -> list[tuple[str | None, int, dict[str, Any]]]:
+def _load_directory(
+    path: Path, *, split: str | None = None
+) -> Sequence[tuple[str | None, int, dict[str, Any]]]:
     """Load from directory - either HF dataset or folder of JSON files."""
     # Check if it's a HuggingFace dataset (saved with save_to_disk)
     # DatasetDict has dataset_dict.json, Dataset has state.json or dataset_info.json
@@ -177,15 +248,18 @@ def _load_directory(path: Path) -> list[tuple[str | None, int, dict[str, Any]]]:
         or (path / "dataset_info.json").exists()
         or (path / "state.json").exists()
     ):
-        return _load_hf_dataset(path)
+        return _load_hf_dataset(path, split=split)
 
     # Otherwise treat as folder of JSON files
     return _load_json_folder(path)
 
 
-def _load_hf_dataset(path: Path) -> list[tuple[str | None, int, dict[str, Any]]]:
+def _load_hf_dataset(
+    path: Path, *, split: str | None = None
+) -> Sequence[tuple[str | None, int, dict[str, Any]]]:
     """Load from HuggingFace dataset saved with save_to_disk()."""
-    from datasets import DatasetDict, load_from_disk
+    dataset_module = _get_dataset_module()
+    load_from_disk = dataset_module.load_from_disk
 
     try:
         dataset = load_from_disk(str(path))
@@ -194,23 +268,7 @@ def _load_hf_dataset(path: Path) -> list[tuple[str | None, int, dict[str, Any]]]
             f"Failed to load HuggingFace dataset from {path}: {exc}"
         ) from exc
 
-    items: list[tuple[str | None, int, dict[str, Any]]] = []
-
-    if isinstance(dataset, DatasetDict):
-        for split_name in dataset:
-            for row_index, row in enumerate(dataset[split_name]):
-                if not isinstance(row, Mapping):
-                    raise ValueError(
-                        f"Row {row_index} in split '{split_name}' is not a mapping."
-                    )
-                items.append((split_name, row_index, dict(row)))
-    else:
-        for row_index, row in enumerate(dataset):
-            if not isinstance(row, Mapping):
-                raise ValueError(f"Row {row_index} is not a mapping.")
-            items.append((None, row_index, dict(row)))
-
-    return items
+    return HFDatasetItems.from_dataset(dataset, split=split)
 
 
 def _load_jsonl(path: Path) -> list[tuple[str | None, int, dict[str, Any]]]:
@@ -260,7 +318,7 @@ def _is_tokenized_row(row: Mapping[str, Any]) -> bool:
     return "input_ids" in row and isinstance(row.get("input_ids"), list)
 
 
-def _is_tokenized_dataset(items: list[tuple[str | None, int, dict[str, Any]]]) -> bool:
+def _is_tokenized_dataset(items: Sequence[tuple[str | None, int, dict[str, Any]]]) -> bool:
     """Check if the dataset appears to be tokenized."""
     if not items:
         return False
@@ -307,32 +365,25 @@ def decode_tokenized_row(
     Returns:
         Dict with decoded 'text' and optional 'labels_text'
     """
-    result: dict[str, Any] = {}
+    result: dict[str, Any] = dict(row)
 
     # Decode input_ids
     input_ids = row.get("input_ids", [])
     if input_ids:
-        result["text"] = tokenizer.decode(input_ids, skip_special_tokens=False)
+        result["input_text"] = tokenizer.decode(input_ids, skip_special_tokens=False)
 
-    # Decode labels (usually same as input_ids but with -100 for masked tokens)
+    # Decode labels (only unmasked tokens where loss is computed)
     if show_labels and "labels" in row:
         labels = row["labels"]
-        # Replace -100 with pad token id for decoding
-        pad_token_id = tokenizer.pad_token_id or tokenizer.eos_token_id or 0
-        labels_for_decode = [t if t != -100 else pad_token_id for t in labels]
-        result["labels_text"] = tokenizer.decode(
-            labels_for_decode, skip_special_tokens=False
-        )
+        # Only decode tokens where labels != -100 (i.e., where loss is computed)
+        unmasked_labels = [t for t in labels if t != -100]
+        if unmasked_labels:
+            result["labels_text"] = tokenizer.decode(unmasked_labels, skip_special_tokens=False)
 
         # Also show which positions are masked
         masked_positions = [i for i, t in enumerate(labels) if t == -100]
         if masked_positions:
             result["masked_positions_count"] = len(masked_positions)
-
-    # Include other metadata
-    for key in ["attention_mask", "position_ids"]:
-        if key in row:
-            result[key] = row[key]
 
     return result
 
@@ -834,12 +885,12 @@ def main(argv: list[str] | None = None) -> int:
     console = Console()
 
     # Load data
-    items = load_data(source_path)
-    if not items:
+    items = load_data(source_path, split=args.split)
+    if len(items) == 0:
         raise ValueError(f"No items found in: {source_path}")
 
     # Check if data is tokenized
-    is_tokenized = items and _is_tokenized_row(items[0][2])
+    is_tokenized = _is_tokenized_row(items[0][2])
 
     if is_tokenized:
         if not args.tokenizer:
@@ -849,12 +900,6 @@ def main(argv: list[str] | None = None) -> int:
                 "Example: viz_chat data/tokenized/ --tokenizer Qwen/Qwen3-8B"
             )
         tokenizer = _get_tokenizer(args.tokenizer)
-        # Decode all items
-        decoded_items: list[tuple[str | None, int, dict[str, Any]]] = []
-        for source_name, row_index, row in items:
-            decoded_row = decode_tokenized_row(row, tokenizer)
-            decoded_items.append((source_name, row_index, decoded_row))
-        items = decoded_items
 
     # Print summary
     console.print(f"Source: {source_path}", soft_wrap=True)
@@ -877,6 +922,7 @@ def main(argv: list[str] | None = None) -> int:
         source_name, row_index, row = items[idx]
 
         if is_tokenized:
+            row = decode_tokenized_row(row, tokenizer)
             print_tokenized_item(
                 console=console,
                 item_number=item_number,
@@ -913,6 +959,7 @@ def main(argv: list[str] | None = None) -> int:
             source_name, row_index, row = items[goto_idx]
             item_number += 1
             if is_tokenized:
+                row = decode_tokenized_row(row, tokenizer)
                 print_tokenized_item(
                     console=console,
                     item_number=item_number,
