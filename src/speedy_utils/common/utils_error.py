@@ -2,6 +2,7 @@
 Error handling utilities for clean, user-focused tracebacks.
 """
 
+import functools
 import inspect
 import linecache
 import sys
@@ -207,6 +208,7 @@ def _filter_traceback_frames(tb_list: list[traceback.FrameSummary]) -> list[trac
 
 def clean_traceback(func: F) -> F:
     """Decorator to wrap function calls with clean traceback handling."""
+    @functools.wraps(func)
     def wrapper(*args, **kwargs):
         try:
             return func(*args, **kwargs)

@@ -1,12 +1,16 @@
 # Tokenization and Generation Support in LLM
 
-The `LLM` class now includes built-in tokenization and low-level generation support through the `TokenizationMixin`, providing methods similar to HuggingFace Transformers.
+The `LLM` class includes built-in tokenization plus two distinct generation styles:
+- `generate()` for prompt continuation via the completions API
+- `chat_completion()` for assistant-turn generation via the chat completions API
 
 ## Features
 
 - **encode()**: Convert text to token IDs
 - **decode()**: Convert token IDs back to text
-- **generate()**: HuggingFace-style generation with token-level control
+- **generate()**: HuggingFace-style prompt continuation with token-level control
+- **chat_completion()**: Chat-based assistant-turn generation from messages
+- **pydantic_parse()**: Structured chat output parsing
 - Support for special tokens (BOS, EOS, etc.)
 - Optional token string output for debugging
 
@@ -94,6 +98,14 @@ def generate(
 - `dict`: Generation result with 'text', 'token_ids', 'finish_reason' (if n=1)
 - `list[dict]`: List of generation results (if n>1)
 
+### Which method to use
+
+- Use `generate()` when you already have a raw prompt string and want the completions API to continue it with more tokens.
+- Use `chat_completion()` when you want the chat completions API to produce the next assistant turn from messages.
+- Use `pydantic_parse()` when you want structured output from the chat completions API.
+
+`enable_thinking` is mainly meaningful on the chat-based paths. `generate()` passes it through for backends that honor `extra_body.chat_template_kwargs.enable_thinking` on the completions endpoint, but that support is backend-specific.
+
 ## Usage Examples
 
 ### Basic Encoding/Decoding
@@ -169,9 +181,9 @@ result = lm.decode(combined)
 print(result)  # 'Helloworld'
 ```
 
-## HuggingFace-Style Generation
+## Prompt Continuation with `generate()`
 
-The `generate()` method provides a low-level interface similar to HuggingFace Transformers:
+The `generate()` method provides a low-level prompt-continuation interface similar to HuggingFace Transformers. It uses the completions API rather than the chat completions API.
 
 ### Basic Text Generation
 
@@ -182,6 +194,21 @@ result = lm.generate(
     temperature=0.7,
 )
 print(result['text'])  # ' Paris.'
+```
+
+## Chat Assistant-Turn Generation
+
+Use `chat_completion()` when you want the next assistant message from a list of chat messages:
+
+```python
+message = lm.chat_completion(
+    [
+        {"role": "system", "content": "Be concise."},
+        {"role": "user", "content": "What is the capital of France?"},
+    ],
+    temperature=0.2,
+)
+print(message.content)  # 'Paris.'
 ```
 
 ### Working with Token IDs

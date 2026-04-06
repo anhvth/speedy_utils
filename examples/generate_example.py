@@ -1,7 +1,7 @@
-"""Example: Using the HuggingFace-style generate() method.
+"""Example: Using the prompt-continuation `generate()` method.
 
-This demonstrates the low-level generation interface that works
-directly with token IDs, similar to HuggingFace Transformers.
+This demonstrates the low-level completions-style generation interface
+for continuing a raw prompt, similar to HuggingFace Transformers.
 """
 
 from llm_utils.lm import LLM
@@ -10,7 +10,7 @@ from llm_utils.lm import LLM
 lm = LLM(client=8000)
 
 print('=' * 70)
-print('HuggingFace-Style Generation Examples')
+print('Prompt Continuation Examples')
 print('=' * 70)
 print()
 

@@ -22,7 +22,7 @@ THINK_START = "<think>"
 THINK_END = "</think>"
 ASSISTANT_END = "<|im_end|>"
 DEFAULT_THINKING_MAX_TOKENS = 8192
-DEFAULT_CONTENT_MAX_TOKENS = 2048
+DEFAULT_CONTENT_MAX_TOKENS = 4096
 TRANSFORMERS_NO_ADVISORY_WARNINGS_ENV = "TRANSFORMERS_NO_ADVISORY_WARNINGS"
 _TOKENIZER_CACHE_ROOT = Path("/tmp/tokenizers")
 _AUTO_TOKENIZER_CLS = None
@@ -240,7 +240,6 @@ class Qwen3LLM(LLM):
         call_kwargs = {k: v for k, v in runtime_kwargs.items() if k != "extra_body"}
         cache = call_kwargs.pop("cache", None)
         enable_thinking = call_kwargs.pop("enable_thinking", None)
-        self._set_cache(cache)
         self._require_single_choice(call_kwargs)
         if call_kwargs.get("max_tokens") is None:
             call_kwargs["max_tokens"] = 1
@@ -251,40 +250,41 @@ class Qwen3LLM(LLM):
             enable_thinking=enable_thinking,
         )
 
-        try:
-            completion = self.client.completions.create(
-                model=model_name,
-                prompt=prompt_to_continue,
-                **api_kwargs,
-            )
-            self.last_ai_response = completion
-        except Exception as exc:
-            from openai import (
-                APITimeoutError,
-                AuthenticationError,
-                BadRequestError,
-                RateLimitError,
-            )
+        with self._borrow_client() as client:
+            self._set_cache(cache, client=client)
+            try:
+                completion = client.completions.create(
+                    model=model_name,
+                    prompt=prompt_to_continue,
+                    **api_kwargs,
+                )
+            except Exception as exc:
+                from openai import (
+                    APITimeoutError,
+                    AuthenticationError,
+                    BadRequestError,
+                    RateLimitError,
+                )
 
-            if isinstance(exc, APITimeoutError):
-                error_msg = f"OpenAI API timeout ({api_kwargs['timeout']}) error: {exc} for model {model_name}"
-                logger.error(error_msg)
+                if isinstance(exc, APITimeoutError):
+                    error_msg = f"OpenAI API timeout ({api_kwargs['timeout']}) error: {exc} for model {model_name}"
+                    logger.error(error_msg)
+                    raise
+                if isinstance(exc, (AuthenticationError, RateLimitError, BadRequestError)):
+                    error_msg = f"OpenAI API error ({type(exc).__name__}): {exc}"
+                    logger.error(error_msg)
+                    raise
+                if isinstance(exc, ValueError):
+                    logger.error(f"ValueError during API call: {exc}")
+                    raise
+                is_length_error = "Length" in str(exc) or "maximum context length" in str(
+                    exc
+                )
+                if is_length_error:
+                    raise ValueError(
+                        f"Input too long for model {model_name}. Error: {str(exc)[:100]}..."
+                    ) from exc
                 raise
-            if isinstance(exc, (AuthenticationError, RateLimitError, BadRequestError)):
-                error_msg = f"OpenAI API error ({type(exc).__name__}): {exc}"
-                logger.error(error_msg)
-                raise
-            if isinstance(exc, ValueError):
-                logger.error(f"ValueError during API call: {exc}")
-                raise
-            is_length_error = "Length" in str(exc) or "maximum context length" in str(
-                exc
-            )
-            if is_length_error:
-                raise ValueError(
-                    f"Input too long for model {model_name}. Error: {str(exc)[:100]}..."
-                ) from exc
-            raise
 
         choice = self._get_completion_choice(completion)
         usage = self._get_completion_usage(completion)
@@ -469,10 +469,11 @@ class Qwen3LLM(LLM):
         **runtime_kwargs,
     ) -> "ChatCompletionMessage":
         """
-        Continue generation from a partial assistant prefix.
+        Continue a chat-based assistant turn from a partial assistant prefix.
 
-        This is the primary Qwen3 prefix-completion entry point. It seeds or
-        continues a `<think>...</think>` block before the final answer.
+        This is the primary Qwen3 chat-completions entry point. It seeds or
+        continues a `<think>...</think>` block inside the assistant turn before
+        the final answer, and is distinct from the raw prompt `generate()` API.
         """
         self._validate_prefix_completion_kwargs(
             n=runtime_kwargs.get("n", 1),
@@ -507,3 +508,10 @@ class Qwen3LLM(LLM):
             content_max_tokens=content_max_tokens,
             **runtime_kwargs,
         )
+
+
+    def _assistant_message_to_content(self, message: "ChatCompletionMessage") -> str:
+        # format thinking and content into a single assistant message text for history recording
+        reasoning = getattr(message, "reasoning_content", '')
+        content = message.content
+        return f"{THINK_START}\n{reasoning}\n{THINK_END}\n\n{content}"

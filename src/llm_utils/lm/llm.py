@@ -5,7 +5,11 @@
 # Typing imports
 import json
 import random
+import threading
+import time
+import weakref
 from copy import deepcopy
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, cast
 
 from httpx import Timeout
@@ -69,8 +73,8 @@ class LLM:
         self.model_kwargs = model_kwargs
         self.timeout = timeout
         self.enable_thinking = enable_thinking
-        self.last_ai_response = None  # Store raw response from client
         self.cache = cache
+        self._verbose = verbose
         # Avoid importing OpenAI client class at module import time.
         # If a client object provides an api_key attribute, use it.
         self.api_key = "abc"
@@ -116,6 +120,20 @@ class LLM:
         if not self.model_kwargs.get("model", ""):
             self.model_kwargs["model"] = self._alive_clients[0].models.list().data[0].id
 
+        self._multiple_clients = len(self._alive_clients) > 1
+        self._client_balance_lock = threading.Lock()
+        self._client_inflight_counts = [0 for _ in self._alive_clients]
+        self._client_total_counts = [0 for _ in self._alive_clients]
+        self._client_index_by_id = {
+            id(client): idx for idx, client in enumerate(self._alive_clients)
+        }
+        self._client_last_activity = 0.0
+        self._load_balance_report_interval = 5.0
+        self._load_balance_report_stop = threading.Event()
+        self._load_balance_report_thread: threading.Thread | None = None
+        if self._multiple_clients and self._verbose:
+            self._start_load_balance_reporter()
+
     def _check_clients_health(self) -> None:
         """Check health of all clients and populate _alive_clients list."""
         self._alive_clients = []
@@ -140,11 +158,83 @@ class LLM:
     @property
     def client(self) -> Any:
         """Return a random alive client for load balancing."""
+        return self._select_client()
+
+    def _select_client(self) -> Any:
+        """Pick one alive client without modifying in-flight accounting."""
         if not self._alive_clients:
             raise RuntimeError("No alive clients available.")
         if len(self._alive_clients) == 1:
             return self._alive_clients[0]
         return random.choice(self._alive_clients)
+
+    def _client_label(self, client: Any) -> str:
+        """Return a compact label for a client in load-balance logs."""
+        base_url = getattr(client, "base_url", None)
+        if base_url is not None:
+            return str(base_url)
+        return getattr(client, "__class__", type(client)).__name__
+
+    def _load_balance_snapshot(self) -> str | None:
+        """Build a snapshot string for current in-flight client usage."""
+        with self._client_balance_lock:
+            total_inflight = sum(self._client_inflight_counts)
+            if total_inflight <= 0:
+                return None
+            parts = [
+                f"{self._client_label(client)}={count}"
+                for client, count in zip(
+                    self._alive_clients, self._client_inflight_counts
+                )
+            ]
+        return f"active={total_inflight} | " + ", ".join(parts)
+
+    def _start_load_balance_reporter(self) -> None:
+        """Start a daemon thread that prints the current client split."""
+        if self._load_balance_report_thread is not None:
+            return
+
+        weak_self = weakref.ref(self)
+
+        def _report() -> None:
+            while True:
+                obj = weak_self()
+                if obj is None:
+                    return
+                if obj._load_balance_report_stop.wait(
+                    obj._load_balance_report_interval
+                ):
+                    return
+                snapshot = obj._load_balance_snapshot()
+                if snapshot is not None:
+                    logger.info(f"LLM client load balance: {snapshot}")
+
+        thread = threading.Thread(
+            target=_report,
+            name="LLMClientLoadBalanceReporter",
+            daemon=True,
+        )
+        self._load_balance_report_thread = thread
+        thread.start()
+
+    @contextmanager
+    def _borrow_client(self):
+        """Yield one client while tracking its in-flight request count."""
+        client = self._select_client()
+        client_idx = self._client_index_by_id.get(id(client))
+        if client_idx is None:
+            raise RuntimeError("Selected client is not tracked.")
+
+        with self._client_balance_lock:
+            self._client_inflight_counts[client_idx] += 1
+            self._client_total_counts[client_idx] += 1
+            self._client_last_activity = time.monotonic()
+
+        try:
+            yield client
+        finally:
+            with self._client_balance_lock:
+                self._client_inflight_counts[client_idx] -= 1
 
     @property
     def model(self) -> str:
@@ -214,14 +304,6 @@ class LLM:
             if isinstance(reasoning, str):
                 return reasoning
         return None
-
-    @staticmethod
-    def _get_completion_choices(completion: Any) -> Any:
-        """Return the choices collection from a completion-like object."""
-        choices = getattr(completion, "choices", None)
-        if choices is None and isinstance(completion, dict):
-            choices = completion.get("choices")
-        return choices
 
     @staticmethod
     def _get_choice_message(choice: Any) -> Any:
@@ -300,12 +382,13 @@ class LLM:
             usage = completion.get("usage")
         return usage
 
-    def _set_cache(self, cache: bool | None) -> None:
+    def _set_cache(self, cache: bool | None, *, client: Any | None = None) -> None:
         """Update client-side caching when supported."""
         if cache is None:
             return
-        if hasattr(self.client, "set_cache"):
-            self.client.set_cache(cache)
+        client_to_use = self.client if client is None else client
+        if hasattr(client_to_use, "set_cache"):
+            client_to_use.set_cache(cache)
             return
         logger.warning("Client does not support caching.")
 
@@ -316,16 +399,16 @@ class LLM:
         if n != 1:
             raise ValueError("LLM only supports n=1")
 
-    def _record_history(self, choice_messages: Messages) -> None:
+    def _record_history(self, conversation_messages: Messages) -> None:
         """Track recent message history for debugging helpers."""
         if not hasattr(self, "_last_conversations"):
             self._last_conversations = []
         else:
             self._last_conversations = self._last_conversations[-100:]
-        self._last_conversations.append(choice_messages)
+        self._last_conversations.append(conversation_messages)
 
     @clean_traceback
-    def _text_completion(
+    def _chat_completion_result(
         self,
         input_data: str | BaseModel | list[dict],
         *,
@@ -333,8 +416,7 @@ class LLM:
         enable_thinking: bool | None = None,
         **runtime_kwargs,
     ) -> list[dict[str, Any]]:
-        """Execute a text completion and return normalized internal results."""
-        self._set_cache(cache)
+        """Execute a chat completion call and return normalized internal results."""
         self._require_single_choice(runtime_kwargs)
         # Prepare messages
         messages = self._prepare_input(input_data)
@@ -346,40 +428,40 @@ class LLM:
             enable_thinking=enable_thinking,
         )
 
-        try:
-            completion = self.client.chat.completions.create(
-                model=model_name, messages=messages, **api_kwargs
-            )
-            # Store raw response from client
-            self.last_ai_response = completion
-        except Exception as exc:
-            # Import openai exceptions for type checking
-            from openai import (
-                APITimeoutError,
-                AuthenticationError,
-                BadRequestError,
-                RateLimitError,
-            )
+        with self._borrow_client() as client:
+            self._set_cache(cache, client=client)
+            try:
+                completion = client.chat.completions.create(
+                    model=model_name, messages=messages, **api_kwargs
+                )
+            except Exception as exc:
+                # Import openai exceptions for type checking
+                from openai import (
+                    APITimeoutError,
+                    AuthenticationError,
+                    BadRequestError,
+                    RateLimitError,
+                )
 
-            if isinstance(exc, APITimeoutError):
-                error_msg = f"OpenAI API timeout ({api_kwargs['timeout']}) error: {exc} for model {model_name}"
-                logger.error(error_msg)
+                if isinstance(exc, APITimeoutError):
+                    error_msg = f"OpenAI API timeout ({api_kwargs['timeout']}) error: {exc} for model {model_name}"
+                    logger.error(error_msg)
+                    raise
+                if isinstance(exc, (AuthenticationError, RateLimitError, BadRequestError)):
+                    error_msg = f"OpenAI API error ({type(exc).__name__}): {exc}"
+                    logger.error(error_msg)
+                    raise
+                if isinstance(exc, ValueError):
+                    logger.error(f"ValueError during API call: {exc}")
+                    raise
+                is_length_error = "Length" in str(exc) or "maximum context length" in str(
+                    exc
+                )
+                if is_length_error:
+                    raise ValueError(
+                        f"Input too long for model {model_name}. Error: {str(exc)[:100]}..."
+                    ) from exc
                 raise
-            if isinstance(exc, (AuthenticationError, RateLimitError, BadRequestError)):
-                error_msg = f"OpenAI API error ({type(exc).__name__}): {exc}"
-                logger.error(error_msg)
-                raise
-            if isinstance(exc, ValueError):
-                logger.error(f"ValueError during API call: {exc}")
-                raise
-            is_length_error = "Length" in str(exc) or "maximum context length" in str(
-                exc
-            )
-            if is_length_error:
-                raise ValueError(
-                    f"Input too long for model {model_name}. Error: {str(exc)[:100]}..."
-                ) from exc
-            raise
         # print(completion)
 
         choices = getattr(completion, "choices", None)
@@ -387,20 +469,26 @@ class LLM:
             raise ValueError("No choices returned from completion.")
 
         choice = choices[0]
-        assistant_message = [{"role": "assistant", "content": choice.message.content}]
-        reasoning_content = self._extract_reasoning_content(choice.message)
+        message = self._get_choice_message(choice)
+        if message is None:
+            raise ValueError("No message returned from completion.")
+
+        assistant_message = [{"role": "assistant", "content": message.content}]
+        reasoning_content = self._extract_reasoning_content(message)
         if reasoning_content:
             assistant_message[0]["reasoning_content"] = reasoning_content
 
-        choice_messages = cast(Messages, messages + assistant_message)
+        conversation_messages = cast(Messages, messages + assistant_message)
         result = {
-            "parsed": choice.message.content,
-            "messages": choice_messages,
+            "parsed": message.content,
+            "messages": conversation_messages,
+            "completion": completion,
+            "message": message,
         }
         if reasoning_content:
             result["reasoning_content"] = reasoning_content
 
-        self._record_history(choice_messages)
+        self._record_history(conversation_messages)
         return [result]
 
     @clean_traceback
@@ -412,23 +500,17 @@ class LLM:
         enable_thinking: bool | None = None,
         **runtime_kwargs,
     ) -> "ChatCompletionMessage":
-        """Execute a chat completion and return the first assistant message."""
-        self._text_completion(
+        """Call the chat completions API and return the first assistant message."""
+        result = self._chat_completion_result(
             input_data,
             cache=cache,
             enable_thinking=enable_thinking,
             **runtime_kwargs,
-        )
-        completion = self.last_ai_response
-        if completion is None:
-            raise ValueError("No completion returned from API.")
-        completion_choices = self._get_completion_choices(completion)
-        if not completion_choices:
-            raise ValueError("No choices returned from completion.")
-        message = self._get_choice_message(completion_choices[0])
+        )[0]
+        message = result.get("message")
         if message is None:
             raise ValueError("No message returned from completion.")
-        return message
+        return cast("ChatCompletionMessage", message)
 
     def generate(
         self,
@@ -438,11 +520,10 @@ class LLM:
         enable_thinking: bool | None = None,
         **runtime_kwargs,
     ) -> "CompletionChoice":
-        """Generate a raw completion choice from a prompt string."""
+        """Call the completions API to continue a raw prompt with more tokens."""
         if not isinstance(prompt, str):
             raise TypeError("generate expects `prompt` to be a string")
 
-        self._set_cache(cache)
         self._require_single_choice(runtime_kwargs)
 
         effective_kwargs = {**self.model_kwargs, **runtime_kwargs}
@@ -451,56 +532,57 @@ class LLM:
             enable_thinking=enable_thinking,
         )
 
-        try:
-            completion = self.client.completions.create(
-                model=model_name,
-                prompt=prompt,
-                **api_kwargs,
-            )
-            self.last_ai_response = completion
-        except Exception as exc:
-            from openai import (
-                APITimeoutError,
-                AuthenticationError,
-                BadRequestError,
-                RateLimitError,
-            )
+        with self._borrow_client() as client:
+            self._set_cache(cache, client=client)
+            try:
+                completion = client.completions.create(
+                    model=model_name,
+                    prompt=prompt,
+                    **api_kwargs,
+                )
+            except Exception as exc:
+                from openai import (
+                    APITimeoutError,
+                    AuthenticationError,
+                    BadRequestError,
+                    RateLimitError,
+                )
 
-            if isinstance(exc, APITimeoutError):
-                error_msg = f"OpenAI API timeout ({api_kwargs['timeout']}) error: {exc} for model {model_name}"
-                logger.error(error_msg)
+                if isinstance(exc, APITimeoutError):
+                    error_msg = f"OpenAI API timeout ({api_kwargs['timeout']}) error: {exc} for model {model_name}"
+                    logger.error(error_msg)
+                    raise
+                if isinstance(exc, (AuthenticationError, RateLimitError, BadRequestError)):
+                    error_msg = f"OpenAI API error ({type(exc).__name__}): {exc}"
+                    logger.error(error_msg)
+                    raise
+                if isinstance(exc, ValueError):
+                    logger.error(f"ValueError during API call: {exc}")
+                    raise
+                is_length_error = "Length" in str(exc) or "maximum context length" in str(
+                    exc
+                )
+                if is_length_error:
+                    raise ValueError(
+                        f"Input too long for model {model_name}. Error: {str(exc)[:100]}..."
+                    ) from exc
                 raise
-            if isinstance(exc, (AuthenticationError, RateLimitError, BadRequestError)):
-                error_msg = f"OpenAI API error ({type(exc).__name__}): {exc}"
-                logger.error(error_msg)
-                raise
-            if isinstance(exc, ValueError):
-                logger.error(f"ValueError during API call: {exc}")
-                raise
-            is_length_error = "Length" in str(exc) or "maximum context length" in str(
-                exc
-            )
-            if is_length_error:
-                raise ValueError(
-                    f"Input too long for model {model_name}. Error: {str(exc)[:100]}..."
-                ) from exc
-            raise
 
         choice = self._get_completion_choice(completion)
         usage = self._get_completion_usage(completion)
         if usage is not None:
             choice.usage = usage
 
-        choice_messages = cast(
+        conversation_messages = cast(
             Messages,
             self._prepare_input(prompt)
             + [{"role": "assistant", "content": str(choice.text or "")}],
         )
-        self._record_history(choice_messages)
+        self._record_history(conversation_messages)
         return choice
 
     @clean_traceback
-    def pydantic_parse(
+    def _pydantic_completion(
         self,
         input_data: str | list[dict],
         *,
@@ -508,8 +590,8 @@ class LLM:
         cache: bool | None = None,
         enable_thinking: bool | None = None,
         **runtime_kwargs,
-    ) -> BaseModel:
-        """Execute a structured completion and return the parsed model."""
+    ) -> dict[str, Any]:
+        """Execute a structured completion and return parsed and raw artifacts."""
         if not isinstance(input_data, str) and not isinstance(input_data, list):
             raise TypeError(
                 "pydantic_parse expects `input_data` to be a string or message list."
@@ -521,7 +603,6 @@ class LLM:
                 "pydantic_parse expects `response_model` to be a Pydantic BaseModel subclass."
             )
 
-        self._set_cache(cache)
         self._require_single_choice(runtime_kwargs)
         # Prepare messages
         messages = self._prepare_input(input_data)
@@ -534,44 +615,47 @@ class LLM:
         )
 
         pydantic_model_to_use: type[BaseModel] = cast(type[BaseModel], response_model)
-        try:
-            completion = self.client.chat.completions.parse(
-                model=model_name,
-                messages=messages,
-                response_format=pydantic_model_to_use,
-                **api_kwargs,
-            )
-            # Store raw response from client
-            self.last_ai_response = completion
-        except Exception as exc:
-            # Import openai exceptions for type checking
-            from openai import AuthenticationError, BadRequestError, RateLimitError
+        with self._borrow_client() as client:
+            self._set_cache(cache, client=client)
+            try:
+                completion = client.chat.completions.parse(
+                    model=model_name,
+                    messages=messages,
+                    response_format=pydantic_model_to_use,
+                    **api_kwargs,
+                )
+            except Exception as exc:
+                # Import openai exceptions for type checking
+                from openai import AuthenticationError, BadRequestError, RateLimitError
 
-            if isinstance(exc, (AuthenticationError, RateLimitError, BadRequestError)):
-                error_msg = f"OpenAI API error ({type(exc).__name__}): {exc}"
-                logger.error(error_msg)
+                if isinstance(exc, (AuthenticationError, RateLimitError, BadRequestError)):
+                    error_msg = f"OpenAI API error ({type(exc).__name__}): {exc}"
+                    logger.error(error_msg)
+                    raise
+                is_length_error = "Length" in str(exc) or "maximum context length" in str(
+                    exc
+                )
+                if is_length_error:
+                    raise ValueError(
+                        f"Input too long for model {model_name}. Error: {str(exc)[:100]}..."
+                    ) from exc
                 raise
-            is_length_error = "Length" in str(exc) or "maximum context length" in str(
-                exc
-            )
-            if is_length_error:
-                raise ValueError(
-                    f"Input too long for model {model_name}. Error: {str(exc)[:100]}..."
-                ) from exc
-            raise
 
         choices = getattr(completion, "choices", None)
         if not choices:
             raise ValueError("No choices returned from completion.")
 
         choice = choices[0]
-        choice_messages = cast(
+        message = self._get_choice_message(choice)
+        if message is None:
+            raise ValueError("No message returned from completion.")
+        conversation_messages = cast(
             Messages,
-            messages + [{"role": "assistant", "content": choice.message.content}],
+            messages + [{"role": "assistant", "content": message.content}],
         )
 
         # Ensure consistent Pydantic model output for both fresh and cached responses
-        parsed_content = choice.message.parsed  # type: ignore[attr-defined]
+        parsed_content = message.parsed  # type: ignore[attr-defined]
         if isinstance(parsed_content, dict):
             # Cached response: validate dict back to Pydantic model
             parsed_content = pydantic_model_to_use.model_validate(parsed_content)
@@ -581,11 +665,39 @@ class LLM:
             # Fallback: ensure it's the correct type
             parsed_content = pydantic_model_to_use.model_validate(parsed_content)
 
-        reasoning_content = self._extract_reasoning_content(choice.message)
+        reasoning_content = self._extract_reasoning_content(message)
         if reasoning_content:
-            choice_messages[-1]["reasoning_content"] = reasoning_content
-        self._record_history(choice_messages)
-        return cast(BaseModel, parsed_content)
+            conversation_messages[-1]["reasoning_content"] = reasoning_content
+        self._record_history(conversation_messages)
+        result = {
+            "parsed": cast(BaseModel, parsed_content),
+            "messages": conversation_messages,
+            "completion": completion,
+            "message": message,
+        }
+        if reasoning_content:
+            result["reasoning_content"] = reasoning_content
+        return result
+
+    @clean_traceback
+    def pydantic_parse(
+        self,
+        input_data: str | list[dict],
+        *,
+        response_model: type[BaseModel],
+        cache: bool | None = None,
+        enable_thinking: bool | None = None,
+        **runtime_kwargs,
+    ) -> BaseModel:
+        """Execute a structured completion and return the parsed model."""
+        result = self._pydantic_completion(
+            input_data,
+            response_model=response_model,
+            cache=cache,
+            enable_thinking=enable_thinking,
+            **runtime_kwargs,
+        )
+        return cast(BaseModel, result["parsed"])
 
     def __call__(
         self,
@@ -598,7 +710,7 @@ class LLM:
         return_dict: bool = False,
         **openai_client_kwargs,
     ) -> Any:
-        """Convenience wrapper around the explicit runtime methods."""
+        """Convenience wrapper around the explicit chat and completion methods."""
 
         if n != 1:
             raise ValueError("LLM only supports n=1")
@@ -621,9 +733,6 @@ class LLM:
                     "Caching is disabled when streaming. "
                     "Responses will be streamed directly from the API without caching."
                 )
-            # Explicitly disable caching on the client to prevent pickle errors
-            if hasattr(self.client, "set_cache"):
-                self.client.set_cache(False)
             messages = self._prepare_input(input_data)
             effective_kwargs = {**self.model_kwargs, **openai_client_kwargs}
             model_name, api_kwargs = self._build_api_kwargs(
@@ -631,61 +740,34 @@ class LLM:
                 enable_thinking=enable_thinking,
                 drop_keys=("stream",),
             )
-            return self.client.chat.completions.create(
-                model=model_name,
-                messages=messages,
-                stream=True,
-                **api_kwargs,
-            )
+            with self._borrow_client() as client:
+                # Explicitly disable caching on the selected client to prevent pickle errors
+                self._set_cache(False, client=client)
+                return client.chat.completions.create(
+                    model=model_name,
+                    messages=messages,
+                    stream=True,
+                    **api_kwargs,
+                )
 
         pydantic_model = response_model
         if return_dict:
             if pydantic_model in (str, None):
-                result = self._text_completion(
+                result = self._chat_completion_result(
                     input_data,
                     cache=cache,
                     enable_thinking=enable_thinking,
                     **openai_client_kwargs,
                 )[0]
             else:
-                parsed = self.pydantic_parse(
+                result = self._pydantic_completion(
                     input_data,
                     response_model=cast(type[BaseModel], pydantic_model),
                     cache=cache,
                     enable_thinking=enable_thinking,
                     **openai_client_kwargs,
                 )
-                completion = self.last_ai_response
-                if completion is None:
-                    raise ValueError("No completion returned from API.")
-                completion_choices = self._get_completion_choices(completion)
-                if not completion_choices:
-                    raise ValueError("No choices returned from completion.")
-                message = self._get_choice_message(completion_choices[0])
-                if message is None:
-                    raise ValueError("No message returned from completion.")
-                result = {
-                    "parsed": parsed,
-                    "messages": self._last_conversations[-1],
-                    "completion": completion,
-                    "message": message,
-                }
-                reasoning_content = self._extract_reasoning_content(message)
-                if reasoning_content:
-                    result["reasoning_content"] = reasoning_content
                 return result
-
-            completion = self.last_ai_response
-            if completion is None:
-                raise ValueError("No completion returned from API.")
-            completion_choices = self._get_completion_choices(completion)
-            if not completion_choices:
-                raise ValueError("No choices returned from completion.")
-            message = self._get_choice_message(completion_choices[0])
-            if message is None:
-                raise ValueError("No message returned from completion.")
-            result["completion"] = completion
-            result["message"] = message
             return result
 
         if pydantic_model in (str, None):

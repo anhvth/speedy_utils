@@ -83,7 +83,24 @@ class TestLLMCallContract(TestCase):
         result = llm.chat_completion("prompt")
 
         self.assertIs(result, message)
-        self.assertIs(llm.last_ai_response, completion)
+
+    @patch("llm_utils.lm.llm.get_base_client")
+    def test_chat_completion_returns_first_message_with_chat_messages(
+        self, mock_get_client
+    ):
+        mock_client = self._make_mock_client()
+        mock_get_client.return_value = mock_client
+        llm = LLM()
+
+        message = ChatCompletionMessage(role="assistant", content="hello")
+        completion = self._make_completion(message)
+        mock_client.chat.completions.create.return_value = completion
+
+        result = llm.chat_completion("prompt")
+
+        self.assertIs(result, message)
+        mock_client.chat.completions.create.assert_called_once()
+        mock_client.completions.create.assert_not_called()
 
     @patch("llm_utils.lm.llm.get_base_client")
     def test_generate_returns_completion_choice_for_string_prompt(
@@ -103,7 +120,6 @@ class TestLLMCallContract(TestCase):
         self.assertEqual(result.finish_reason, "stop")
         self.assertIs(result.usage, completion.usage)
         self.assertEqual(result.usage.total_tokens, 18)
-        self.assertIs(llm.last_ai_response, completion)
         self.assertEqual(len(llm._last_conversations), 1)
         self.assertEqual(
             llm._last_conversations[0],
@@ -141,7 +157,6 @@ class TestLLMCallContract(TestCase):
         self.assertEqual(result.token_ids, [11, 22])
         self.assertEqual(result.prompt_token_ids, [33, 44])
         self.assertEqual(result.extra_choice_field, "vllm-extra")
-        self.assertIs(llm.last_ai_response, completion)
 
     @patch("llm_utils.lm.llm.get_base_client")
     def test_generate_uses_completions_api_not_chat_api(self, mock_get_client):
@@ -219,7 +234,6 @@ class TestLLMCallContract(TestCase):
 
         self.assertIsInstance(result, self.ParsedOutput)
         self.assertEqual(result.answer, "yes")
-        self.assertIs(llm.last_ai_response, completion)
 
     @patch("llm_utils.lm.llm.get_base_client")
     def test_pydantic_parse_accepts_json_string_in_parsed_message(
@@ -245,7 +259,7 @@ class TestLLMCallContract(TestCase):
         self.assertEqual(result.answer, "green")
 
     @patch("llm_utils.lm.llm.get_base_client")
-    def test_call_can_return_dict_for_text_completion(self, mock_get_client):
+    def test_call_can_return_dict_for_chat_completion(self, mock_get_client):
         mock_client = self._make_mock_client()
         mock_get_client.return_value = mock_client
         llm = LLM()
@@ -305,7 +319,6 @@ class TestLLMCallContract(TestCase):
                 {"role": "assistant", "content": '{"answer": "yes"}'},
             ],
         )
-        self.assertIs(llm.last_ai_response, completion)
 
     @patch("llm_utils.lm.llm.get_base_client")
     def test_pydantic_parse_accepts_message_list(self, mock_get_client):
@@ -364,6 +377,8 @@ class TestLLMCallContract(TestCase):
         result = llm("prompt")
 
         self.assertIs(result, message)
+        mock_client.chat.completions.create.assert_called_once()
+        mock_client.completions.create.assert_not_called()
 
     @patch("llm_utils.lm.llm.get_base_client")
     def test_call_requires_n_to_be_one(self, mock_get_client):

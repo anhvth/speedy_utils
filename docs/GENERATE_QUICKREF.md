@@ -2,7 +2,7 @@
 
 ## Summary
 
-The `LLM.generate()` method provides a HuggingFace Transformers-style interface for low-level text generation, working directly with token IDs.
+The `LLM.generate()` method provides a HuggingFace Transformers-style interface for prompt continuation via the completions API. For chat assistant-turn generation, use `LLM.chat_completion()`.
 
 ## Basic Signature
 
@@ -16,9 +16,17 @@ lm.generate(
 ) -> dict | list[dict]
 ```
 
+## Which method to use
+
+- `generate()`: Continue a raw prompt through the completions API.
+- `chat_completion()`: Generate the next assistant turn from chat messages.
+- `pydantic_parse()`: Parse structured output from the chat completions API.
+
+`enable_thinking` is primarily a chat-path control. `generate()` forwards it only for backends that support the same flag on the completions endpoint.
+
 ## Common Use Cases
 
-### 1. Simple Generation
+### 1. Simple Prompt Continuation
 ```python
 result = lm.generate('Hello world', max_tokens=50)
 print(result['text'])
