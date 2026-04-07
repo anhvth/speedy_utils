@@ -47,9 +47,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import bisect
 import json
 import random
 import sys
+import types
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -69,15 +71,11 @@ def _get_dataset_module():
     if _dataset_module is None:
         from datasets import Dataset, DatasetDict, load_from_disk
 
-        _dataset_module = type(
-            "DatasetModule",
-            (),
-            {
-                "Dataset": Dataset,
-                "DatasetDict": DatasetDict,
-                "load_from_disk": load_from_disk,
-            },
-        )()
+        _dataset_module = types.SimpleNamespace(
+            Dataset=Dataset,
+            DatasetDict=DatasetDict,
+            load_from_disk=load_from_disk,
+        )
     return _dataset_module
 
 
@@ -139,7 +137,58 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 # =============================================================================
 
 
-def load_data(source: str | Path) -> list[tuple[str | None, int, dict[str, Any]]]:
+ItemTuple = tuple[str | None, int, dict[str, Any]]
+
+
+class _LazyHFItems(Sequence[ItemTuple]):
+    """Lazy, indexable view over a HuggingFace dataset loaded from disk."""
+
+    def __init__(self, dataset: Any):
+        dataset_module = _get_dataset_module()
+        self._parts: list[tuple[str | None, Any, int, int]] = []
+
+        if isinstance(dataset, dataset_module.DatasetDict):
+            offset = 0
+            for split_name in dataset:
+                split_dataset = dataset[split_name]
+                split_len = len(split_dataset)
+                self._parts.append((split_name, split_dataset, offset, split_len))
+                offset += split_len
+            self._total_len = offset
+        else:
+            dataset_len = len(dataset)
+            self._parts.append((None, dataset, 0, dataset_len))
+            self._total_len = dataset_len
+
+        self._offsets = [offset for _, _, offset, _ in self._parts]
+
+    def __len__(self) -> int:
+        return self._total_len
+
+    def __getitem__(self, index: int | slice) -> ItemTuple | list[ItemTuple]:
+        if isinstance(index, slice):
+            return [self[i] for i in range(*index.indices(len(self)))]
+
+        if index < 0:
+            index += len(self)
+        if index < 0 or index >= len(self):
+            raise IndexError(index)
+
+        part_idx = bisect.bisect_right(self._offsets, index) - 1
+        source_name, dataset, offset, part_len = self._parts[part_idx]
+        local_index = index - offset
+        if local_index < 0 or local_index >= part_len:
+            raise IndexError(index)
+
+        row = dataset[local_index]
+        if not isinstance(row, Mapping):
+            raise ValueError(
+                f"Row {local_index} in split {source_name!r} is not a mapping."
+            )
+        return source_name, local_index, dict(row)
+
+
+def load_data(source: str | Path) -> Sequence[ItemTuple]:
     """
     Load data from various sources into a normalized format.
 
@@ -168,7 +217,7 @@ def load_data(source: str | Path) -> list[tuple[str | None, int, dict[str, Any]]
     )
 
 
-def _load_directory(path: Path) -> list[tuple[str | None, int, dict[str, Any]]]:
+def _load_directory(path: Path) -> Sequence[ItemTuple]:
     """Load from directory - either HF dataset or folder of JSON files."""
     # Check if it's a HuggingFace dataset (saved with save_to_disk)
     # DatasetDict has dataset_dict.json, Dataset has state.json or dataset_info.json
@@ -183,34 +232,18 @@ def _load_directory(path: Path) -> list[tuple[str | None, int, dict[str, Any]]]:
     return _load_json_folder(path)
 
 
-def _load_hf_dataset(path: Path) -> list[tuple[str | None, int, dict[str, Any]]]:
+def _load_hf_dataset(path: Path) -> Sequence[ItemTuple]:
     """Load from HuggingFace dataset saved with save_to_disk()."""
-    from datasets import DatasetDict, load_from_disk
+    dataset_module = _get_dataset_module()
 
     try:
-        dataset = load_from_disk(str(path))
+        dataset = dataset_module.load_from_disk(str(path))
     except Exception as exc:
         raise RuntimeError(
             f"Failed to load HuggingFace dataset from {path}: {exc}"
         ) from exc
 
-    items: list[tuple[str | None, int, dict[str, Any]]] = []
-
-    if isinstance(dataset, DatasetDict):
-        for split_name in dataset:
-            for row_index, row in enumerate(dataset[split_name]):
-                if not isinstance(row, Mapping):
-                    raise ValueError(
-                        f"Row {row_index} in split '{split_name}' is not a mapping."
-                    )
-                items.append((split_name, row_index, dict(row)))
-    else:
-        for row_index, row in enumerate(dataset):
-            if not isinstance(row, Mapping):
-                raise ValueError(f"Row {row_index} is not a mapping.")
-            items.append((None, row_index, dict(row)))
-
-    return items
+    return _LazyHFItems(dataset)
 
 
 def _load_jsonl(path: Path) -> list[tuple[str | None, int, dict[str, Any]]]:
@@ -849,12 +882,6 @@ def main(argv: list[str] | None = None) -> int:
                 "Example: viz_chat data/tokenized/ --tokenizer Qwen/Qwen3-8B"
             )
         tokenizer = _get_tokenizer(args.tokenizer)
-        # Decode all items
-        decoded_items: list[tuple[str | None, int, dict[str, Any]]] = []
-        for source_name, row_index, row in items:
-            decoded_row = decode_tokenized_row(row, tokenizer)
-            decoded_items.append((source_name, row_index, decoded_row))
-        items = decoded_items
 
     # Print summary
     console.print(f"Source: {source_path}", soft_wrap=True)
@@ -877,6 +904,8 @@ def main(argv: list[str] | None = None) -> int:
         source_name, row_index, row = items[idx]
 
         if is_tokenized:
+            decoded_row = dict(row)
+            decoded_row.update(decode_tokenized_row(row, tokenizer))
             print_tokenized_item(
                 console=console,
                 item_number=item_number,
@@ -884,7 +913,7 @@ def main(argv: list[str] | None = None) -> int:
                 dataset_index=idx,
                 source_name=source_name,
                 row_index=row_index,
-                row=row,
+                row=decoded_row,
             )
         else:
             print_item(
@@ -913,6 +942,8 @@ def main(argv: list[str] | None = None) -> int:
             source_name, row_index, row = items[goto_idx]
             item_number += 1
             if is_tokenized:
+                decoded_row = dict(row)
+                decoded_row.update(decode_tokenized_row(row, tokenizer))
                 print_tokenized_item(
                     console=console,
                     item_number=item_number,
@@ -920,7 +951,7 @@ def main(argv: list[str] | None = None) -> int:
                     dataset_index=goto_idx,
                     source_name=source_name,
                     row_index=row_index,
-                    row=row,
+                    row=decoded_row,
                 )
             else:
                 print_item(

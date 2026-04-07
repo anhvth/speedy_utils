@@ -1,4 +1,5 @@
 import linecache
+import queue
 
 from ..__imports import *
 from .process import ErrorHandlerType, ErrorStats
@@ -272,11 +273,150 @@ def _attach_metadata(fut: Future[Any], idx: int, logical_size: int) -> None:
     fut._speedy_size = logical_size
 
 
-def _future_meta(fut: Future[Any]) -> tuple[int, int]:
+def _future_meta(fut: Future[Any]) -> tuple[int, int, int]:
     return (
         fut._speedy_idx,
         fut._speedy_size,
+        getattr(fut, '_speedy_progress_units', fut._speedy_size),
     )
+
+
+def _progress_units_for_item(
+    item: Any,
+    *,
+    progress_weight: Callable[[Any], int] | None,
+) -> int:
+    if progress_weight is None:
+        return 1
+
+    try:
+        units = progress_weight(item)
+    except Exception as exc:
+        raise ValueError('progress_weight raised an exception') from exc
+
+    if isinstance(units, bool) or not isinstance(units, int):
+        raise TypeError('progress_weight must return a non-negative integer')
+    if units < 0:
+        raise ValueError('progress_weight must return a non-negative integer')
+    return units
+
+
+def _set_progress_postfix(pbar: tqdm, postfix: dict[str, Any]) -> None:
+    try:
+        pbar.set_postfix(postfix, refresh=False)
+    except TypeError:
+        pbar.set_postfix(postfix)
+
+
+class _ProgressReporter:
+    def __init__(
+        self,
+        *,
+        enabled: bool,
+        total: int | None,
+        progress_update: int,
+        error_stats: ErrorStats,
+        workers: int,
+        pool: ThreadPoolExecutor | None,
+    ) -> None:
+        self._enabled = enabled and tqdm is not None and total is not None and total > 0
+        self._total = total
+        self._progress_update = max(progress_update, 1)
+        self._error_stats = error_stats
+        self._workers = workers
+        self._pool = pool
+        self._event_queue: queue.Queue[int | None] = queue.Queue()
+        self._stop_requested = threading.Event()
+        self._started = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if not self._enabled:
+            return
+        self._thread = threading.Thread(
+            target=self._run,
+            name='speedy-progress-reporter',
+            daemon=True,
+        )
+        self._thread.start()
+        self._started.wait()
+
+    def set_pool(self, pool: ThreadPoolExecutor) -> None:
+        self._pool = pool
+
+    def advance(self, units: int) -> None:
+        if not self._enabled or units <= 0:
+            return
+        self._event_queue.put(units)
+
+    def close(self) -> None:
+        if not self._enabled:
+            return
+        self._stop_requested.set()
+        self._event_queue.put(None)
+        if self._thread is not None:
+            self._thread.join()
+
+    def _build_postfix(self) -> dict[str, Any]:
+        postfix = self._error_stats.get_postfix_dict()
+        pool = self._pool
+        if pool is not None:
+            in_progress = min(len(getattr(pool, '_threads', ())), self._workers)
+            postfix['in_progress'] = in_progress
+            work_queue = getattr(pool, '_work_queue', None)
+            if work_queue is not None:
+                try:
+                    postfix['queued'] = int(work_queue.qsize())
+                except Exception:
+                    postfix['queued'] = 0
+        return postfix
+
+    def _run(self) -> None:
+        pending = 0
+        visible = 0
+        bar = tqdm(
+            total=self._total,
+            ncols=128,
+            colour='green',
+            bar_format=(
+                '{l_bar}{bar}| {n_fmt}/{total_fmt} '
+                '[{elapsed}<{remaining}, {rate_fmt}{postfix}]'
+            ),
+        )
+        self._started.set()
+        try:
+            while True:
+                should_break = False
+                try:
+                    item = self._event_queue.get(timeout=0.1)
+                except queue.Empty:
+                    item = None
+                    if self._stop_requested.is_set():
+                        should_break = True
+                else:
+                    if item is None:
+                        should_break = self._stop_requested.is_set()
+                    else:
+                        pending += item
+
+                if pending >= self._progress_update or should_break:
+                    delta = min(pending, max((self._total or 0) - visible, 0))
+                    if delta > 0:
+                        bar.update(delta)
+                        visible += delta
+                        pending -= delta
+                    _set_progress_postfix(bar, self._build_postfix())
+
+                if should_break and self._event_queue.empty():
+                    break
+        finally:
+            if pending > 0:
+                delta = min(pending, max((self._total or 0) - visible, 0))
+                if delta > 0:
+                    bar.update(delta)
+                    visible += delta
+            _set_progress_postfix(bar, self._build_postfix())
+            bar.close()
 
 
 class _ResultCollector(Generic[R]):
@@ -399,6 +539,8 @@ if TYPE_CHECKING:
         ordered: bool = ...,
         progress: bool = ...,
         progress_update: int = ...,
+        progress_total: int | None = ...,
+        progress_weight: Callable[[T], int] | None = ...,
         prefetch_factor: int = ...,
         timeout: float | None = ...,
         stop_on_error: bool | None = ...,
@@ -419,6 +561,8 @@ if TYPE_CHECKING:
         ordered: bool = ...,
         progress: bool = ...,
         progress_update: int = ...,
+        progress_total: int | None = ...,
+        progress_weight: Callable[[T], int] | None = ...,
         prefetch_factor: int = ...,
         timeout: float | None = ...,
         stop_on_error: bool | None = ...,
@@ -439,6 +583,8 @@ def multi_thread(
     ordered: bool = True,
     progress: bool = True,
     progress_update: int = 10,
+    progress_total: int | None = None,
+    progress_weight: Callable[[T], int] | None = None,
     prefetch_factor: int = 4,
     timeout: float | None = None,
     stop_on_error: bool | None = None,
@@ -468,7 +614,13 @@ def multi_thread(
     progress : bool, optional
         Toggle tqdm-based progress reporting.
     progress_update : int, optional
-        Minimum logical items between progress refreshes.
+        Minimum logical progress units between progress refreshes.
+    progress_total : int | None, optional
+        Explicit tqdm total in logical progress units. Useful when each input
+        represents more than one logical item.
+    progress_weight : Callable[[T], int] | None, optional
+        Optional callable returning the logical progress units contributed by
+        each input. Must return a non-negative integer.
     prefetch_factor : int, optional
         Multiplier controlling in-flight work (``workers * prefetch_factor``).
         When batching, this targets that many active futures, so logical
@@ -578,6 +730,12 @@ def multi_thread(
     progress_update = max(progress_update, 1)
     fixed_kwargs_map: Mapping[str, Any] = MappingProxyType(dict(fixed_kwargs))
 
+    if progress_total is not None:
+        if isinstance(progress_total, bool) or not isinstance(progress_total, int):
+            raise TypeError('progress_total must be a non-negative integer')
+        if progress_total < 0:
+            raise ValueError('progress_total must be a non-negative integer')
+
     try:
         logical_total = len(inputs)  # type: ignore[arg-type]
     except Exception:  # pragma: no cover - generic iterable
@@ -585,6 +743,18 @@ def multi_thread(
 
     if batch == 1 and logical_total and logical_total / max(workers_val, 1) > 20_000:
         batch = 32
+
+    items_list: list[Any] | None = None
+    needs_materialized_inputs = error_handler != 'raise' or (
+        progress and progress_weight is not None and progress_total is None
+    )
+    if needs_materialized_inputs:
+        try:
+            items_list = list(inputs)
+            inputs = items_list
+            logical_total = len(items_list)
+        except Exception:
+            items_list = None
 
     src_iter: Iterator[Any] = iter(inputs)
     if batch > 1:
@@ -599,34 +769,15 @@ def multi_thread(
         write_logs=error_handler == 'log',
     )
 
-    # Convert inputs to list for index access in error logging
-    items_list: list[Any] | None = None
-    if error_handler != 'raise':
-        try:
-            items_list = list(inputs)
-            src_iter = iter(items_list)
-            if batch > 1:
-                src_iter = iter(_group_iter(src_iter, batch))
-        except Exception:
-            items_list = None
-
-    bar = None
-    last_bar_update = 0
-    if (
-        progress
-        and tqdm is not None
-        and logical_total is not None
-        and logical_total > 0
-    ):
-        bar = tqdm(
-            total=logical_total,
-            ncols=128,
-            colour='green',
-            bar_format=(
-                '{l_bar}{bar}| {n_fmt}/{total_fmt} '
-                '[{elapsed}<{remaining}, {rate_fmt}{postfix}]'
-            ),
-        )
+    effective_progress_total = progress_total
+    if effective_progress_total is None:
+        if progress_weight is None:
+            effective_progress_total = logical_total
+        elif items_list is not None:
+            effective_progress_total = sum(
+                _progress_units_for_item(item, progress_weight=progress_weight)
+                for item in items_list
+            )
 
     # Capture caller context for error reporting
     caller_frame_obj = inspect.currentframe()
@@ -652,10 +803,20 @@ def multi_thread(
         return next_logical_idx - completed_items
 
     inflight: set[Future[Any]] = set()
+    reporter = _ProgressReporter(
+        enabled=progress,
+        total=effective_progress_total,
+        progress_update=progress_update,
+        error_stats=error_stats,
+        workers=workers_val,
+        pool=None,
+    )
     pool = ThreadPoolExecutor(
         max_workers=workers_val,
         thread_name_prefix='speedy-thread',
     )
+    reporter.set_pool(pool)
+    reporter.start()
     shutdown_kwargs: dict[str, Any] = {'wait': True}
 
     try:
@@ -666,14 +827,22 @@ def multi_thread(
                 batch_items = list(arg)
                 if not batch_items:
                     return
+                progress_units = sum(
+                    _progress_units_for_item(item, progress_weight=progress_weight)
+                    for item in batch_items
+                )
                 fut = pool.submit(
                     _run_batch, batch_items, func, fixed_kwargs_map, caller_context
                 )
                 logical_size = len(batch_items)
             else:
+                progress_units = _progress_units_for_item(
+                    arg, progress_weight=progress_weight
+                )
                 fut = pool.submit(_worker, arg, func, fixed_kwargs_map, caller_context)
                 logical_size = 1
             _attach_metadata(fut, next_logical_idx, logical_size)
+            fut._speedy_progress_units = progress_units
             next_logical_idx += logical_size
             inflight.add(fut)
             _track_executor_threads(pool)
@@ -709,7 +878,7 @@ def multi_thread(
 
             for fut in done:
                 inflight.remove(fut)
-                idx, logical_size = _future_meta(fut)
+                idx, logical_size, progress_units = _future_meta(fut)
                 try:
                     result = fut.result()
                     # Record success for each item in the batch
@@ -755,29 +924,13 @@ def multi_thread(
 
                 collector.add(idx, out_items)
                 completed_items += len(out_items)
+                reporter.advance(progress_units)
 
             try:
                 while items_inflight() < max_inflight:
                     submit_arg(next(src_iter))
             except StopIteration:
                 pass
-
-            if bar:
-                delta = completed_items - last_bar_update
-                if delta >= progress_update:
-                    bar.update(delta)
-                    last_bar_update = completed_items
-                    postfix: dict[str, Any] = error_stats.get_postfix_dict()
-                    in_progress = min(len(inflight), workers_val)
-                    postfix['in_progress'] = in_progress
-                    work_queue = getattr(pool, '_work_queue', None)
-                    if work_queue is not None:
-                        try:
-                            queued = int(work_queue.qsize())
-                        except Exception:
-                            queued = 0
-                        postfix['queued'] = queued
-                    bar.set_postfix(postfix)
 
         results = collector.finalize()
 
@@ -791,11 +944,7 @@ def multi_thread(
             pool.shutdown(**shutdown_kwargs)
         except TypeError:  # pragma: no cover - Python <3.9 fallback
             pool.shutdown(shutdown_kwargs.get('wait', True))
-        if bar:
-            delta = completed_items - last_bar_update
-            if delta > 0:
-                bar.update(delta)
-            bar.close()
+        reporter.close()
 
     results = collector.finalize() if 'results' not in locals() else results
     if store_output_pkl_file:

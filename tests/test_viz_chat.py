@@ -2,13 +2,17 @@
 from __future__ import annotations
 
 import json
+import sys
 import tempfile
+import types
 from pathlib import Path
 
 import pytest
 
+import datasets_utils.viz_chat as viz_chat
 from datasets_utils.viz_chat import (
     _detect_format,
+    _load_hf_dataset,
     _load_json,
     _load_json_folder,
     _load_jsonl,
@@ -190,9 +194,11 @@ class TestLoadJsonFolder:
 
     def test_empty_folder_raises_error(self):
         """Test that empty folder raises ValueError."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with pytest.raises(ValueError, match="No JSON files found"):
-                _load_json_folder(Path(tmpdir))
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            pytest.raises(ValueError, match="No JSON files found"),
+        ):
+            _load_json_folder(Path(tmpdir))
 
 
 class TestLoadData:
@@ -245,6 +251,96 @@ class TestLoadData:
         """Test that nonexistent path raises FileNotFoundError."""
         with pytest.raises(FileNotFoundError):
             load_data("/nonexistent/path")
+
+
+class TestLoadHFDataset:
+    """Tests for lazy HuggingFace dataset loading."""
+
+    def test_load_hf_dataset_is_lazy(self, monkeypatch, tmp_path):
+        """HF datasets should stay lazy and only fetch rows when indexed."""
+
+        class FakeDataset:
+            def __init__(self, rows):
+                self.rows = rows
+                self.access_count = 0
+
+            def __len__(self):
+                return len(self.rows)
+
+            def __getitem__(self, index):
+                self.access_count += 1
+                return self.rows[index]
+
+        class FakeDatasetDict(dict):
+            pass
+
+        train = FakeDataset([{"id": "train-0"}, {"id": "train-1"}])
+        valid = FakeDataset([{"id": "valid-0"}])
+        fake_dataset = FakeDatasetDict(train=train, valid=valid)
+
+        fake_module = types.SimpleNamespace(
+            Dataset=FakeDataset,
+            DatasetDict=FakeDatasetDict,
+            load_from_disk=lambda path: fake_dataset,
+        )
+        monkeypatch.setattr(viz_chat, "_dataset_module", None)
+        monkeypatch.setitem(sys.modules, "datasets", fake_module)
+
+        dataset_dir = tmp_path / "hf_dataset"
+        dataset_dir.mkdir()
+        (dataset_dir / "dataset_dict.json").write_text("{}", encoding="utf-8")
+
+        items = _load_hf_dataset(dataset_dir)
+
+        assert len(items) == 3
+        assert train.access_count == 0
+        assert valid.access_count == 0
+
+        assert items[2] == ("valid", 0, {"id": "valid-0"})
+        assert train.access_count == 0
+        assert valid.access_count == 1
+
+
+class TestMainTokenized:
+    """Tests for tokenized dataset display behavior."""
+
+    def test_main_decodes_only_displayed_rows(self, monkeypatch, capsys):
+        """Tokenized rows should be decoded on demand, not eagerly."""
+        rows = [
+            (None, 0, {"id": "a", "input_ids": [1, 2], "labels": [1, -100]}),
+            (None, 1, {"id": "b", "input_ids": [3, 4], "labels": [3, -100]}),
+        ]
+
+        decode_calls: list[str] = []
+
+        monkeypatch.setattr(viz_chat, "load_data", lambda path: rows)
+        monkeypatch.setattr(viz_chat, "_get_tokenizer", lambda name: object())
+
+        def fake_decode(row, tokenizer, show_labels=True):
+            decode_calls.append(row["id"])
+            return {"input_text": f"decoded-{row['id']}"}
+
+        monkeypatch.setattr(viz_chat, "decode_tokenized_row", fake_decode)
+        monkeypatch.setattr(
+            viz_chat,
+            "_wait_for_next_sample",
+            lambda *args, **kwargs: (False, None),
+        )
+
+        exit_code = viz_chat.main(
+            [
+                "dummy_source",
+                "--tokenizer",
+                "dummy-tokenizer",
+            ]
+        )
+
+        assert exit_code == 0
+        assert len(decode_calls) == 1
+        assert decode_calls[0] in {"a", "b"}
+
+        output = capsys.readouterr().out
+        assert "Total items: 2" in output
 
 
 # =============================================================================
@@ -404,7 +500,7 @@ class TestIntegration:
                 assert len(sampled) == 2
 
                 # Normalize messages
-                for source_name, row_index, row in sampled:
+                for _source_name, _row_index, row in sampled:
                     messages = normalize_messages(row)
                     assert len(messages) == 2
                     assert messages[0]["role"] == "user"
@@ -431,6 +527,6 @@ class TestIntegration:
 
             # Sample and normalize
             sampled = sample_items(items, count=2, seed=0)
-            for source_name, row_index, row in sampled:
+            for _source_name, _row_index, row in sampled:
                 messages = normalize_messages(row, input_format="sharegpt")
                 assert len(messages) == 2
