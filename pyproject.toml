@@ -23,6 +23,7 @@ dependencies = [
     "pydantic",
     "tqdm",
     "cachetools",
+    "dill",
     "ruff",
     "bump2version",
     "json-repair",

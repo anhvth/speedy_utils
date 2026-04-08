@@ -15,6 +15,7 @@ __all__ = [
     "Input",
     "Output",
     "show_chat",
+    "get_one_turn_conv",
 ]
 
 _LAZY_ATTRS: dict[str, tuple[str, str]] = {
@@ -45,3 +46,14 @@ def __getattr__(name: str) -> Any:
 
 def __dir__() -> list[str]:
     return sorted({*globals().keys(), *_LAZY_ATTRS.keys(), *__all__})
+
+
+def get_one_turn_conv(s: str, u: str, a: str | None = None):
+    """Create a one-turn conversation with system, user, and optional assistant messages."""
+    conv = [
+        {"role": "system", "content": s},
+        {"role": "user", "content": u},
+    ]
+    if a is not None:
+        conv.append({"role": "assistant", "content": a})
+    return conv

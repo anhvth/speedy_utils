@@ -2,6 +2,7 @@ import contextlib
 import multiprocessing
 import os
 import time
+import types
 
 import pytest
 
@@ -249,6 +250,42 @@ def test_mp_unordered_returns_full_result_set():
         backend="mp",
     )
     assert sorted(out) == [i * i for i in inp]
+
+
+def test_mp_notebook_style_main_callable():
+    notebook_func = types.FunctionType(
+        square.__code__,
+        globals(),
+        name="forward_one",
+        argdefs=square.__defaults__,
+        closure=square.__closure__,
+    )
+    notebook_func.__module__ = "__main__"
+
+    out = multi_process(
+        notebook_func,
+        list(range(8)),
+        num_procs=2,
+        progress=False,
+        backend="mp",
+    )
+    assert out == [square(x) for x in range(8)]
+
+
+def test_mp_local_closure_callable():
+    offset = 7
+
+    def forward_one(x):
+        return x + offset
+
+    out = multi_process(
+        forward_one,
+        [1, 2, 3],
+        num_procs=2,
+        progress=False,
+        backend="mp",
+    )
+    assert out == [8, 9, 10]
 
 
 def test_workers_alias_maps_to_num_procs():

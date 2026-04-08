@@ -347,20 +347,25 @@ def decode_tokenized_row(
     if input_ids:
         result["text"] = tokenizer.decode(input_ids, skip_special_tokens=False)
 
-    # Decode labels (usually same as input_ids but with -100 for masked tokens)
+    # Decode labels: use input_ids for text, style masked vs loss tokens
     if show_labels and "labels" in row:
         labels = row["labels"]
-        # Replace -100 with pad token id for decoding
-        pad_token_id = tokenizer.pad_token_id or tokenizer.eos_token_id or 0
-        labels_for_decode = [t if t != -100 else pad_token_id for t in labels]
-        result["labels_text"] = tokenizer.decode(
-            labels_for_decode, skip_special_tokens=False
-        )
-
-        # Also show which positions are masked
         masked_positions = [i for i, t in enumerate(labels) if t == -100]
         if masked_positions:
             result["masked_positions_count"] = len(masked_positions)
+
+        # Build styled Text by decoding contiguous segments from input_ids
+        styled = Text()
+        i = 0
+        while i < len(labels):
+            is_masked = labels[i] == -100
+            j = i
+            while j < len(labels) and (labels[j] == -100) == is_masked:
+                j += 1
+            segment_text = tokenizer.decode(input_ids[i:j], skip_special_tokens=False)
+            styled.append(segment_text, style="dim" if is_masked else "bold green")
+            i = j
+        result["labels_text_styled"] = styled
 
     # Include other metadata
     for key in ["attention_mask", "position_ids"]:
@@ -805,10 +810,10 @@ def print_tokenized_item(
             )
         )
 
-    if "labels_text" in row:
+    if "labels_text_styled" in row:
         console.print(
             Panel(
-                Text(row["labels_text"], style="green"),
+                row["labels_text_styled"],
                 title="Decoded Labels (loss)",
                 border_style="green",
                 padding=(0, 1),

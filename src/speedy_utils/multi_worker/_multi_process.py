@@ -7,6 +7,7 @@ while removing the Ray-specific backend and its plumbing.
 from __future__ import annotations
 
 import concurrent.futures
+import importlib
 import inspect
 import multiprocessing as mp
 import os
@@ -57,6 +58,51 @@ def _chunk_indexed_items(
         indexed_items[start : start + chunk_size]
         for start in range(0, len(indexed_items), chunk_size)
     ]
+
+
+def _resolve_attr_path(root: Any, attr_path: str) -> Any:
+    current = root
+    for part in attr_path.split("."):
+        current = getattr(current, part)
+    return current
+
+
+def _is_spawn_importable_callable(func: Callable[[Any], Any]) -> bool:
+    """Return True when `spawn` can re-import this callable by name."""
+    module_name = getattr(func, "__module__", None)
+    qualname = getattr(func, "__qualname__", None)
+    if not module_name or not qualname:
+        return False
+    if module_name == "__main__" or "<locals>" in qualname:
+        return False
+
+    try:
+        module = importlib.import_module(module_name)
+        resolved = _resolve_attr_path(module, qualname)
+    except (AttributeError, ImportError):
+        return False
+    return resolved is func
+
+
+def _serialize_spawn_callable(func: Callable[[Any], Any]) -> bytes:
+    """Serialize non-importable callables for the notebook fallback path."""
+    try:
+        import dill
+    except ImportError as exc:  # pragma: no cover - dependency contract
+        raise RuntimeError(
+            "multi_process(..., backend='mp') needs 'dill' when the callable "
+            "is defined in __main__, locally, or otherwise cannot be imported "
+            "by child processes started with 'spawn'."
+        ) from exc
+
+    return dill.dumps(func, recurse=True)
+
+
+def _deserialize_spawn_callable(payload: bytes) -> Callable[[Any], Any]:
+    """Restore a callable serialized for the notebook fallback path."""
+    import dill
+
+    return dill.loads(payload)
 
 
 def _serialize_exception_frames(exc: Exception) -> list[tuple[str, int, str, dict]]:
@@ -274,7 +320,8 @@ def _run_threadpool_backend(
 def _run_mp_chunk(
     *,
     chunk: list[tuple[int, Any]],
-    func: Callable[[Any], Any],
+    func: Callable[[Any], Any] | None,
+    serialized_func: bytes | None,
     cache_dir: Path | None,
     dump_in_thread: bool,
     num_threads: int,
@@ -287,6 +334,11 @@ def _run_mp_chunk(
     event_queue: mp.queues.Queue,
 ) -> None:
     """Execute one process chunk, optionally with a per-process thread pool."""
+    if serialized_func is not None:
+        func = _deserialize_spawn_callable(serialized_func)
+    if func is None:
+        raise ValueError("func or serialized_func must be provided")
+
     f_wrapped = wrap_dump(func, cache_dir, dump_in_thread)
     child_error_stats = (
         ErrorStats(
@@ -361,7 +413,8 @@ def _run_mp_chunk(
 
 def _multiprocess_entrypoint(
     chunk: list[tuple[int, Any]],
-    func: Callable[[Any], Any],
+    func: Callable[[Any], Any] | None,
+    serialized_func: bytes | None,
     cache_dir: Path | None,
     dump_in_thread: bool,
     num_threads: int,
@@ -377,6 +430,7 @@ def _multiprocess_entrypoint(
     _run_mp_chunk(
         chunk=chunk,
         func=func,
+        serialized_func=serialized_func,
         cache_dir=cache_dir,
         dump_in_thread=dump_in_thread,
         num_threads=num_threads,
@@ -426,6 +480,12 @@ def _run_multiprocess_backend(
         _cleanup_log_gate(log_gate_path)
         return []
 
+    serialized_func = None
+    process_func: Callable[[Any], Any] | None = func
+    if not _is_spawn_importable_callable(func):
+        serialized_func = _serialize_spawn_callable(func)
+        process_func = None
+
     ctx = mp.get_context("spawn")
     event_queue = ctx.Queue()
     processes: list[mp.Process] = []
@@ -436,7 +496,8 @@ def _run_multiprocess_backend(
                 target=_multiprocess_entrypoint,
                 args=(
                     chunk,
-                    func,
+                    process_func,
+                    serialized_func,
                     cache_dir,
                     dump_in_thread,
                     num_threads,
