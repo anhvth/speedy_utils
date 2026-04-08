@@ -40,6 +40,12 @@ def test_workers_safe_limit(monkeypatch):
         multi_thread(lambda x: x, [1, 2], workers=5, progress=False)
 
 
+def test_workers_default_safe_limit(monkeypatch):
+    monkeypatch.delenv('SPEEDY_UTILS_MAX_WORKERS', raising=False)
+    monkeypatch.setattr(thread_mod.os, 'cpu_count', lambda: 256)
+    assert thread_mod._safe_worker_limit() == 2048
+
+
 # ────────────────────────────────────────────────────────────
 # 2. scalar – extra parameter with default
 # ────────────────────────────────────────────────────────────

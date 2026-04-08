@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple, cast
 
@@ -36,6 +37,31 @@ class _PrefixCompletionState(NamedTuple):
     stop_reason: str | None
     call_count: int
     usage: Any | None
+
+
+@dataclass(frozen=True)
+class _CustomPrefixCompletionState:
+    assistant_prompt_prefix: str
+    generated_text: str
+    stop: str | None
+    stop_reason: str | None
+    call_count: int
+    usage: Any | None
+    client_idx: int | None = None
+
+    def inject(self, text: str) -> "_CustomPrefixCompletionState":
+        """Return a new continuation state with extra raw prefix text appended."""
+        if not isinstance(text, str):
+            raise TypeError("text must be a string")
+        if not text:
+            return self
+        return replace(
+            self,
+            assistant_prompt_prefix=f"{self.assistant_prompt_prefix}{text}",
+            generated_text=f"{self.generated_text}{text}",
+            stop=None,
+            stop_reason=None,
+        )
 
 
 def split_assistant_parts(text: str) -> tuple[str | None, str | None, bool]:
@@ -176,6 +202,58 @@ class Qwen3LLM(LLM):
             cls._tokenizer = tokenizer
         return tokenizer
 
+    def _resolve_enable_thinking(self, enable_thinking: bool | None = None) -> bool:
+        effective_enable_thinking = (
+            self.enable_thinking if enable_thinking is None else enable_thinking
+        )
+        return effective_enable_thinking is not False
+
+    def _normalize_assistant_prefix(
+        self,
+        assistant_prompt_prefix: str,
+        *,
+        enable_thinking: bool | None = None,
+    ) -> str:
+        if self._resolve_enable_thinking(enable_thinking):
+            return self._build_prefix_state(assistant_prompt_prefix).assistant_prompt_prefix
+        return build_assistant_prefix("", None, True)
+
+    @staticmethod
+    def _normalize_raw_assistant_prefix(assistant_prompt_prefix: str) -> str:
+        if not isinstance(assistant_prompt_prefix, str):
+            raise TypeError("assistant_prompt_prefix must be a string")
+        if assistant_prompt_prefix.startswith(ASSISTANT_PREFIX):
+            return assistant_prompt_prefix
+        if assistant_prompt_prefix.startswith("\n"):
+            return f"{ASSISTANT_PREFIX}{assistant_prompt_prefix}"
+        return f"{ASSISTANT_PREFIX}\n{assistant_prompt_prefix}"
+
+    @staticmethod
+    def _normalize_stop_sequences(stop: str | list[str] | tuple[str, ...]) -> list[str]:
+        if isinstance(stop, str):
+            if not stop:
+                raise ValueError("stop must not be empty")
+            return [stop]
+        stop_list = list(stop)
+        if not stop_list or any(not item for item in stop_list):
+            raise ValueError("stop must contain non-empty strings")
+        return stop_list
+
+    @staticmethod
+    def _append_stop_text(
+        generated_text: str,
+        *,
+        stop_reason: str | None,
+        stop_sequences: list[str],
+        include_stop: bool,
+    ) -> tuple[str, str | None]:
+        matched_stop = None
+        if stop_reason == "stop" and stop_sequences:
+            matched_stop = stop_sequences[0] if len(stop_sequences) == 1 else None
+            if include_stop and matched_stop and not generated_text.endswith(matched_stop):
+                generated_text = f"{generated_text}{matched_stop}"
+        return generated_text, matched_stop
+
     @staticmethod
     def _validate_prefix_completion_kwargs(
         *,
@@ -227,19 +305,34 @@ class Qwen3LLM(LLM):
         self,
         messages: Messages,
         assistant_prompt_prefix: str,
+        *,
+        prefix_mode: str = "think",
+        client_idx: int | None = None,
+        return_client_idx: bool = False,
         **runtime_kwargs,
-    ) -> "CompletionChoice":
+    ) -> "CompletionChoice | tuple[CompletionChoice, int]":
         tokenizer = self._get_tokenizer()
         prompt = tokenizer.apply_chat_template(
             messages,
             tokenize=False,
             add_generation_prompt=False,
         )
+        call_kwargs = dict(runtime_kwargs)
+        enable_thinking = call_kwargs.pop("enable_thinking", None)
+        if prefix_mode == "think":
+            assistant_prompt_prefix = self._normalize_assistant_prefix(
+                assistant_prompt_prefix,
+                enable_thinking=enable_thinking,
+            )
+        elif prefix_mode == "raw":
+            assistant_prompt_prefix = self._normalize_raw_assistant_prefix(
+                assistant_prompt_prefix
+            )
+        else:
+            raise ValueError(f"Unsupported prefix_mode: {prefix_mode}")
         prompt_to_continue = prompt + assistant_prompt_prefix
 
-        call_kwargs = {k: v for k, v in runtime_kwargs.items() if k != "extra_body"}
         cache = call_kwargs.pop("cache", None)
-        enable_thinking = call_kwargs.pop("enable_thinking", None)
         self._require_single_choice(call_kwargs)
         if call_kwargs.get("max_tokens") is None:
             call_kwargs["max_tokens"] = 1
@@ -247,10 +340,16 @@ class Qwen3LLM(LLM):
         effective_kwargs = {**self.model_kwargs, **call_kwargs}
         model_name, api_kwargs = self._build_api_kwargs(
             effective_kwargs,
-            enable_thinking=enable_thinking,
+            drop_keys=("extra_body",),
         )
+        api_kwargs.pop("extra_body", None)
 
-        with self._borrow_client() as client:
+        borrow_client = (
+            self._borrow_client()
+            if client_idx is None
+            else self._borrow_client_by_index(client_idx)
+        )
+        with borrow_client as client:
             self._set_cache(cache, client=client)
             try:
                 completion = client.completions.create(
@@ -290,6 +389,7 @@ class Qwen3LLM(LLM):
         usage = self._get_completion_usage(completion)
         if usage is not None:
             choice.usage = usage
+        resolved_client_idx = self._client_index_by_id[id(client)]
 
         result = {
             "text": choice.text,
@@ -317,7 +417,81 @@ class Qwen3LLM(LLM):
             ],
         )
         self._record_history(choice_messages)
+        if return_client_idx:
+            return choice, resolved_client_idx
         return choice
+
+    @staticmethod
+    def _resolve_custom_prefix_state(
+        assistant_prompt_prefix: str | _CustomPrefixCompletionState,
+    ) -> tuple[str, int | None, int]:
+        if isinstance(assistant_prompt_prefix, _CustomPrefixCompletionState):
+            return (
+                assistant_prompt_prefix.assistant_prompt_prefix,
+                assistant_prompt_prefix.client_idx,
+                assistant_prompt_prefix.call_count,
+            )
+        return assistant_prompt_prefix, None, 0
+
+    def complete_until(
+        self,
+        input_data: str | BaseModel | list[dict],
+        assistant_prompt_prefix: str | _CustomPrefixCompletionState,
+        *,
+        stop: str | list[str] | tuple[str, ...],
+        max_tokens: int = DEFAULT_CONTENT_MAX_TOKENS,
+        include_stop_in_prefix: bool = True,
+        **runtime_kwargs,
+    ) -> _CustomPrefixCompletionState:
+        """
+        Run one raw prefix-conditioned completion until a stop sequence.
+
+        This is the custom path for staged generation flows such as
+        `<memory>...</memory>` followed by `<think_efficient>...</think_efficient>`.
+        """
+        self._validate_prefix_completion_kwargs(
+            n=runtime_kwargs.get("n", 1),
+            content_max_tokens=max_tokens,
+            require_content_max_tokens=True,
+        )
+        stop_sequences = self._normalize_stop_sequences(stop)
+        messages = self._prepare_input(input_data)
+        prior_prefix, client_idx, prior_call_count = self._resolve_custom_prefix_state(
+            assistant_prompt_prefix
+        )
+        normalized_prefix = self._normalize_raw_assistant_prefix(prior_prefix)
+        generation_result = self._generate_with_prefix_step(
+            messages,
+            normalized_prefix,
+            prefix_mode="raw",
+            client_idx=client_idx,
+            return_client_idx=True,
+            max_tokens=max_tokens,
+            stop=stop_sequences,
+            **runtime_kwargs,
+        )
+        if isinstance(generation_result, tuple):
+            choice, resolved_client_idx = generation_result
+        else:
+            choice = generation_result
+            resolved_client_idx = client_idx
+        generated_text = strip_assistant_end(str(choice.text or ""))
+        generated_text, matched_stop = self._append_stop_text(
+            generated_text,
+            stop_reason=choice.finish_reason,
+            stop_sequences=stop_sequences,
+            include_stop=include_stop_in_prefix,
+        )
+        usage = getattr(choice, "usage", None)
+        return _CustomPrefixCompletionState(
+            assistant_prompt_prefix=normalized_prefix + generated_text,
+            generated_text=generated_text,
+            stop=matched_stop,
+            stop_reason=choice.finish_reason,
+            call_count=prior_call_count + 1,
+            usage=usage,
+            client_idx=resolved_client_idx,
+        )
 
     def _complete_reasoning(
         self,
@@ -327,7 +501,13 @@ class Qwen3LLM(LLM):
         thinking_max_tokens: int,
         **runtime_kwargs,
     ) -> _PrefixCompletionState:
-        state = self._build_prefix_state(assistant_prompt_prefix)
+        enable_thinking = runtime_kwargs.get("enable_thinking")
+        state = self._build_prefix_state(
+            self._normalize_assistant_prefix(
+                assistant_prompt_prefix,
+                enable_thinking=enable_thinking,
+            )
+        )
         if state.think_done:
             return state._replace(stop_reason=None)
 
@@ -363,6 +543,16 @@ class Qwen3LLM(LLM):
         content_max_tokens: int,
         **runtime_kwargs,
     ) -> "ChatCompletionMessage":
+        enable_thinking = runtime_kwargs.get("enable_thinking")
+        completion_state = self._build_prefix_state(
+            self._normalize_assistant_prefix(
+                completion_state.assistant_prompt_prefix,
+                enable_thinking=enable_thinking,
+            ),
+            stop_reason=completion_state.stop_reason,
+            call_count=completion_state.call_count,
+            usage=completion_state.usage,
+        )
         choice = self._generate_with_prefix_step(
             messages,
             completion_state.assistant_prompt_prefix,
@@ -448,7 +638,12 @@ class Qwen3LLM(LLM):
         )
 
         if isinstance(completion_state, str):
-            completion_state = self._build_prefix_state(completion_state)
+            completion_state = self._build_prefix_state(
+                self._normalize_assistant_prefix(
+                    completion_state,
+                    enable_thinking=runtime_kwargs.get("enable_thinking"),
+                )
+            )
 
         messages = self._prepare_input(input_data)
         return self._complete_content(
@@ -512,6 +707,6 @@ class Qwen3LLM(LLM):
 
     def _assistant_message_to_content(self, message: "ChatCompletionMessage") -> str:
         # format thinking and content into a single assistant message text for history recording
-        reasoning = getattr(message, "reasoning_content", '')
+        reasoning = getattr(message, "reasoning_content", "")
         content = message.content
         return f"{THINK_START}\n{reasoning}\n{THINK_END}\n\n{content}"

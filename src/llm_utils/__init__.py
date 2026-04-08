@@ -16,6 +16,8 @@ __all__ = [
     "Output",
     "show_chat",
     "get_one_turn_conv",
+    "turn",
+    "msgs_turns",
 ]
 
 _LAZY_ATTRS: dict[str, tuple[str, str]] = {
@@ -57,3 +59,17 @@ def get_one_turn_conv(s: str, u: str, a: str | None = None):
     if a is not None:
         conv.append({"role": "assistant", "content": a})
     return conv
+
+
+def turn(role, content):
+    if role.startswith("a"):
+        role = "assistant"
+    elif role.startswith("s"):
+        role = "system"
+    elif role.startswith("u"):
+        role = "user"
+    return {"role": role, "content": content}
+
+
+def msgs_turns(*args) -> list[dict]:
+    return [turn(r, c) for r, c in args]

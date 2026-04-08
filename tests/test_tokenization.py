@@ -95,7 +95,6 @@ def test_generate_with_prefix_step_uses_tokenizer_and_completion_api(
             "<think>\nseed",
             temperature=0.2,
             max_tokens=99,
-            extra_body={"ignored": True},
         )
 
     assert fake_tokenizer.calls == [
@@ -107,11 +106,56 @@ def test_generate_with_prefix_step_uses_tokenizer_and_completion_api(
     ]
     assert mock_completion_create.call_args.kwargs == {
         "model": "test-model",
-        "prompt": "TOK_PROMPT<think>\nseed",
-        "extra_body": {"chat_template_kwargs": {"enable_thinking": True}},
+        "prompt": "TOK_PROMPT<|im_start|>assistant\n<think>\nseed",
         "temperature": 0.2,
         "max_tokens": 99,
     }
     assert result.text == "reasoning step"
     assert result.finish_reason == "stop"
     assert result.usage is usage
+
+
+@patch("llm_utils.lm.llm.get_base_client")
+def test_generate_with_prefix_step_normalizes_disabled_thinking_prefix(
+    mock_get_client,
+):
+    mock_get_client.return_value = _make_mock_client()
+    llm = Qwen3LLM(enable_thinking=False)
+
+    class FakeTokenizer:
+        def apply_chat_template(self, messages, tokenize, add_generation_prompt):
+            assert messages == [{"role": "user", "content": "hi"}]
+            assert tokenize is False
+            assert add_generation_prompt is False
+            return "TOK_PROMPT"
+
+    choice = CompletionChoice(
+        finish_reason="stop",
+        index=0,
+        logprobs=None,
+        text="final answer",
+    )
+    usage = CompletionUsage(
+        completion_tokens=4,
+        prompt_tokens=9,
+        total_tokens=13,
+    )
+    completion = SimpleNamespace(choices=[choice], usage=usage)
+
+    with (
+        patch.object(Qwen3LLM, "_get_tokenizer", return_value=FakeTokenizer()),
+        patch.object(
+            llm.client.completions, "create", return_value=completion
+        ) as mock_completion_create,
+    ):
+        llm._generate_with_prefix_step(
+            [{"role": "user", "content": "hi"}],
+            "<think>\nseed",
+            enable_thinking=False,
+        )
+
+    assert mock_completion_create.call_args.kwargs == {
+        "model": "test-model",
+        "prompt": "TOK_PROMPT<|im_start|>assistant\n<think>\n\n</think>",
+        "max_tokens": 1,
+    }

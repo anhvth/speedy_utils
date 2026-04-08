@@ -8,8 +8,8 @@ import random
 import threading
 import time
 import weakref
-from copy import deepcopy
 from contextlib import contextmanager
+from copy import deepcopy
 from typing import TYPE_CHECKING, Any, cast
 
 from httpx import Timeout
@@ -18,9 +18,7 @@ from pydantic import BaseModel
 
 from speedy_utils import clean_traceback
 
-from .utils import (
-    get_base_client,
-)
+from .utils import get_base_client
 
 
 # Lazy import openai types for type checking only
@@ -184,7 +182,7 @@ class LLM:
             parts = [
                 f"{self._client_label(client)}={count}"
                 for client, count in zip(
-                    self._alive_clients, self._client_inflight_counts
+                    self._alive_clients, self._client_inflight_counts, strict=False
                 )
             ]
         return f"active={total_inflight} | " + ", ".join(parts)
@@ -221,6 +219,25 @@ class LLM:
     def _borrow_client(self):
         """Yield one client while tracking its in-flight request count."""
         client = self._select_client()
+        with self._borrow_specific_client(client) as borrowed_client:
+            yield borrowed_client
+
+    def _get_tracked_client(self, client_idx: int) -> Any:
+        """Return the alive client at a tracked index or raise clearly."""
+        if client_idx < 0 or client_idx >= len(self._alive_clients):
+            raise RuntimeError(f"Tracked client index {client_idx} is out of range.")
+        return self._alive_clients[client_idx]
+
+    @contextmanager
+    def _borrow_client_by_index(self, client_idx: int):
+        """Yield one specific tracked client while tracking in-flight usage."""
+        client = self._get_tracked_client(client_idx)
+        with self._borrow_specific_client(client) as borrowed_client:
+            yield borrowed_client
+
+    @contextmanager
+    def _borrow_specific_client(self, client: Any):
+        """Yield a specific tracked client while tracking in-flight usage."""
         client_idx = self._client_index_by_id.get(id(client))
         if client_idx is None:
             raise RuntimeError("Selected client is not tracked.")

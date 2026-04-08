@@ -597,6 +597,36 @@ answer = message.content
 reasoning = getattr(message, "reasoning_content", None)
 ```
 
+For custom staged generation with explicit tags, `Qwen3LLM` also exposes
+`complete_until()`:
+
+```python
+from llm_utils import Qwen3LLM
+
+llm = Qwen3LLM(model="Qwen/Qwen3-0.6B")
+
+memory_state = llm.complete_until(
+    [{"role": "user", "content": "Solve this in stages"}],
+    "<memory>",
+    stop="</memory>",
+    max_tokens=256,
+)
+
+think_state = llm.complete_until(
+    [{"role": "user", "content": "Solve this in stages"}],
+    memory_state.assistant_prompt_prefix + "\n<think_efficient>",
+    stop="</think_efficient>",
+    max_tokens=512,
+)
+
+final_state = llm.complete_until(
+    [{"role": "user", "content": "Solve this in stages"}],
+    think_state.assistant_prompt_prefix,
+    stop="<|im_end|>",
+    max_tokens=512,
+)
+```
+
 #### Conversation History
 
 Inspect previous conversations:
