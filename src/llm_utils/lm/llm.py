@@ -6,7 +6,6 @@
 import json
 import random
 import threading
-import time
 import weakref
 from contextlib import contextmanager
 from copy import deepcopy
@@ -141,11 +140,9 @@ class LLM:
         self._multiple_clients = len(self._alive_clients) > 1
         self._client_balance_lock = threading.Lock()
         self._client_inflight_counts = [0 for _ in self._alive_clients]
-        self._client_total_counts = [0 for _ in self._alive_clients]
         self._client_index_by_id = {
             id(client): idx for idx, client in enumerate(self._alive_clients)
         }
-        self._client_last_activity = 0.0
         self._load_balance_report_interval = 5.0
         self._load_balance_report_stop = threading.Event()
         self._load_balance_report_thread: threading.Thread | None = None
@@ -264,8 +261,6 @@ class LLM:
 
         with self._client_balance_lock:
             self._client_inflight_counts[client_idx] += 1
-            self._client_total_counts[client_idx] += 1
-            self._client_last_activity = time.monotonic()
 
         try:
             yield client

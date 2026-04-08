@@ -707,9 +707,3 @@ class Qwen3LLM(LLM):
             content_max_tokens=content_max_tokens,
             **runtime_kwargs,
         )
-
-    def _assistant_message_to_content(self, message: "ChatCompletionMessage") -> str:
-        # format thinking and content into a single assistant message text for history recording
-        reasoning = getattr(message, "reasoning_content", "")
-        content = message.content
-        return f"{THINK_START}\n{reasoning}\n{THINK_END}\n\n{content}"
