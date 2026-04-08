@@ -205,18 +205,26 @@ class TestQwen3LLM(unittest.TestCase):
     def test_complete_reasoning_returns_prefix_state(self, mock_get_client):
         mock_get_client.return_value = self._make_mock_client()
         llm = Qwen3LLM()
-        completion_choice = self._make_completion_choice(
-            "reasoning step</think> final answer",
-            completion_tokens=5,
-            prompt_tokens=13,
-            total_tokens=18,
+        completion_state = _CustomPrefixCompletionState(
+            assistant_prompt_prefix=(
+                f"{ASSISTANT_PREFIX}\n<think>\nseedreasoning step</think> final answer"
+            ),
+            generated_text="reasoning step</think> final answer",
+            stop=THINK_END,
+            stop_reason="stop",
+            call_count=1,
+            usage=CompletionUsage(
+                completion_tokens=5,
+                prompt_tokens=13,
+                total_tokens=18,
+            ),
         )
 
         with patch.object(
             llm,
-            "_generate_with_prefix_step",
-            return_value=completion_choice,
-        ) as mock_generate_with_prefix_step:
+            "complete_until",
+            return_value=completion_state,
+        ) as mock_complete_until:
             state = llm.complete_reasoning(
                 "prompt",
                 assistant_prompt_prefix="<think>\nseed",
@@ -227,11 +235,12 @@ class TestQwen3LLM(unittest.TestCase):
         self.assertTrue(state.think_done)
         self.assertEqual(state.stop_reason, "stop")
         self.assertEqual(state.call_count, 1)
-        self.assertIs(state.usage, completion_choice.usage)
+        self.assertIs(state.usage, completion_state.usage)
         self.assertEqual(
-            mock_generate_with_prefix_step.call_args.kwargs["max_tokens"],
+            mock_complete_until.call_args.kwargs["max_tokens"],
             DEFAULT_THINKING_MAX_TOKENS,
         )
+        self.assertEqual(mock_complete_until.call_args.kwargs["stop"], THINK_END)
 
     @patch("llm_utils.lm.llm.get_base_client")
     def test_complete_reasoning_skips_generation_when_thinking_disabled(
@@ -257,6 +266,42 @@ class TestQwen3LLM(unittest.TestCase):
         self.assertEqual(state.call_count, 0)
         self.assertIsNone(state.usage)
         mock_generate.assert_not_called()
+
+    @patch("llm_utils.lm.llm.get_base_client")
+    def test_complete_reasoning_auto_closes_incomplete_think_from_complete_until(
+        self, mock_get_client
+    ):
+        mock_get_client.return_value = self._make_mock_client()
+        llm = Qwen3LLM()
+        completion_state = _CustomPrefixCompletionState(
+            assistant_prompt_prefix=f"{ASSISTANT_PREFIX}\n<think>\nseedstill thinking",
+            generated_text="still thinking",
+            stop=None,
+            stop_reason="length",
+            call_count=1,
+            usage=CompletionUsage(
+                completion_tokens=3,
+                prompt_tokens=8,
+                total_tokens=11,
+            ),
+        )
+
+        with patch.object(llm, "complete_until", return_value=completion_state):
+            state = llm.complete_reasoning(
+                "prompt",
+                assistant_prompt_prefix="<think>\nseed",
+                thinking_max_tokens=32,
+            )
+
+        self.assertEqual(
+            state.assistant_prompt_prefix,
+            f"{ASSISTANT_PREFIX}\n<think>\nseedstill thinking\n</think>",
+        )
+        self.assertEqual(state.reasoning, "seedstill thinking")
+        self.assertEqual(state.content, "")
+        self.assertTrue(state.think_done)
+        self.assertEqual(state.stop_reason, "length")
+        self.assertEqual(state.call_count, 1)
 
     @patch("llm_utils.lm.llm.get_base_client")
     def test_complete_content_uses_reasoning_state(self, mock_get_client):

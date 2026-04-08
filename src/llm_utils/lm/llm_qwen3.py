@@ -141,6 +141,7 @@ def _load_auto_tokenizer():
             from transformers.models.auto.tokenization_auto import (
                 AutoTokenizer as tokenizer_cls,
             )
+            print("Warning: Imported AutoTokenizer from transformers.models.auto.tokenization_auto, which may cause issues if transformers is updated. Please ensure transformers is up to date to avoid this warning.")
         _AUTO_TOKENIZER_CLS = tokenizer_cls
     return _AUTO_TOKENIZER_CLS
 
@@ -178,7 +179,11 @@ def _get_tokenizer(name_or_path: str | os.PathLike[str]):
             trust_remote_code=True,
         )
         return tokenizer
+    except Exception as exc:
+        logger.error(f"Error loading tokenizer for {name_or_path}: {exc}")
+        raise
     finally:
+        
         if previous is None:
             os.environ.pop(TRANSFORMERS_NO_ADVISORY_WARNINGS_ENV, None)
         else:
@@ -250,7 +255,11 @@ class Qwen3LLM(LLM):
         matched_stop = None
         if stop_reason == "stop" and stop_sequences:
             matched_stop = stop_sequences[0] if len(stop_sequences) == 1 else None
-            if include_stop and matched_stop and not generated_text.endswith(matched_stop):
+            if (
+                include_stop
+                and matched_stop
+                and matched_stop not in generated_text
+            ):
                 generated_text = f"{generated_text}{matched_stop}"
         return generated_text, matched_stop
 
@@ -433,6 +442,18 @@ class Qwen3LLM(LLM):
             )
         return assistant_prompt_prefix, None, 0
 
+    @classmethod
+    def _custom_state_to_prefix_state(
+        cls,
+        completion_state: _CustomPrefixCompletionState,
+    ) -> _PrefixCompletionState:
+        return cls._build_prefix_state(
+            completion_state.assistant_prompt_prefix,
+            stop_reason=completion_state.stop_reason,
+            call_count=completion_state.call_count,
+            usage=completion_state.usage,
+        )
+
     def complete_until(
         self,
         input_data: str | BaseModel | list[dict],
@@ -511,24 +532,19 @@ class Qwen3LLM(LLM):
         if state.think_done:
             return state._replace(stop_reason=None)
 
-        choice = self._generate_with_prefix_step(
+        custom_state = self.complete_until(
             messages,
             state.assistant_prompt_prefix,
+            stop=THINK_END,
             max_tokens=thinking_max_tokens,
             **runtime_kwargs,
         )
-
-        state = self._build_prefix_state(
-            state.assistant_prompt_prefix + strip_assistant_end(str(choice.text or "")),
-            stop_reason=choice.finish_reason,
-            call_count=state.call_count + 1,
-            usage=getattr(choice, "usage", None),
-        )
+        state = self._custom_state_to_prefix_state(custom_state)
 
         if not state.think_done:
             state = self._build_prefix_state(
                 state.assistant_prompt_prefix + "\n</think>\n\n",
-                stop_reason=choice.finish_reason,
+                stop_reason=state.stop_reason,
                 call_count=state.call_count,
                 usage=state.usage,
             )
