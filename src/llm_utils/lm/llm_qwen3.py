@@ -141,7 +141,10 @@ def _load_auto_tokenizer():
             from transformers.models.auto.tokenization_auto import (
                 AutoTokenizer as tokenizer_cls,
             )
-            print("Warning: Imported AutoTokenizer from transformers.models.auto.tokenization_auto, which may cause issues if transformers is updated. Please ensure transformers is up to date to avoid this warning.")
+
+            print(
+                "Warning: Imported AutoTokenizer from transformers.models.auto.tokenization_auto, which may cause issues if transformers is updated. Please ensure transformers is up to date to avoid this warning."
+            )
         _AUTO_TOKENIZER_CLS = tokenizer_cls
     return _AUTO_TOKENIZER_CLS
 
@@ -183,7 +186,6 @@ def _get_tokenizer(name_or_path: str | os.PathLike[str]):
         logger.error(f"Error loading tokenizer for {name_or_path}: {exc}")
         raise
     finally:
-        
         if previous is None:
             os.environ.pop(TRANSFORMERS_NO_ADVISORY_WARNINGS_ENV, None)
         else:
@@ -196,7 +198,23 @@ class Qwen3LLM(LLM):
     TOKENIZER_NAME: ClassVar[str] = "Qwen/Qwen3-0.6B"
     _tokenizer: ClassVar[Any | None] = None
 
-    def __init__(self, *args, enable_thinking: bool = True, **kwargs):
+    def __init__(
+        self,
+        *args,
+        enable_thinking: bool = True,
+        thinking_max_tokens: int = DEFAULT_THINKING_MAX_TOKENS,
+        content_max_tokens: int = DEFAULT_CONTENT_MAX_TOKENS,
+        **kwargs,
+    ):
+        self._validate_prefix_completion_kwargs(
+            n=1,
+            thinking_max_tokens=thinking_max_tokens,
+            content_max_tokens=content_max_tokens,
+            require_thinking_max_tokens=True,
+            require_content_max_tokens=True,
+        )
+        self.default_thinking_max_tokens = thinking_max_tokens
+        self.default_content_max_tokens = content_max_tokens
         super().__init__(*args, enable_thinking=enable_thinking, **kwargs)
 
     @classmethod
@@ -220,7 +238,9 @@ class Qwen3LLM(LLM):
         enable_thinking: bool | None = None,
     ) -> str:
         if self._resolve_enable_thinking(enable_thinking):
-            return self._build_prefix_state(assistant_prompt_prefix).assistant_prompt_prefix
+            return self._build_prefix_state(
+                assistant_prompt_prefix
+            ).assistant_prompt_prefix
         return build_assistant_prefix("", None, True)
 
     @staticmethod
@@ -255,11 +275,7 @@ class Qwen3LLM(LLM):
         matched_stop = None
         if stop_reason == "stop" and stop_sequences:
             matched_stop = stop_sequences[0] if len(stop_sequences) == 1 else None
-            if (
-                include_stop
-                and matched_stop
-                and matched_stop not in generated_text
-            ):
+            if include_stop and matched_stop and matched_stop not in generated_text:
                 generated_text = f"{generated_text}{matched_stop}"
         return generated_text, matched_stop
 
@@ -342,63 +358,20 @@ class Qwen3LLM(LLM):
         prompt_to_continue = prompt + assistant_prompt_prefix
 
         cache = call_kwargs.pop("cache", None)
-        self._require_single_choice(call_kwargs)
-        if call_kwargs.get("max_tokens") is None:
-            call_kwargs["max_tokens"] = 1
-
-        effective_kwargs = {**self.model_kwargs, **call_kwargs}
-        model_name, api_kwargs = self._build_api_kwargs(
-            effective_kwargs,
+        call_kwargs.pop("extra_body", None)
+        generation_result = self._raw_completion_step(
+            prompt_to_continue,
+            cache=cache,
+            client_idx=client_idx,
+            return_client_idx=return_client_idx,
             drop_keys=("extra_body",),
+            **call_kwargs,
         )
-        api_kwargs.pop("extra_body", None)
-
-        borrow_client = (
-            self._borrow_client()
-            if client_idx is None
-            else self._borrow_client_by_index(client_idx)
-        )
-        with borrow_client as client:
-            self._set_cache(cache, client=client)
-            try:
-                completion = client.completions.create(
-                    model=model_name,
-                    prompt=prompt_to_continue,
-                    **api_kwargs,
-                )
-            except Exception as exc:
-                from openai import (
-                    APITimeoutError,
-                    AuthenticationError,
-                    BadRequestError,
-                    RateLimitError,
-                )
-
-                if isinstance(exc, APITimeoutError):
-                    error_msg = f"OpenAI API timeout ({api_kwargs['timeout']}) error: {exc} for model {model_name}"
-                    logger.error(error_msg)
-                    raise
-                if isinstance(exc, (AuthenticationError, RateLimitError, BadRequestError)):
-                    error_msg = f"OpenAI API error ({type(exc).__name__}): {exc}"
-                    logger.error(error_msg)
-                    raise
-                if isinstance(exc, ValueError):
-                    logger.error(f"ValueError during API call: {exc}")
-                    raise
-                is_length_error = "Length" in str(exc) or "maximum context length" in str(
-                    exc
-                )
-                if is_length_error:
-                    raise ValueError(
-                        f"Input too long for model {model_name}. Error: {str(exc)[:100]}..."
-                    ) from exc
-                raise
-
-        choice = self._get_completion_choice(completion)
-        usage = self._get_completion_usage(completion)
-        if usage is not None:
-            choice.usage = usage
-        resolved_client_idx = self._client_index_by_id[id(client)]
+        if return_client_idx:
+            choice, resolved_client_idx = cast(tuple[Any, int], generation_result)
+        else:
+            choice = generation_result
+            resolved_client_idx = None
 
         result = {
             "text": choice.text,
@@ -427,6 +400,8 @@ class Qwen3LLM(LLM):
         )
         self._record_history(choice_messages)
         if return_client_idx:
+            if resolved_client_idx is None:
+                raise RuntimeError("Expected tracked client index for prefix step.")
             return choice, resolved_client_idx
         return choice
 
@@ -460,7 +435,7 @@ class Qwen3LLM(LLM):
         assistant_prompt_prefix: str | _CustomPrefixCompletionState,
         *,
         stop: str | list[str] | tuple[str, ...],
-        max_tokens: int = DEFAULT_CONTENT_MAX_TOKENS,
+        max_tokens: int | None = None,
         include_stop_in_prefix: bool = True,
         **runtime_kwargs,
     ) -> _CustomPrefixCompletionState:
@@ -470,6 +445,11 @@ class Qwen3LLM(LLM):
         This is the custom path for staged generation flows such as
         `<memory>...</memory>` followed by `<think_efficient>...</think_efficient>`.
         """
+        if max_tokens is None:
+            max_tokens = cast(
+                int,
+                self.model_kwargs.get("max_tokens", self.default_content_max_tokens),
+            )
         self._validate_prefix_completion_kwargs(
             n=runtime_kwargs.get("n", 1),
             content_max_tokens=max_tokens,
@@ -613,7 +593,7 @@ class Qwen3LLM(LLM):
         input_data: str | BaseModel | list[dict],
         assistant_prompt_prefix: str = "<think>\n",
         *,
-        thinking_max_tokens: int = DEFAULT_THINKING_MAX_TOKENS,
+        thinking_max_tokens: int | None = None,
         **runtime_kwargs,
     ) -> _PrefixCompletionState:
         """
@@ -622,6 +602,8 @@ class Qwen3LLM(LLM):
         The returned state can be passed to `complete_content()` to finish the
         answer generation.
         """
+        if thinking_max_tokens is None:
+            thinking_max_tokens = self.default_thinking_max_tokens
         self._validate_prefix_completion_kwargs(
             n=runtime_kwargs.get("n", 1),
             thinking_max_tokens=thinking_max_tokens,
@@ -641,12 +623,14 @@ class Qwen3LLM(LLM):
         input_data: str | BaseModel | list[dict],
         completion_state: _PrefixCompletionState | str,
         *,
-        content_max_tokens: int = DEFAULT_CONTENT_MAX_TOKENS,
+        content_max_tokens: int | None = None,
         **runtime_kwargs,
     ) -> "ChatCompletionMessage":
         """
         Complete the visible answer from an already completed reasoning state.
         """
+        if content_max_tokens is None:
+            content_max_tokens = self.default_content_max_tokens
         self._validate_prefix_completion_kwargs(
             n=runtime_kwargs.get("n", 1),
             content_max_tokens=content_max_tokens,
@@ -675,8 +659,8 @@ class Qwen3LLM(LLM):
         input_data: str | BaseModel | list[dict],
         assistant_prompt_prefix: str = "<think>\n",
         *,
-        thinking_max_tokens: int = DEFAULT_THINKING_MAX_TOKENS,
-        content_max_tokens: int = DEFAULT_CONTENT_MAX_TOKENS,
+        thinking_max_tokens: int | None = None,
+        content_max_tokens: int | None = None,
         **runtime_kwargs,
     ) -> "ChatCompletionMessage":
         """
@@ -686,6 +670,10 @@ class Qwen3LLM(LLM):
         continues a `<think>...</think>` block inside the assistant turn before
         the final answer, and is distinct from the raw prompt `generate()` API.
         """
+        if thinking_max_tokens is None:
+            thinking_max_tokens = self.default_thinking_max_tokens
+        if content_max_tokens is None:
+            content_max_tokens = self.default_content_max_tokens
         self._validate_prefix_completion_kwargs(
             n=runtime_kwargs.get("n", 1),
             thinking_max_tokens=thinking_max_tokens,
@@ -719,7 +707,6 @@ class Qwen3LLM(LLM):
             content_max_tokens=content_max_tokens,
             **runtime_kwargs,
         )
-
 
     def _assistant_message_to_content(self, message: "ChatCompletionMessage") -> str:
         # format thinking and content into a single assistant message text for history recording

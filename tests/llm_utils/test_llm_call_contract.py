@@ -207,6 +207,35 @@ class TestLLMCallContract(TestCase):
         self.assertEqual(result.prompt_token_ids, [33, 44])
 
     @patch("llm_utils.lm.llm.get_base_client")
+    def test_constructor_common_kwargs_become_default_model_kwargs(
+        self, mock_get_client
+    ):
+        mock_client = self._make_mock_client()
+        mock_get_client.return_value = mock_client
+        llm = LLM(
+            model="test-model",
+            max_tokens=17,
+            temperature=0.3,
+            top_p=0.8,
+        )
+
+        completion = self._make_text_completion("hello")
+        mock_client.completions.create.return_value = completion
+
+        llm.generate("prompt")
+
+        self.assertEqual(
+            mock_client.completions.create.call_args.kwargs,
+            {
+                "model": "test-model",
+                "prompt": "prompt",
+                "max_tokens": 17,
+                "temperature": 0.3,
+                "top_p": 0.8,
+            },
+        )
+
+    @patch("llm_utils.lm.llm.get_base_client")
     def test_generate_requires_string_prompt(self, mock_get_client):
         mock_get_client.return_value = self._make_mock_client()
         llm = LLM()

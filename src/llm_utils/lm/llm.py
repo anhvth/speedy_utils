@@ -54,6 +54,14 @@ class LLM:
         verbose=False,
         timeout: float | Timeout | None = None,
         enable_thinking: bool | None = None,
+        *,
+        model: str | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        stop: str | list[str] | tuple[str, ...] | None = None,
+        presence_penalty: float | None = None,
+        frequency_penalty: float | None = None,
         **model_kwargs,
     ):
         """Initialize LLMTask."""
@@ -68,6 +76,18 @@ class LLM:
                 + ". Pass response_model at call time or use LLMSignature for "
                 "signature-backed defaults."
             )
+        common_model_kwargs = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "top_p": top_p,
+            "stop": stop,
+            "presence_penalty": presence_penalty,
+            "frequency_penalty": frequency_penalty,
+        }
+        for key, value in common_model_kwargs.items():
+            if value is not None:
+                model_kwargs[key] = value
         self.model_kwargs = model_kwargs
         self.timeout = timeout
         self.enable_thinking = enable_thinking
@@ -346,9 +366,7 @@ class LLM:
         """Extract completion choice data while preserving backend metadata."""
         if hasattr(choice, "model_dump"):
             try:
-                choice_data = dict(
-                    choice.model_dump(mode="python", round_trip=True)
-                )
+                choice_data = dict(choice.model_dump(mode="python", round_trip=True))
             except TypeError:
                 choice_data = dict(choice.model_dump())
         elif isinstance(choice, dict):
@@ -358,9 +376,7 @@ class LLM:
         else:
             choice_data = {}
 
-        choice_data.setdefault(
-            "finish_reason", getattr(choice, "finish_reason", None)
-        )
+        choice_data.setdefault("finish_reason", getattr(choice, "finish_reason", None))
         choice_data.setdefault("index", getattr(choice, "index", 0))
         choice_data.setdefault("logprobs", getattr(choice, "logprobs", None))
         choice_data.setdefault("text", getattr(choice, "text", None))
@@ -424,6 +440,100 @@ class LLM:
             self._last_conversations = self._last_conversations[-100:]
         self._last_conversations.append(conversation_messages)
 
+    @staticmethod
+    def _handle_completion_exception(
+        exc: Exception,
+        *,
+        api_kwargs: dict[str, Any],
+        model_name: str,
+    ) -> None:
+        """Normalize completion-style API exceptions."""
+        from openai import (
+            APITimeoutError,
+            AuthenticationError,
+            BadRequestError,
+            RateLimitError,
+        )
+
+        if isinstance(exc, APITimeoutError):
+            error_msg = (
+                f"OpenAI API timeout ({api_kwargs['timeout']}) error: {exc} "
+                f"for model {model_name}"
+            )
+            logger.error(error_msg)
+            raise exc
+        if isinstance(exc, (AuthenticationError, RateLimitError, BadRequestError)):
+            error_msg = f"OpenAI API error ({type(exc).__name__}): {exc}"
+            logger.error(error_msg)
+            raise exc
+        if isinstance(exc, ValueError):
+            logger.error(f"ValueError during API call: {exc}")
+            raise exc
+        is_length_error = "Length" in str(exc) or "maximum context length" in str(exc)
+        if is_length_error:
+            raise ValueError(
+                f"Input too long for model {model_name}. Error: {str(exc)[:100]}..."
+            ) from exc
+        raise exc
+
+    def _raw_completion_step(
+        self,
+        prompt: str,
+        *,
+        cache: bool | None = None,
+        client_idx: int | None = None,
+        return_client_idx: bool = False,
+        enable_thinking: bool | None = None,
+        drop_keys: tuple[str, ...] = (),
+        **runtime_kwargs,
+    ) -> "CompletionChoice | tuple[CompletionChoice, int]":
+        """Run one text completion request against a fully-built prompt."""
+        if not isinstance(prompt, str):
+            raise TypeError("_raw_completion_step expects `prompt` to be a string")
+
+        call_kwargs = dict(runtime_kwargs)
+        self._require_single_choice(call_kwargs)
+        if call_kwargs.get("max_tokens") is None:
+            call_kwargs["max_tokens"] = 1
+
+        effective_kwargs = {**self.model_kwargs, **call_kwargs}
+        model_name, api_kwargs = self._build_api_kwargs(
+            effective_kwargs,
+            enable_thinking=enable_thinking,
+            drop_keys=drop_keys,
+        )
+        for key in drop_keys:
+            api_kwargs.pop(key, None)
+
+        borrow_client = (
+            self._borrow_client()
+            if client_idx is None
+            else self._borrow_client_by_index(client_idx)
+        )
+        with borrow_client as client:
+            self._set_cache(cache, client=client)
+            try:
+                completion = client.completions.create(
+                    model=model_name,
+                    prompt=prompt,
+                    **api_kwargs,
+                )
+            except Exception as exc:
+                self._handle_completion_exception(
+                    exc,
+                    api_kwargs=api_kwargs,
+                    model_name=model_name,
+                )
+
+        choice = self._get_completion_choice(completion)
+        usage = self._get_completion_usage(completion)
+        if usage is not None:
+            choice.usage = usage
+
+        if return_client_idx:
+            return choice, self._client_index_by_id[id(client)]
+        return choice
+
     @clean_traceback
     def _chat_completion_result(
         self,
@@ -452,33 +562,11 @@ class LLM:
                     model=model_name, messages=messages, **api_kwargs
                 )
             except Exception as exc:
-                # Import openai exceptions for type checking
-                from openai import (
-                    APITimeoutError,
-                    AuthenticationError,
-                    BadRequestError,
-                    RateLimitError,
+                self._handle_completion_exception(
+                    exc,
+                    api_kwargs=api_kwargs,
+                    model_name=model_name,
                 )
-
-                if isinstance(exc, APITimeoutError):
-                    error_msg = f"OpenAI API timeout ({api_kwargs['timeout']}) error: {exc} for model {model_name}"
-                    logger.error(error_msg)
-                    raise
-                if isinstance(exc, (AuthenticationError, RateLimitError, BadRequestError)):
-                    error_msg = f"OpenAI API error ({type(exc).__name__}): {exc}"
-                    logger.error(error_msg)
-                    raise
-                if isinstance(exc, ValueError):
-                    logger.error(f"ValueError during API call: {exc}")
-                    raise
-                is_length_error = "Length" in str(exc) or "maximum context length" in str(
-                    exc
-                )
-                if is_length_error:
-                    raise ValueError(
-                        f"Input too long for model {model_name}. Error: {str(exc)[:100]}..."
-                    ) from exc
-                raise
         # print(completion)
 
         choices = getattr(completion, "choices", None)
@@ -540,55 +628,14 @@ class LLM:
         """Call the completions API to continue a raw prompt with more tokens."""
         if not isinstance(prompt, str):
             raise TypeError("generate expects `prompt` to be a string")
-
-        self._require_single_choice(runtime_kwargs)
-
-        effective_kwargs = {**self.model_kwargs, **runtime_kwargs}
-        model_name, api_kwargs = self._build_api_kwargs(
-            effective_kwargs,
+        choice = self._raw_completion_step(
+            prompt,
+            cache=cache,
             enable_thinking=enable_thinking,
+            **runtime_kwargs,
         )
-
-        with self._borrow_client() as client:
-            self._set_cache(cache, client=client)
-            try:
-                completion = client.completions.create(
-                    model=model_name,
-                    prompt=prompt,
-                    **api_kwargs,
-                )
-            except Exception as exc:
-                from openai import (
-                    APITimeoutError,
-                    AuthenticationError,
-                    BadRequestError,
-                    RateLimitError,
-                )
-
-                if isinstance(exc, APITimeoutError):
-                    error_msg = f"OpenAI API timeout ({api_kwargs['timeout']}) error: {exc} for model {model_name}"
-                    logger.error(error_msg)
-                    raise
-                if isinstance(exc, (AuthenticationError, RateLimitError, BadRequestError)):
-                    error_msg = f"OpenAI API error ({type(exc).__name__}): {exc}"
-                    logger.error(error_msg)
-                    raise
-                if isinstance(exc, ValueError):
-                    logger.error(f"ValueError during API call: {exc}")
-                    raise
-                is_length_error = "Length" in str(exc) or "maximum context length" in str(
-                    exc
-                )
-                if is_length_error:
-                    raise ValueError(
-                        f"Input too long for model {model_name}. Error: {str(exc)[:100]}..."
-                    ) from exc
-                raise
-
-        choice = self._get_completion_choice(completion)
-        usage = self._get_completion_usage(completion)
-        if usage is not None:
-            choice.usage = usage
+        if not hasattr(choice, "text"):
+            raise ValueError("No text returned from completion.")
 
         conversation_messages = cast(
             Messages,
@@ -645,13 +692,15 @@ class LLM:
                 # Import openai exceptions for type checking
                 from openai import AuthenticationError, BadRequestError, RateLimitError
 
-                if isinstance(exc, (AuthenticationError, RateLimitError, BadRequestError)):
+                if isinstance(
+                    exc, (AuthenticationError, RateLimitError, BadRequestError)
+                ):
                     error_msg = f"OpenAI API error ({type(exc).__name__}): {exc}"
                     logger.error(error_msg)
                     raise
-                is_length_error = "Length" in str(exc) or "maximum context length" in str(
+                is_length_error = "Length" in str(
                     exc
-                )
+                ) or "maximum context length" in str(exc)
                 if is_length_error:
                     raise ValueError(
                         f"Input too long for model {model_name}. Error: {str(exc)[:100]}..."

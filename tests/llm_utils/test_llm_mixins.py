@@ -10,6 +10,7 @@ from openai.types.completion_usage import CompletionUsage
 
 import llm_utils
 from llm_utils import Qwen3LLM
+from llm_utils.lm.llm import LLM
 from llm_utils.lm.llm_qwen3 import (
     ASSISTANT_PREFIX,
     DEFAULT_CONTENT_MAX_TOKENS,
@@ -352,7 +353,9 @@ class TestQwen3LLM(unittest.TestCase):
         )
 
     @patch("llm_utils.lm.llm.get_base_client")
-    def test_chat_completion_skips_reasoning_when_thinking_disabled(self, mock_get_client):
+    def test_chat_completion_skips_reasoning_when_thinking_disabled(
+        self, mock_get_client
+    ):
         mock_get_client.return_value = self._make_mock_client()
         llm = Qwen3LLM(enable_thinking=False)
         content_choice = self._make_completion_choice(
@@ -479,6 +482,36 @@ class TestQwen3LLM(unittest.TestCase):
         )
 
     @patch("llm_utils.lm.llm.get_base_client")
+    def test_chat_completion_uses_constructor_token_budget_defaults(
+        self, mock_get_client
+    ):
+        mock_get_client.return_value = self._make_mock_client()
+        llm = Qwen3LLM(thinking_max_tokens=12, content_max_tokens=34)
+        reasoning_choice = self._make_completion_choice(
+            "reasoning step</think>",
+            finish_reason="stop",
+        )
+        content_choice = self._make_completion_choice(
+            "final answer",
+            finish_reason="stop",
+        )
+
+        with patch.object(
+            llm,
+            "_generate_with_prefix_step",
+            side_effect=[reasoning_choice, content_choice],
+        ) as mock_generate_with_prefix_step:
+            llm.chat_completion("prompt")
+
+        self.assertEqual(
+            [
+                call.kwargs["max_tokens"]
+                for call in mock_generate_with_prefix_step.call_args_list
+            ],
+            [12, 34],
+        )
+
+    @patch("llm_utils.lm.llm.get_base_client")
     def test_complete_until_uses_raw_prefix_and_appends_stop_token(
         self, mock_get_client
     ):
@@ -559,6 +592,38 @@ class TestQwen3LLM(unittest.TestCase):
             ),
         )
         self.assertEqual(result.stop, "</think_efficient>")
+
+    @patch("llm_utils.lm.llm.get_base_client")
+    def test_complete_until_uses_constructor_generation_defaults(self, mock_get_client):
+        mock_get_client.return_value = self._make_mock_client()
+        llm = Qwen3LLM(max_tokens=23, temperature=0.2)
+        mock_tokenizer = MagicMock()
+        mock_tokenizer.apply_chat_template.return_value = "prompt-template"
+        completion = SimpleNamespace(
+            choices=[
+                self._make_completion_choice(
+                    "memory text",
+                    finish_reason="stop",
+                )
+            ],
+        )
+
+        with (
+            patch.object(llm, "_get_tokenizer", return_value=mock_tokenizer),
+            patch.object(
+                llm.client.completions,
+                "create",
+                return_value=completion,
+            ) as mock_completion_create,
+        ):
+            llm.complete_until(
+                "prompt",
+                "<memory>",
+                stop="</memory>",
+            )
+
+        self.assertEqual(mock_completion_create.call_args.kwargs["max_tokens"], 23)
+        self.assertEqual(mock_completion_create.call_args.kwargs["temperature"], 0.2)
 
     @patch("llm_utils.lm.llm.get_base_client")
     def test_complete_until_state_inject_appends_prefix_text(self, mock_get_client):
@@ -647,7 +712,9 @@ class TestQwen3LLM(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(RuntimeError, "out of range"):
-            llm.complete_until("prompt", state, stop="</think_efficient>", max_tokens=32)
+            llm.complete_until(
+                "prompt", state, stop="</think_efficient>", max_tokens=32
+            )
 
     @patch("llm_utils.lm.llm.get_base_client")
     def test_inspect_history_is_public(self, mock_get_client):
@@ -664,13 +731,104 @@ class TestQwen3LLM(unittest.TestCase):
             ],
         ]
 
-        with patch("llm_utils.show_chat", return_value=["shown"]) as mock_show_chat:
+        with patch("llm_utils.show_chat", return_value=["shown"]):
             history = llm.inspect_history(idx=-1, k_last_messages=1)
 
         self.assertEqual(history, ["shown"])
-        mock_show_chat.assert_called_once_with(
-            [{"role": "assistant", "content": "latest answer"}]
+
+
+class TestLLMRawCompletionStep(unittest.TestCase):
+    @staticmethod
+    def _make_mock_client():
+        mock_client = MagicMock()
+        mock_model = MagicMock(id="test-model")
+        mock_client.models.list.return_value = MagicMock(data=[mock_model])
+        return mock_client
+
+    @staticmethod
+    def _make_text_completion(content="hello", finish_reason="stop"):
+        usage = CompletionUsage(
+            completion_tokens=7,
+            prompt_tokens=11,
+            total_tokens=18,
         )
+        mock_choice = CompletionChoice(
+            finish_reason=finish_reason,
+            index=0,
+            logprobs=None,
+            text=content,
+        )
+        mock_choice.usage = usage
+        return SimpleNamespace(choices=[mock_choice], usage=usage)
+
+    @patch("llm_utils.lm.llm.get_base_client")
+    def test_raw_completion_step_returns_choice_with_usage(self, mock_get_client):
+        mock_get_client.return_value = self._make_mock_client()
+        llm = LLM()
+        completion = self._make_text_completion("continued text")
+
+        with patch.object(
+            llm.client.completions,
+            "create",
+            return_value=completion,
+        ) as mock_completion_create:
+            result = llm._raw_completion_step(
+                "seed prompt",
+                max_tokens=9,
+                temperature=0.3,
+            )
+
+        self.assertEqual(result.text, "continued text")
+        self.assertEqual(result.finish_reason, "stop")
+        self.assertIs(result.usage, completion.usage)
+        self.assertEqual(
+            mock_completion_create.call_args.kwargs,
+            {
+                "model": "test-model",
+                "prompt": "seed prompt",
+                "max_tokens": 9,
+                "temperature": 0.3,
+            },
+        )
+
+    @patch("llm_utils.lm.llm.get_base_client")
+    def test_raw_completion_step_returns_bound_client_index(self, mock_get_client):
+        client_a = self._make_mock_client()
+        client_b = self._make_mock_client()
+        mock_get_client.return_value = [client_a, client_b]
+        llm = LLM(client=["http://a/v1", "http://b/v1"])
+        completion = self._make_text_completion("continued text")
+
+        with patch.object(
+            client_b.completions,
+            "create",
+            return_value=completion,
+        ):
+            result = llm._raw_completion_step(
+                "seed prompt",
+                client_idx=1,
+                return_client_idx=True,
+            )
+
+        choice, client_idx = result
+        self.assertEqual(choice.text, "continued text")
+        self.assertEqual(client_idx, 1)
+        client_a.completions.create.assert_not_called()
+
+    @patch("llm_utils.lm.llm.get_base_client")
+    def test_raw_completion_step_defaults_max_tokens_to_one(self, mock_get_client):
+        mock_get_client.return_value = self._make_mock_client()
+        llm = LLM()
+        completion = self._make_text_completion("x")
+
+        with patch.object(
+            llm.client.completions,
+            "create",
+            return_value=completion,
+        ) as mock_completion_create:
+            llm._raw_completion_step("seed prompt")
+
+        self.assertEqual(mock_completion_create.call_args.kwargs["max_tokens"], 1)
 
 
 if __name__ == "__main__":

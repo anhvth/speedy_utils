@@ -84,8 +84,51 @@ def _is_spawn_importable_callable(func: Callable[[Any], Any]) -> bool:
     return resolved is func
 
 
+def _ensure_module_globals(
+    module_name: str | None, script_path: str | None
+) -> None:
+    """Populate module globals by re-importing the source in the child process.
+
+    For ``__main__`` functions this re-runs the script via
+    :func:`runpy.run_path` with a non-``"__main__"`` run-name so that
+    ``if __name__ == "__main__":`` guards are respected.  User-defined
+    globals (imports, constants, objects) are copied into the child's
+    ``__main__`` namespace so that ``dill`` can resolve name references
+    on deserialization.
+    """
+    if module_name == "__main__" and script_path:
+        import runpy
+
+        mod_dict = runpy.run_path(script_path, run_name="__mp_child__")
+        _skip = {
+            "__builtins__",
+            "__name__",
+            "__file__",
+            "__doc__",
+            "__spec__",
+            "__loader__",
+            "__package__",
+            "__cached__",
+            "__annotations__",
+        }
+        target = sys.modules["__main__"].__dict__
+        for key, value in mod_dict.items():
+            if key not in _skip:
+                target[key] = value
+    elif module_name and module_name != "__main__":
+        importlib.import_module(module_name)
+
+
 def _serialize_spawn_callable(func: Callable[[Any], Any]) -> bytes:
-    """Serialize non-importable callables for the notebook fallback path."""
+    """Serialize non-importable callables for the notebook fallback path.
+
+    Tries full (recursive) dill serialization first.  When that fails due
+    to unpicklable objects in module globals (e.g. ``SSLContext``), falls
+    back to shallow serialization and records the source script path so
+    the child process can re-import it to reconstruct globals.
+    """
+    import pickle
+
     try:
         import dill
     except ImportError as exc:  # pragma: no cover - dependency contract
@@ -95,14 +138,54 @@ def _serialize_spawn_callable(func: Callable[[Any], Any]) -> bytes:
             "by child processes started with 'spawn'."
         ) from exc
 
-    return dill.dumps(func, recurse=True)
+    # Try full serialization first (handles closures, nested functions, etc.)
+    try:
+        func_bytes = dill.dumps(func, recurse=True)
+        return pickle.dumps({"_v": 1, "shallow": False, "func_bytes": func_bytes})
+    except (TypeError, pickle.PicklingError):
+        pass
+
+    # Full serialization failed — fall back to shallow mode.
+    # recurse=False stores global references by name only, avoiding
+    # serialization of the module dict (which may contain SSLContext etc).
+    func_bytes = dill.dumps(func, recurse=False)
+
+    module_name = getattr(func, "__module__", None)
+    script_path = None
+    if module_name == "__main__":
+        main_mod = sys.modules.get("__main__")
+        if main_mod and hasattr(main_mod, "__file__"):
+            script_path = main_mod.__file__
+
+    return pickle.dumps(
+        {
+            "_v": 1,
+            "shallow": True,
+            "func_bytes": func_bytes,
+            "module_name": module_name,
+            "script_path": script_path,
+        }
+    )
 
 
 def _deserialize_spawn_callable(payload: bytes) -> Callable[[Any], Any]:
     """Restore a callable serialized for the notebook fallback path."""
     import dill
+    import pickle
 
-    return dill.loads(payload)
+    try:
+        data = pickle.loads(payload)
+    except Exception:
+        # Legacy format: raw dill bytes
+        return dill.loads(payload)
+
+    if not isinstance(data, dict) or data.get("_v") != 1:
+        return dill.loads(payload)
+
+    if data.get("shallow"):
+        _ensure_module_globals(data.get("module_name"), data.get("script_path"))
+
+    return dill.loads(data["func_bytes"])
 
 
 def _serialize_exception_frames(exc: Exception) -> list[tuple[str, int, str, dict]]:
