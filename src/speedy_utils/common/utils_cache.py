@@ -544,63 +544,61 @@ def _async_both_memoize(
 # --------------------------------------------------------------------------------------
 
 
-if TYPE_CHECKING:
-
-    # Define overloads to preserve exact type information for type checkers.
-    @overload
-    def memoize(
-        _func: Callable[P, Awaitable[R]],
-        *,
-        keys: list[str] | None = ...,
-        key: Callable[..., Any] | None = ...,
-        cache_dir: str = ...,
-        cache_type: Literal['memory', 'disk', 'both'] = ...,
-        size: int = ...,
-        ignore_self: bool = ...,
-        verbose: bool = ...,
-    ) -> Callable[P, Awaitable[R]]: ...
+# Define overloads to preserve exact type information
+@overload
+def memoize(
+    _func: Callable[P, Awaitable[R]],
+    *,
+    keys: list[str] | None = ...,
+    key: Callable[..., Any] | None = ...,
+    cache_dir: str = ...,
+    cache_type: Literal['memory', 'disk', 'both'] = ...,
+    size: int = ...,
+    ignore_self: bool = ...,
+    verbose: bool = ...,
+) -> Callable[P, Awaitable[R]]: ...
 
 
-    @overload
-    def memoize(
-        _func: Callable[P, R],
-        *,
-        keys: list[str] | None = ...,
-        key: Callable[..., Any] | None = ...,
-        cache_dir: str = ...,
-        cache_type: Literal['memory', 'disk', 'both'] = ...,
-        size: int = ...,
-        ignore_self: bool = ...,
-        verbose: bool = ...,
-    ) -> Callable[P, R]: ...
+@overload
+def memoize(
+    _func: Callable[P, R],
+    *,
+    keys: list[str] | None = ...,
+    key: Callable[..., Any] | None = ...,
+    cache_dir: str = ...,
+    cache_type: Literal['memory', 'disk', 'both'] = ...,
+    size: int = ...,
+    ignore_self: bool = ...,
+    verbose: bool = ...,
+) -> Callable[P, R]: ...
 
 
-    @overload
-    def memoize(
-        _func: None = ...,
-        *,
-        keys: list[str] | None = ...,
-        key: Callable[..., Any] | None = ...,
-        cache_dir: str = ...,
-        cache_type: Literal['memory', 'disk', 'both'] = ...,
-        size: int = ...,
-        ignore_self: bool = ...,
-        verbose: bool = ...,
-    ) -> Callable[[Callable[P, R]], Callable[P, R]]: ...
+@overload
+def memoize(
+    _func: None = ...,
+    *,
+    keys: list[str] | None = ...,
+    key: Callable[..., Any] | None = ...,
+    cache_dir: str = ...,
+    cache_type: Literal['memory', 'disk', 'both'] = ...,
+    size: int = ...,
+    ignore_self: bool = ...,
+    verbose: bool = ...,
+) -> Callable[[Callable[P, R]], Callable[P, R]]: ...
 
 
-    @overload
-    def memoize(  # type: ignore
-        _func: None = ...,
-        *,
-        keys: list[str] | None = ...,
-        key: Callable[..., Any] | None = ...,
-        cache_dir: str = ...,
-        cache_type: Literal['memory', 'disk', 'both'] = ...,
-        size: int = ...,
-        ignore_self: bool = ...,
-        verbose: bool = ...,
-    ) -> Callable[[Callable[P, Awaitable[R]]], Callable[P, Awaitable[R]]]: ...
+@overload
+def memoize(  # type: ignore
+    _func: None = ...,
+    *,
+    keys: list[str] | None = ...,
+    key: Callable[..., Any] | None = ...,
+    cache_dir: str = ...,
+    cache_type: Literal['memory', 'disk', 'both'] = ...,
+    size: int = ...,
+    ignore_self: bool = ...,
+    verbose: bool = ...,
+) -> Callable[[Callable[P, Awaitable[R]]], Callable[P, Awaitable[R]]]: ...
 
 
 def memoize(

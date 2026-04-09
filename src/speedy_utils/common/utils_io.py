@@ -378,6 +378,8 @@ def load_by_ext(fname: str | list[str], do_memoize: bool = False) -> Any:
     """
     if isinstance(fname, Path):
         fname = str(fname)
+    if isinstance(fname, str):
+        fname = osp.expanduser(fname)
     from speedy_utils import multi_process
 
     from .utils_cache import (  # Adjust import based on your actual multi_worker module
