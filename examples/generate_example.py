@@ -23,7 +23,7 @@ result = lm.generate(
     temperature=0.8,
 )
 print(f"Prompt: 'Write a haiku about coding:'")
-print(f"Generated:\n{result['text']}")
+print(f"Generated:\n{result.text}")
 print()
 
 # Example 2: Working with token IDs
@@ -40,8 +40,8 @@ result = lm.generate(
     temperature=0.7,
     return_token_ids=True,  # Get token IDs back
 )
-print(f'Output IDs: {result["token_ids"]}')
-print(f'Output text: {result["text"]}')
+print(f'Output IDs: {result.token_ids}')
+print(f'Output text: {result.text}')
 print()
 
 # Example 3: Temperature sampling
@@ -52,12 +52,12 @@ prompt = 'The best way to learn programming is'
 # Low temperature (more deterministic)
 result_low = lm.generate(prompt, max_tokens=40, temperature=0.1)
 print(f'Temperature 0.1 (deterministic):')
-print(f'  {result_low["text"][:100]}...')
+print(f'  {result_low.text[:100]}...')
 
 # High temperature (more creative)
 result_high = lm.generate(prompt, max_tokens=40, temperature=1.5)
 print(f'Temperature 1.5 (creative):')
-print(f'  {result_high["text"][:100]}...')
+print(f'  {result_high.text[:100]}...')
 print()
 
 # Example 4: Top-k and Top-p sampling
@@ -71,7 +71,7 @@ result = lm.generate(
     top_p=0.95,  # Nucleus sampling
     repetition_penalty=1.2,  # Reduce repetition
 )
-print(f'Generated: {result["text"]}')
+print(f'Generated: {result.text}')
 print()
 
 # Example 5: Multiple generations (like num_return_sequences)
@@ -84,7 +84,7 @@ results = lm.generate(
     n=4,  # Generate 4 different completions
 )
 for i, result in enumerate(results, 1):
-    print(f'{i}. {result["text"]}')
+    print(f'{i}. {result.text}')
 print()
 
 # Example 6: Controlled generation with stop sequences
@@ -96,7 +96,7 @@ result = lm.generate(
     temperature=0.7,
     stop=['\n\n', 'Instructions:'],  # Stop at these sequences
 )
-print(f'Generated:\n{result["text"]}')
+print(f'Generated:\n{result.text}')
 print()
 
 # Example 7: Reproducible generation with seed
@@ -109,10 +109,10 @@ result1 = lm.generate(prompt, max_tokens=10, temperature=0.8, seed=42)
 result2 = lm.generate(prompt, max_tokens=10, temperature=0.8, seed=42)
 result3 = lm.generate(prompt, max_tokens=10, temperature=0.8, seed=123)
 
-print(f'Seed 42 (run 1): {result1["text"]}')
-print(f'Seed 42 (run 2): {result2["text"]}')
-print(f'Seed 123:        {result3["text"]}')
-print(f'Results match:   {result1["text"] == result2["text"]}')
+print(f'Seed 42 (run 1): {result1.text}')
+print(f'Seed 42 (run 2): {result2.text}')
+print(f'Seed 123:        {result3.text}')
+print(f'Results match:   {result1.text == result2.text}')
 print()
 
 # Example 8: Token count estimation
@@ -132,7 +132,7 @@ result = lm.generate(
     max_tokens=min(100, available_tokens),
     temperature=0.7,
 )
-generated_tokens = lm.encode(result['text'])
+generated_tokens = lm.encode(result.text)
 print(f'Generated tokens: {len(generated_tokens)}')
 print(f'Total tokens used: {len(prompt_tokens) + len(generated_tokens)}')
 print()

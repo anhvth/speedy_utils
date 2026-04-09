@@ -5,7 +5,7 @@ from unittest import TestCase
 from unittest.mock import MagicMock, patch
 
 from openai.types.chat import ChatCompletionMessage
-from openai.types.completion import CompletionChoice
+from openai.types.completion_choice import CompletionChoice
 from openai.types.completion_usage import CompletionUsage
 from pydantic import BaseModel
 
@@ -38,7 +38,7 @@ class TestLLMCallContract(TestCase):
             total_tokens=18,
         )
         choice = CompletionChoice(
-            finish_reason=finish_reason,
+            finish_reason=finish_reason,  # type: ignore[arg-type]
             index=0,
             logprobs=None,
             text=text,
@@ -146,17 +146,18 @@ class TestLLMCallContract(TestCase):
 
         self.assertEqual(result.text, "True")
         self.assertEqual(result.finish_reason, "stop")
+        assert result.logprobs is not None
         self.assertEqual(result.logprobs.token_logprobs, [-0.11, -0.22])
         self.assertEqual(result.logprobs.tokens, ["True", "False"])
         self.assertEqual(
             result.logprobs.top_logprobs,
             [{"True": -0.11}, {"False": -0.22}],
         )
-        self.assertEqual(result.logprobs.extra_old_field, 123)
-        self.assertEqual(result.prompt_logprobs, [{"True": -0.33}])
-        self.assertEqual(result.token_ids, [11, 22])
-        self.assertEqual(result.prompt_token_ids, [33, 44])
-        self.assertEqual(result.extra_choice_field, "vllm-extra")
+        self.assertEqual(result.logprobs.extra_old_field, 123)  # type: ignore[attr-defined]
+        self.assertEqual(result.prompt_logprobs, [{"True": -0.33}])  # type: ignore[attr-defined]
+        self.assertEqual(result.token_ids, [11, 22])  # type: ignore[attr-defined]
+        self.assertEqual(result.prompt_token_ids, [33, 44])  # type: ignore[attr-defined]
+        self.assertEqual(result.extra_choice_field, "vllm-extra")  # type: ignore[attr-defined]
 
     @patch("llm_utils.lm.llm.get_base_client")
     def test_generate_uses_completions_api_not_chat_api(self, mock_get_client):
@@ -201,10 +202,10 @@ class TestLLMCallContract(TestCase):
                 "temperature": 0,
             },
         )
-        self.assertEqual(result.logprobs.token_logprobs, [-0.11, -0.22])
-        self.assertEqual(result.prompt_logprobs, [{"True": -0.33}])
-        self.assertEqual(result.token_ids, [11, 22])
-        self.assertEqual(result.prompt_token_ids, [33, 44])
+        self.assertEqual(result.logprobs.token_logprobs, [-0.11, -0.22])  # type: ignore[union-attr]
+        self.assertEqual(result.prompt_logprobs, [{"True": -0.33}])  # type: ignore[attr-defined]
+        self.assertEqual(result.token_ids, [11, 22])  # type: ignore[attr-defined]
+        self.assertEqual(result.prompt_token_ids, [33, 44])  # type: ignore[attr-defined]
 
     @patch("llm_utils.lm.llm.get_base_client")
     def test_constructor_common_kwargs_become_default_model_kwargs(
@@ -391,7 +392,7 @@ class TestLLMCallContract(TestCase):
         for kwargs in legacy_kwargs:
             label = next(iter(kwargs.keys()))  # Use just the key name for subTest
             with self.subTest(kwarg=label), self.assertRaises(TypeError):
-                LLM(**kwargs)
+                LLM(**kwargs)  # type: ignore[call-arg]
 
     @patch("llm_utils.lm.llm.get_base_client")
     def test_call_routes_to_chat_completion(self, mock_get_client):

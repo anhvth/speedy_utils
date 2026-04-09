@@ -165,9 +165,9 @@ class _LazyHFItems(Sequence[ItemTuple]):
     def __len__(self) -> int:
         return self._total_len
 
-    def __getitem__(self, index: int | slice) -> ItemTuple | list[ItemTuple]:
+    def __getitem__(self, index: int | slice) -> "ItemTuple | list[ItemTuple]":
         if isinstance(index, slice):
-            return [self[i] for i in range(*index.indices(len(self)))]
+            return [self[i] for i in range(*index.indices(len(self)))]  # type: ignore[misc]
 
         if index < 0:
             index += len(self)
@@ -423,7 +423,7 @@ def normalize_messages(
         return _normalize_message_list(row)
 
     # Convert Mapping to dict for easier handling
-    row = dict(row)
+    row = dict(row)  # type: ignore[arg-type]
 
     if not isinstance(row, dict):
         raise ValueError(f"Expected dict or list, got {type(row).__name__}")

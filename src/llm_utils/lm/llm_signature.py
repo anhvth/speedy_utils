@@ -76,7 +76,7 @@ class LLMSignature(LLM):
     ) -> Any:
         return super().__call__(
             input_data,
-            response_model=self._resolve_response_model(response_model),
+            response_model=self._resolve_response_model(response_model),  # type: ignore[arg-type]
             n=n,
             cache=cache,
             stream=stream,

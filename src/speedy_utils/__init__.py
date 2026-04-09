@@ -1,19 +1,133 @@
-from __future__ import annotations
+# Standard library
+import copy
+import functools
+import gc
+import inspect
+import json
+import multiprocessing
+import os
+import os.path as osp
+import pickle
+import pprint
+import random
+import re
+import sys
+import textwrap
+import threading
+import time
+import traceback
+import uuid
+from collections import Counter, defaultdict
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable as TypingCallable
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from glob import glob
+from multiprocessing import Pool
+from pathlib import Path
+from threading import Lock
+from typing import (
+    Any,
+    Dict,
+    Generic,
+    List,
+    Literal,
+    Optional,
+    Set,
+    Tuple,
+    Type,
+    TypeVar,
+    Union,
+)
 
-import importlib
-from typing import Any
+# Third-party (fast)
+import xxhash
+from loguru import logger
+from tqdm import tqdm
+
+tabulate = __import__("tabulate").tabulate
+
+# Heavy third-party modules — imported lazily on first access to keep
+# `import speedy_utils` under 0.4 s.  Access them like any other attribute;
+# Python calls __getattr__ below the first time each name is used.
+_HEAVY = {
+    "np": ("numpy", None),
+    "pd": ("pandas", None),
+    "matplotlib": ("matplotlib", None),
+    "plt": ("matplotlib.pyplot", None),
+    "get_ipython": ("IPython.core.getipython", "get_ipython"),
+    "HTML": ("IPython.display", "HTML"),
+    "display": ("IPython.display", "display"),
+    "BaseModel": ("pydantic", "BaseModel"),
+}
 
 
-# NOTE:
-# Keep `import speedy_utils` fast (<0.4s) by deferring heavy imports (numpy, torch,
-# pandas, matplotlib, etc.) until attributes are actually accessed.
-#
-# This module preserves the previous "kitchen-sink" namespace behavior via:
-# - explicit lazy exports for Speedy Utils APIs
-# - a fallback to `speedy_utils.__imports` for convenience stdlib/typing/3rd-party names
+def __getattr__(name: str):
+    if name in _HEAVY:
+        module_path, attr = _HEAVY[name]
+        try:
+            import importlib
+            mod = importlib.import_module(module_path)
+            value = getattr(mod, attr) if attr else mod
+        except ImportError:
+            value = None
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+# Clock
+from speedy_utils.common.clock import Clock, speedy_timer, timef
+
+# Function decorators / logging
+from speedy_utils.common.function_decorator import retry_runtime
+from speedy_utils.common.logger import log, setup_logger
+
+# Notebook helpers
+from speedy_utils.common.notebook_utils import (
+    change_dir,
+    display_pretty_table_html,
+    print_table,
+)
+
+# Cache utilities
+from speedy_utils.common.utils_cache import identify, identify_uuid, imemoize, memoize
+
+# IO utilities
+from speedy_utils.common.utils_io import (
+    dump_json_or_pickle,
+    dump_jsonl,
+    jdumps,
+    jloads,
+    load_by_ext,
+    load_json_or_pickle,
+    load_jsonl,
+)
+
+# Misc utilities
+from speedy_utils.common.utils_misc import (
+    convert_to_builtin_python,
+    dedup,
+    flatten_list,
+    get_arg_names,
+    is_notebook,
+    mkdir_or_exist,
+)
+
+# Print utilities
+from speedy_utils.common.utils_print import flatten_dict, fprint
+
+# Error handling utilities
+from speedy_utils.common.utils_error import (
+    clean_traceback,
+    handle_exceptions_with_clean_traceback,
+)
+
+# Multi-worker processing
+from speedy_utils.multi_worker.process import multi_process
+from speedy_utils.multi_worker.thread import kill_all_thread, multi_thread
+from speedy_utils.multi_worker.dataset_sharding import multi_process_dataset
 
 __all__ = [
-    # Standard library (from speedy_utils.__imports)
+    # Standard library
     "random",
     "copy",
     "functools",
@@ -40,7 +154,7 @@ __all__ = [
     "Path",
     "Lock",
     "defaultdict",
-    # Typing (from speedy_utils.__imports)
+    # Typing
     "Any",
     "Awaitable",
     "Callable",
@@ -58,20 +172,16 @@ __all__ = [
     "Type",
     "TypeVar",
     "Union",
-    # Third-party (from speedy_utils.__imports)
-    "pd",
+    # Third-party
     "xxhash",
-    "get_ipython",
-    "HTML",
-    "display",
     "logger",
-    "BaseModel",
     "tabulate",
     "tqdm",
-    "np",
-    "matplotlib",
-    "plt",
-    # Clock module
+    # Heavy third-party — omitted from __all__ so `from speedy_utils import *`
+    # does NOT eagerly load them.  Access via `speedy_utils.pd` or
+    # `from speedy_utils import pd` (triggers __getattr__ lazily).
+    # "np", "pd", "matplotlib", "plt", "get_ipython", "HTML", "display", "BaseModel"
+    # Clock
     "Clock",
     "speedy_timer",
     "timef",
@@ -115,95 +225,3 @@ __all__ = [
     # Notebook utilities
     "change_dir",
 ]
-
-_LAZY_ATTRS: dict[str, tuple[str, str]] = {
-    # Clock
-    "Clock": ("speedy_utils.common.clock", "Clock"),
-    "speedy_timer": ("speedy_utils.common.clock", "speedy_timer"),
-    "timef": ("speedy_utils.common.clock", "timef"),
-    # Decorators / logging
-    "retry_runtime": ("speedy_utils.common.function_decorator", "retry_runtime"),
-    "log": ("speedy_utils.common.logger", "log"),
-    "setup_logger": ("speedy_utils.common.logger", "setup_logger"),
-    # Notebook helpers
-    "change_dir": ("speedy_utils.common.notebook_utils", "change_dir"),
-    "display_pretty_table_html": (
-        "speedy_utils.common.notebook_utils",
-        "display_pretty_table_html",
-    ),
-    "print_table": ("speedy_utils.common.notebook_utils", "print_table"),
-    # Cache utils
-    "identify": ("speedy_utils.common.utils_cache", "identify"),
-    "identify_uuid": ("speedy_utils.common.utils_cache", "identify_uuid"),
-    "imemoize": ("speedy_utils.common.utils_cache", "imemoize"),
-    "memoize": ("speedy_utils.common.utils_cache", "memoize"),
-    # IO utils
-    "dump_json_or_pickle": ("speedy_utils.common.utils_io", "dump_json_or_pickle"),
-    "dump_jsonl": ("speedy_utils.common.utils_io", "dump_jsonl"),
-    "jdumps": ("speedy_utils.common.utils_io", "jdumps"),
-    "jloads": ("speedy_utils.common.utils_io", "jloads"),
-    "load_by_ext": ("speedy_utils.common.utils_io", "load_by_ext"),
-    "load_json_or_pickle": ("speedy_utils.common.utils_io", "load_json_or_pickle"),
-    "load_jsonl": ("speedy_utils.common.utils_io", "load_jsonl"),
-    # Misc utils
-    "convert_to_builtin_python": (
-        "speedy_utils.common.utils_misc",
-        "convert_to_builtin_python",
-    ),
-    "dedup": ("speedy_utils.common.utils_misc", "dedup"),
-    "flatten_list": ("speedy_utils.common.utils_misc", "flatten_list"),
-    "get_arg_names": ("speedy_utils.common.utils_misc", "get_arg_names"),
-    "is_notebook": ("speedy_utils.common.utils_misc", "is_notebook"),
-    "mkdir_or_exist": ("speedy_utils.common.utils_misc", "mkdir_or_exist"),
-    # Print utils
-    "flatten_dict": ("speedy_utils.common.utils_print", "flatten_dict"),
-    "fprint": ("speedy_utils.common.utils_print", "fprint"),
-    # Error utils
-    "clean_traceback": ("speedy_utils.common.utils_error", "clean_traceback"),
-    "handle_exceptions_with_clean_traceback": (
-        "speedy_utils.common.utils_error",
-        "handle_exceptions_with_clean_traceback",
-    ),
-    # Multi-worker
-    "multi_process": ("speedy_utils.multi_worker.process", "multi_process"),
-    "kill_all_thread": ("speedy_utils.multi_worker.thread", "kill_all_thread"),
-    "multi_thread": ("speedy_utils.multi_worker.thread", "multi_thread"),
-    "multi_process_dataset": (
-        "speedy_utils.multi_worker.dataset_sharding",
-        "multi_process_dataset",
-    ),
-}
-
-_IMPORTS_MODULE = None
-
-
-def _imports():
-    global _IMPORTS_MODULE
-    if _IMPORTS_MODULE is None:
-        _IMPORTS_MODULE = importlib.import_module("speedy_utils.__imports")
-    return _IMPORTS_MODULE
-
-
-def __getattr__(name: str) -> Any:
-    target = _LAZY_ATTRS.get(name)
-    if target is not None:
-        module_name, attr_name = target
-        module = importlib.import_module(module_name)
-        value = getattr(module, attr_name)
-        globals()[name] = value
-        return value
-
-    # Backward-compat convenience namespace:
-    # defer to speedy_utils.__imports for stdlib/typing/third-party symbols.
-    imports_mod = _imports()
-    if hasattr(imports_mod, name):
-        value = getattr(imports_mod, name)
-        globals()[name] = value
-        return value
-
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
-def __dir__() -> list[str]:
-    # Avoid importing speedy_utils.__imports on dir(); keep it cheap.
-    return sorted({*globals().keys(), *_LAZY_ATTRS.keys(), *__all__})

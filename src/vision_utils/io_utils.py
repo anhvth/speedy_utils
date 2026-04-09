@@ -198,11 +198,11 @@ def read_images_gpu(
             return imgs_resized
         return imgs
 
-    dali_pipe = pipe(
-        batch_size=batch_size,
-        num_threads=num_threads,
-        device_id=device_id,
-        prefetch_queue_depth=2,
+    dali_pipe = pipe(  # type: ignore[call-arg]
+        batch_size=batch_size,  # type: ignore[call-arg]
+        num_threads=num_threads,  # type: ignore[call-arg]
+        device_id=device_id,  # type: ignore[call-arg]
+        prefetch_queue_depth=2,  # type: ignore[call-arg]
     )
     dali_pipe.build()
 
@@ -374,7 +374,7 @@ class ImageMmap:  # Removed Dataset base class to avoid torch import at module l
     # Build phase (only on first run)
     # --------------------------------------------------------------------- #
     def _build_cache_with_lock(
-        self, current_hash: str, num_workers: int = None
+        self, current_hash: str, num_workers: int | None = None
     ) -> None:
         """Build cache with lock file to prevent concurrent disk writes"""
         import fcntl
@@ -398,14 +398,14 @@ class ImageMmap:  # Removed Dataset base class to avoid torch import at module l
                 with suppress(Exception):
                     self.lock_path.unlink()
 
-    def _build_cache(self, current_hash: str, num_workers: int = None) -> None:
+    def _build_cache(self, current_hash: str, num_workers: int | None = None) -> None:
         from tqdm import tqdm
 
         # Pre-allocate the file with the required size
         total_bytes = np.prod(self.shape) * self.dtype.itemsize
         print(f"Pre-allocating {total_bytes / (1024**3):.2f} GB for mmap file...")
         with open(self.mmap_path, "wb") as f:
-            f.seek(total_bytes - 1)
+            f.seek(int(total_bytes) - 1)
             f.write(b"\0")
 
         mm = np.memmap(
@@ -741,7 +741,7 @@ class ImageMmapDynamic:  # Removed Dataset base class to avoid torch import at m
     def __len__(self) -> int:
         return self.n
 
-    def _get_flat_slice(self, idx: int) -> np.ndarray:
+    def _get_flat_slice(self, idx: int) -> tuple["np.ndarray", int, int, int]:
         """Return flat view for image idx (no copy)."""
         offset = int(self.offsets[idx])
         h, w, c = [int(x) for x in self.shapes[idx]]

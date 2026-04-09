@@ -10,7 +10,7 @@ def demo_1_simple_error():
     def process_item(x):
         # Intentional error - calling a list
         my_list = [1, 2, 3]
-        return my_list(x)
+        return my_list(x)  # type: ignore[operator]
 
     # try:
     multi_thread(process_item, range(300), workers=100, progress=True)

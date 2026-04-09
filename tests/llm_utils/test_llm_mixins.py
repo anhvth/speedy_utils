@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from openai.types.chat import ChatCompletionMessage
-from openai.types.completion import CompletionChoice
+from openai.types.completion_choice import CompletionChoice
 from openai.types.completion_usage import CompletionUsage
 
 import llm_utils
@@ -59,7 +59,7 @@ class TestQwen3LLM(unittest.TestCase):
             total_tokens=18,
         )
         mock_choice = CompletionChoice(
-            finish_reason=finish_reason,
+            finish_reason=finish_reason,  # type: ignore[arg-type]
             index=0,
             logprobs=None,
             text=content,
@@ -77,7 +77,7 @@ class TestQwen3LLM(unittest.TestCase):
         total_tokens: int = 18,
     ) -> CompletionChoice:
         choice = CompletionChoice(
-            finish_reason=finish_reason,
+            finish_reason=finish_reason,  # type: ignore[arg-type]
             index=0,
             logprobs=None,
             text=text,
@@ -753,7 +753,7 @@ class TestLLMRawCompletionStep(unittest.TestCase):
             total_tokens=18,
         )
         mock_choice = CompletionChoice(
-            finish_reason=finish_reason,
+            finish_reason=finish_reason,  # type: ignore[arg-type]
             index=0,
             logprobs=None,
             text=content,

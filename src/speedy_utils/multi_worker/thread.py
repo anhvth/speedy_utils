@@ -375,6 +375,7 @@ class _ProgressReporter:
         return postfix
 
     def _run(self) -> None:
+        assert tqdm is not None, "tqdm is required"
         pending = 0
         visible = 0
         bar = tqdm(
@@ -577,7 +578,7 @@ if TYPE_CHECKING:
     ) -> list[R | None]: ...
 
 
-def multi_thread(
+def multi_thread(  # type: ignore[misc]
     func: Callable[[T], R],
     inputs: Iterable[T],
     *,

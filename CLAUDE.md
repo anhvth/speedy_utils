@@ -60,20 +60,40 @@ def some_function():
 
 | Module | Import Time | Strategy |
 |--------|-------------|----------|
-| `torch` | ~5s | Lazy import in GPU functions |
-| `matplotlib` | ~3.6s | Lazy import in plotting functions |
-| `pandas` | ~1.3s | Lazy import in data functions |
-| `IPython` | ~1s | Lazy import in notebook functions |
+| `torch` | ~5s | Lazy import inside functions |
+| `matplotlib` | ~1.3s cumulative | Lazy via `__getattr__` in `__init__.py` |
+| `pandas` | ~1.9s cumulative | Lazy via `__getattr__` in `__init__.py` |
+| `IPython` | ~2.1s cumulative | Lazy via `__getattr__` in `__init__.py` |
 
-### Using the _LazyModule Pattern
+### Rule: Never top-level import heavy modules in `__init__.py`
+
+Only a short `__getattr__` block (keyed on module name) is allowed for heavy
+modules. All internal `speedy_utils.*` imports must remain direct top-level
+imports. External heavy modules (`pandas`, `matplotlib`, `IPython`, `torch`)
+must **never** appear as top-level imports in any `__init__.py`.
 
 ```python
-from speedy_utils.__imports import pd, plt
+# BAD — in __init__.py
+import pandas as pd          # adds ~1.3 s
 
-def process_data():
-    df = pd.DataFrame()  # pandas imports here, not at module load
-    return df
+# GOOD — in __init__.py
+# pd is declared in _HEAVY dict, resolved by __getattr__ on first access
+
+# GOOD — inside a function anywhere in the package
+def load_dataframe(path):
+    import pandas as pd      # only pays cost when called
+    return pd.read_csv(path)
 ```
+
+### Rule: Heavy lazy names must NOT be in `__all__`
+
+`from speedy_utils import *` resolves every name in `__all__`, which triggers
+`__getattr__` for each heavy name and defeats the lazy-load strategy.  Only
+include names that are directly importable at module load time in `__all__`.
+Heavy names (`np`, `pd`, `matplotlib`, `plt`, `get_ipython`, `HTML`, `display`,
+`BaseModel`) must be kept out of `__all__`; they remain accessible via explicit
+attribute access (`speedy_utils.pd`) or explicit import
+(`from speedy_utils import pd`).
 
 ## Architecture
 

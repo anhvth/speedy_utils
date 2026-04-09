@@ -129,21 +129,21 @@ class LMBase:
             content = msg['content']
             if role == 'user':
                 converted.append(
-                    ChatCompletionUserMessageParam(role='user', content=content)
+                    ChatCompletionUserMessageParam(role='user', content=content)  # type: ignore[arg-type]
                 )
             elif role == 'assistant':
                 converted.append(
-                    ChatCompletionAssistantMessageParam(
+                    ChatCompletionAssistantMessageParam(  # type: ignore[arg-type]
                         role='assistant', content=content
                     )
                 )
             elif role == 'system':
                 converted.append(
-                    ChatCompletionSystemMessageParam(role='system', content=content)
+                    ChatCompletionSystemMessageParam(role='system', content=content)  # type: ignore[arg-type]
                 )
             elif role == 'tool':
                 converted.append(
-                    ChatCompletionToolMessageParam(
+                    ChatCompletionToolMessageParam(  # type: ignore[arg-type]
                         role='tool',
                         content=content,
                         tool_call_id=msg.get('tool_call_id') or '',

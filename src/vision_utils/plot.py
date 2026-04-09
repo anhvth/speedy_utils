@@ -208,6 +208,7 @@ def plot_images_notebook(
     mpl_available, plt = _check_matplotlib_available()
     if not mpl_available:
         raise ImportError("matplotlib is required for plotting. Install it with: pip install matplotlib")
+    assert plt is not None
 
     # Normalize all images to list of (H, W, C) numpy arrays
     images_list = _normalize_batch(images)
@@ -319,6 +320,7 @@ def visualize_tensor(img_tensor, mode='hwc', normalize=True, max_cols=8):
     mpl_available, plt = _check_matplotlib_available()
     if not mpl_available:
         raise ImportError("matplotlib is required for plotting. Install it with: pip install matplotlib")
+    assert plt is not None
 
     if mode == 'chw':
         img_tensor = img_tensor.permute(1, 2, 0)

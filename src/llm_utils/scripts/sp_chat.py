@@ -348,7 +348,10 @@ def _setup_chainlit():
     @cl.on_message
     async def on_message(message: cl.Message):
         settings = cl.user_session.get("settings")
-        aclient: AsyncOpenAI = cl.user_session.get("client")
+        aclient: AsyncOpenAI = cl.user_session.get("client")  # type: ignore[assignment]
+
+        assert settings is not None, "settings not initialized"
+        assert aclient is not None, "client not initialized"
 
         model = settings["model"]
         temperature = float(settings["temperature"])

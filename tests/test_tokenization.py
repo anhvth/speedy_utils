@@ -3,7 +3,7 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from openai.types.completion import CompletionChoice
+from openai.types.completion_choice import CompletionChoice
 from openai.types.completion_usage import CompletionUsage
 
 from llm_utils.lm.llm_qwen3 import (

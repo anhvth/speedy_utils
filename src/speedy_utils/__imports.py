@@ -78,7 +78,6 @@ from typing import (
 import cachetools
 
 # Direct imports (previously lazy-loaded)
-import numpy as np
 import psutil
 from fastcore.parallel import parallel
 from json_repair import loads as jloads
@@ -89,6 +88,13 @@ from tqdm import tqdm
 tabulate = __import__("tabulate").tabulate
 import xxhash
 
+# numpy — lazy to keep `import speedy_utils` under 0.4 s
+def __getattr__(name):
+    if name == "np":
+        import numpy as _np
+        globals()["np"] = _np
+        return _np
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 # Optional imports - lazy loaded for performance
 def _get_pandas():

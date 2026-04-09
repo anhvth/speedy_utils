@@ -105,11 +105,12 @@ def test_generate_uses_cached_mopenai_completion_and_preserves_logprobs():
 
     for choice in (first, second):
         assert choice.text == "True"
+        assert choice.logprobs is not None
         assert choice.logprobs.token_logprobs == [-0.11, -0.22]
         assert choice.logprobs.tokens == ["True", "False"]
         assert choice.logprobs.top_logprobs == [{"True": -0.11}, {"False": -0.22}]
-        assert choice.logprobs.extra_old_field == 123
-        assert choice.prompt_logprobs == [{"True": -0.33}]
-        assert choice.token_ids == [11, 22]
-        assert choice.prompt_token_ids == [33, 44]
-        assert choice.extra_choice_field == "vllm-extra"
+        assert choice.logprobs.extra_old_field == 123  # type: ignore[attr-defined]
+        assert choice.prompt_logprobs == [{"True": -0.33}]  # type: ignore[attr-defined]
+        assert choice.token_ids == [11, 22]  # type: ignore[attr-defined]
+        assert choice.prompt_token_ids == [33, 44]  # type: ignore[attr-defined]
+        assert choice.extra_choice_field == "vllm-extra"  # type: ignore[attr-defined]

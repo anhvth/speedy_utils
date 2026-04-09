@@ -194,7 +194,7 @@ def _serialize_exception_frames(exc: Exception) -> list[tuple[str, int, str, dic
     if tb is None:
         return []
     return [
-        (frame.filename, frame.lineno, frame.name, {})
+        (frame.filename, frame.lineno or 0, frame.name, {})
         for frame in traceback.extract_tb(tb)
     ]
 
@@ -594,7 +594,7 @@ def _run_multiprocess_backend(
                 ),
             )
             proc.start()
-            processes.append(proc)
+            processes.append(proc)  # type: ignore[arg-type]
 
         tracked: list[psutil.Process] = []
         for proc in processes:
@@ -743,7 +743,7 @@ def multi_process(
     total = len(items)
     desc = _build_progress_desc(
         desc=desc,
-        backend=backend,
+        backend=backend,  # type: ignore[arg-type]
         num_procs=num_procs,
         num_threads=num_threads,
         workers=workers,

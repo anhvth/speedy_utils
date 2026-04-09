@@ -15,7 +15,7 @@ from .llm import LLM, Messages
 
 if TYPE_CHECKING:
     from openai.types.chat import ChatCompletionMessage
-    from openai.types.completion import CompletionChoice
+    from openai.types.completion_choice import CompletionChoice
 
 
 ASSISTANT_PREFIX = "<|im_start|>assistant"
@@ -402,8 +402,8 @@ class Qwen3LLM(LLM):
         if return_client_idx:
             if resolved_client_idx is None:
                 raise RuntimeError("Expected tracked client index for prefix step.")
-            return choice, resolved_client_idx
-        return choice
+            return cast("CompletionChoice", choice), resolved_client_idx
+        return cast("CompletionChoice", choice)
 
     @staticmethod
     def _resolve_custom_prefix_state(
@@ -577,15 +577,11 @@ class Qwen3LLM(LLM):
     ) -> "ChatCompletionMessage":
         from openai.types.chat import ChatCompletionMessage
 
-        message_kwargs = {
-            "role": "assistant",
-            "content": content,
-        }
+        message = ChatCompletionMessage(role="assistant", content=content)
         if reasoning:
-            message_kwargs["reasoning_content"] = reasoning
-        message = ChatCompletionMessage(**message_kwargs)
+            message.reasoning_content = reasoning  # type: ignore[attr-defined]
         if usage is not None:
-            message.usage = usage
+            message.usage = usage  # type: ignore[attr-defined]
         return message
 
     def complete_reasoning(
@@ -695,7 +691,7 @@ class Qwen3LLM(LLM):
         ):
             message = self._build_openai_message(
                 reasoning=reasoning_state.reasoning,
-                content=reasoning_state.content,
+                content=reasoning_state.content or "",
                 usage=reasoning_state.usage,
             )
             message.call_count = reasoning_state.call_count

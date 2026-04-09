@@ -1,3 +1,5 @@
+from typing import Any
+
 import pytest
 
 from llm_utils.scripts.sp_chat import (
@@ -136,7 +138,7 @@ def test_build_history_title_prefers_first_user_message() -> None:
 
 
 def test_archive_current_chat_moves_messages_to_history() -> None:
-    state: dict[str, object] = {
+    state: dict[str, Any] = {
         'messages': [
             {'role': 'user', 'content': 'Hi'},
             {'role': 'assistant', 'content': 'Hello!'},

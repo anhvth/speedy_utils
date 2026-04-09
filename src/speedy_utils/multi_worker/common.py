@@ -593,7 +593,7 @@ class _ThreadLocalStream:
         if hasattr(self._local, "stream"):
             delattr(self._local, "stream")
 
-    def _get_stream(self):
+    def _get_stream(self) -> Any:
         return getattr(self._local, "stream", self._default_stream)
 
     def write(self, s):

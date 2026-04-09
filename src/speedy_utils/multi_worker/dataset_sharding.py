@@ -129,7 +129,7 @@ def multi_process_dataset(
 
     logger.info("Merging shards...")
     tmp_shards = [load_from_disk(p) for p in output_paths]
-    merged_dataset = concatenate_datasets(tmp_shards)
+    merged_dataset = concatenate_datasets(tmp_shards)  # type: ignore[arg-type]
     
     # Save final dataset
     final_size = len(merged_dataset)
