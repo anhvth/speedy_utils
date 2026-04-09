@@ -488,10 +488,10 @@ class LLM:
 
         call_kwargs = dict(runtime_kwargs)
         self._require_single_choice(call_kwargs)
-        if call_kwargs.get("max_tokens") is None:
-            call_kwargs["max_tokens"] = 1
 
         effective_kwargs = {**self.model_kwargs, **call_kwargs}
+        if effective_kwargs.get("max_tokens") is None:
+            effective_kwargs["max_tokens"] = 1
         model_name, api_kwargs = self._build_api_kwargs(
             effective_kwargs,
             enable_thinking=enable_thinking,
