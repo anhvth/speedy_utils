@@ -547,20 +547,6 @@ def _async_both_memoize(
 # Define overloads to preserve exact type information
 @overload
 def memoize(
-    _func: Callable[P, R],
-    *,
-    keys: list[str] | None = ...,
-    key: Callable[..., Any] | None = ...,
-    cache_dir: str = ...,
-    cache_type: Literal['memory', 'disk', 'both'] = ...,
-    size: int = ...,
-    ignore_self: bool = ...,
-    verbose: bool = ...,
-) -> Callable[P, R]: ...
-
-
-@overload
-def memoize(
     _func: Callable[P, Awaitable[R]],
     *,
     keys: list[str] | None = ...,
@@ -571,6 +557,20 @@ def memoize(
     ignore_self: bool = ...,
     verbose: bool = ...,
 ) -> Callable[P, Awaitable[R]]: ...
+
+
+@overload
+def memoize(
+    _func: Callable[P, R],
+    *,
+    keys: list[str] | None = ...,
+    key: Callable[..., Any] | None = ...,
+    cache_dir: str = ...,
+    cache_type: Literal['memory', 'disk', 'both'] = ...,
+    size: int = ...,
+    ignore_self: bool = ...,
+    verbose: bool = ...,
+) -> Callable[P, R]: ...
 
 
 @overload
@@ -673,22 +673,22 @@ def memoize(
 
 @overload
 def imemoize(
-    _func: Callable[P, R],
-    *,
-    keys: list[str] | None = ...,
-    key: Callable[..., Any] | None = ...,
-    ignore_self: bool = ...,
-) -> Callable[P, R]: ...
-
-
-@overload
-def imemoize(
     _func: Callable[P, Awaitable[R]],
     *,
     keys: list[str] | None = ...,
     key: Callable[..., Any] | None = ...,
     ignore_self: bool = ...,
 ) -> Callable[P, Awaitable[R]]: ...
+
+
+@overload
+def imemoize(
+    _func: Callable[P, R],
+    *,
+    keys: list[str] | None = ...,
+    key: Callable[..., Any] | None = ...,
+    ignore_self: bool = ...,
+) -> Callable[P, R]: ...
 
 
 @overload

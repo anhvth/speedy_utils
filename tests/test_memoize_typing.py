@@ -14,6 +14,8 @@ try:
     from llm_utils.lm.openai_memoize import MAsyncOpenAI, MOpenAI
     OPENAI_AVAILABLE = True
 except ImportError:
+    MOpenAI = None  # type: ignore[assignment,misc]
+    MAsyncOpenAI = None  # type: ignore[assignment,misc]
     OPENAI_AVAILABLE = False
 
 from speedy_utils.common.utils_cache import memoize
@@ -54,6 +56,7 @@ def test_openai_memoize_no_cast():
     # Note: We can't actually test with real API calls in tests
     # but we can at least verify the class initializes correctly
     try:
+        assert MOpenAI is not None
         client = MOpenAI(api_key='dummy-key', cache=True)
         # The post method should be properly typed
         assert hasattr(client, 'post')
@@ -69,6 +72,7 @@ def test_async_openai_memoize_no_cast():
     """Test that MAsyncOpenAI works without needing cast."""
 
     try:
+        assert MAsyncOpenAI is not None
         client = MAsyncOpenAI(api_key='dummy-key', cache=True)
         # The post method should be properly typed
         assert hasattr(client, 'post')

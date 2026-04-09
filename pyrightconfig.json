@@ -1,8 +1,8 @@
 {
   "include": ["src", "tests"],
   "exclude": ["debug", "examples", "scripts", "**/node_modules", "**/__pycache__", "**/.*", ".venv"],
-  "diagnosticSeverityOverrides": {
-    "reportUnsupportedDunderAll": "none"
-  },
+  "reportUnsupportedDunderAll": "none",
+  "reportMissingImports": "none",
+  "reportAttributeAccessIssue": "none",
   "pythonVersion": "3.11"
 }

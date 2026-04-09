@@ -165,7 +165,7 @@ class _LazyHFItems(Sequence[ItemTuple]):
     def __len__(self) -> int:
         return self._total_len
 
-    def __getitem__(self, index: int | slice) -> "ItemTuple | list[ItemTuple]":
+    def __getitem__(self, index: int | slice) -> "ItemTuple | list[ItemTuple]":  # type: ignore[override]
         if isinstance(index, slice):
             return [self[i] for i in range(*index.indices(len(self)))]  # type: ignore[misc]
 
@@ -879,6 +879,7 @@ def main(argv: list[str] | None = None) -> int:
     # Check if data is tokenized
     is_tokenized = items and _is_tokenized_row(items[0][2])
 
+    tokenizer = None
     if is_tokenized:
         if not args.tokenizer:
             raise ValueError(

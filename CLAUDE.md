@@ -171,6 +171,46 @@ The package provides these CLI commands:
 - Quote style: double quotes
 - Avoid hacky workarounds like sys.path.insert
 
+## Type Checking with Pyright
+
+**CRITICAL:** Before committing, always run `uv run python tools/check_syntax.py` to
+verify there are **zero** pyright errors.  This tool mirrors exactly what VS Code
+Pylance shows as red diagnostics.
+
+```bash
+# Full check (src/ + tests/, honours pyrightconfig.json)
+uv run python tools/check_syntax.py
+
+# Check a single file
+uv run python tools/check_syntax.py --file src/llm_utils/lm/llm_qwen3.py
+
+# Machine-readable JSON output
+uv run python tools/check_syntax.py --json
+```
+
+### pyright config (`pyrightconfig.json`)
+
+The config lives at the repo root.  Key rules that are **suppressed** (because
+they produce false positives in this codebase):
+
+| Rule | Why suppressed |
+|------|---------------|
+| `reportMissingImports` | Optional GPU deps (`torch`, `nvidia.dali`) not installed everywhere |
+| `reportAttributeAccessIssue` | Dynamic attrs on OpenAI pydantic models (`choice.usage`, `message.call_count`) |
+| `reportUnsupportedDunderAll` | Lazy `__getattr__` exports listed in `__all__` |
+
+### Common type-annotation patterns
+
+- **Lazy-loaded `__all__` entries** — never trigger `__getattr__`; use `# type: ignore[override]`
+  only on the `__getitem__` override pattern in datasets.
+- **Dynamic pydantic attrs** — use `# type: ignore[attr-defined]` when setting attrs
+  not in the schema (e.g. `message.call_count = …`).
+- **Overload ordering** — put the `Awaitable[R]` overload **before** the generic `R`
+  overload; otherwise pyright reports `reportOverlappingOverload`.
+- **`tqdm` in type hints** — use string literal `"tqdm"` to avoid `reportInvalidTypeForm`.
+- **Future custom attrs** — `concurrent.futures.Future` doesn't declare custom attrs;
+  suppress with `reportAttributeAccessIssue: "none"` in config.
+
 
 ## Version Management
 

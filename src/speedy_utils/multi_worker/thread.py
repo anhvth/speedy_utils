@@ -304,7 +304,7 @@ def _progress_units_for_item(
     return units
 
 
-def _set_progress_postfix(pbar: tqdm, postfix: dict[str, Any]) -> None:
+def _set_progress_postfix(pbar: "tqdm", postfix: dict[str, Any]) -> None:  # type: ignore[type-arg]
     try:
         pbar.set_postfix(postfix, refresh=False)
     except TypeError:

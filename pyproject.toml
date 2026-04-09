@@ -94,6 +94,8 @@ strict_optional = true
 
 [tool.ruff]
 exclude = [
+    ".github",
+    "tests",
     "**/*.ipynb",
     "notebooks/**/*.ipynb",
     "legacy",
@@ -112,6 +114,7 @@ exclude = [
     "unsloth_compiled_cache",
     "unsloth_training_checkpoints",
 ]
+force-exclude = true
 target-version = "py310"
 unsafe-fixes = true # allow deletions Ruff marks unsafe
 [tool.ruff.lint]

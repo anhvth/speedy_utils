@@ -382,6 +382,7 @@ def _setup_chainlit():
             stream = await aclient.chat.completions.create(**call_kwargs)
 
             thinking_completed = False
+            content = None
             final_answer = cl.Message(content="")
 
             async with cl.Step(name="Thinking") as thinking_step:
