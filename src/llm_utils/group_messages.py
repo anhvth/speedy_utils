@@ -77,7 +77,13 @@ def group_messages_by_len(
     """
     if messages is None:
         raise ValueError('messages parameter cannot be None')
-    from transformers.models.auto.tokenization_auto import AutoTokenizer  # type: ignore
+    try:
+        from transformers.models.auto.tokenization_auto import AutoTokenizer  # type: ignore
+    except ImportError as exc:
+        raise ImportError(
+            "transformers is required for group_messages_by_token_length. "
+            "Install with: pip install 'speedy-utils[transformers]'"
+        ) from exc
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 

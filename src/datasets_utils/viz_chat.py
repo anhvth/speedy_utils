@@ -315,7 +315,7 @@ def _get_tokenizer(tokenizer_name: str) -> Any:
     except ImportError as exc:
         raise ImportError(
             "transformers is required for tokenized datasets. "
-            "Install with: pip install transformers"
+            "Install with: pip install 'speedy-utils[transformers]'"
         ) from exc
 
     print(f"Loading tokenizer: {tokenizer_name}...")

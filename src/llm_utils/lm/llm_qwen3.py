@@ -137,14 +137,11 @@ def _load_auto_tokenizer():
     if _AUTO_TOKENIZER_CLS is None:
         try:
             from transformers import AutoTokenizer as tokenizer_cls
-        except ImportError:
-            from transformers.models.auto.tokenization_auto import (
-                AutoTokenizer as tokenizer_cls,
-            )
-
-            print(
-                "Warning: Imported AutoTokenizer from transformers.models.auto.tokenization_auto, which may cause issues if transformers is updated. Please ensure transformers is up to date to avoid this warning."
-            )
+        except ImportError as exc:
+            raise ImportError(
+                "transformers is required for Qwen3 tool calling. "
+                "Install with: pip install 'speedy-utils[transformers]'"
+            ) from exc
         _AUTO_TOKENIZER_CLS = tokenizer_cls
     return _AUTO_TOKENIZER_CLS
 
