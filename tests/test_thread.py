@@ -268,8 +268,10 @@ def test_speedy_vs_normal():
     out2 = [f(x) for x in inp]
     st_time = time.time() - start_time
     print(f'Normal for loop took: {st_time:.4f} seconds')
-
-    print(f'Speed improvement: {st_time / mt_time:.2f}x faster')
+    if mt_time > 0:
+        print(f'Speed improvement: {st_time / mt_time:.2f}x faster')
+    else:
+        print('Speed improvement: skipped because multi-thread timing rounded to zero')
 
     # Print details about the outputs for debugging
     print(f'\nSpeedy output (length={len(out1)}): {out1}')

@@ -11,9 +11,9 @@ class TestPublicApi(unittest.TestCase):
         self.assertIs(llm_utils.get_one_turn_conv, utils_get_one_turn_conv)
         self.assertIs(llm_utils.turn, utils_turn)
         self.assertIs(llm_utils.msgs_turns, utils_msgs_turns)
-        # Lazy attrs (LLM, MOpenAI, etc.) are resolved via __getattr__
-        self.assertIn("__getattr__", llm_utils.__dict__)
         self.assertIs(llm_utils.LLM, llm_utils.lm.LLM)
+        self.assertIs(llm_utils.MOpenAI, llm_utils.lm.MOpenAI)
+        self.assertNotIn("__getattr__", llm_utils.__dict__)
 
     def test_conversation_helpers_build_chatml_messages(self):
         self.assertEqual(
