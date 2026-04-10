@@ -9,7 +9,7 @@ if TYPE_CHECKING:
 
 def _create_single_client(url: str, api_key: str, cache: bool) -> Any:
     """Create a single MOpenAI client for a given URL."""
-    from llm_utils import MOpenAI
+    from .openai_memoize import MOpenAI
 
     return MOpenAI(base_url=url, api_key=api_key, cache=cache)
 
@@ -24,8 +24,7 @@ def get_base_client(
     When client is a list, returns a list of clients for load balancing.
     """
     from openai import OpenAI
-
-    from llm_utils import MOpenAI
+    from .openai_memoize import MOpenAI
 
     if client is None:
         return MOpenAI(

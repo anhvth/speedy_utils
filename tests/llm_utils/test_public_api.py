@@ -7,13 +7,16 @@ from llm_utils.utils import turn as utils_turn
 
 
 class TestPublicApi(unittest.TestCase):
-    def test_top_level_exports_are_direct_reexports(self):
+    def test_top_level_exports_expose_only_light_helpers(self):
         self.assertIs(llm_utils.get_one_turn_conv, utils_get_one_turn_conv)
         self.assertIs(llm_utils.turn, utils_turn)
         self.assertIs(llm_utils.msgs_turns, utils_msgs_turns)
-        self.assertIs(llm_utils.LLM, llm_utils.lm.LLM)
-        self.assertIs(llm_utils.MOpenAI, llm_utils.lm.MOpenAI)
-        self.assertNotIn("__getattr__", llm_utils.__dict__)
+        self.assertFalse(hasattr(llm_utils, "LLM"))
+        self.assertFalse(hasattr(llm_utils, "MOpenAI"))
+
+    def test_heavy_lm_exports_remain_available_from_lm_package(self):
+        self.assertTrue(hasattr(llm_utils.lm, "LLM"))
+        self.assertTrue(hasattr(llm_utils.lm, "MOpenAI"))
 
     def test_conversation_helpers_build_chatml_messages(self):
         self.assertEqual(
