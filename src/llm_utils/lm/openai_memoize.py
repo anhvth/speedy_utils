@@ -1,11 +1,17 @@
+from __future__ import annotations
+
+import inspect
 import os
-from typing import TYPE_CHECKING, Any
+from collections.abc import Awaitable, Callable, Mapping
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlparse
 
 from loguru import logger
 
 
 if TYPE_CHECKING:
+    import httpx
+    from httpx import Timeout
     from openai import AsyncOpenAI, OpenAI
 
 
@@ -51,44 +57,42 @@ def _get_mopenai_class():
     from openai import OpenAI
 
     class MOpenAI(OpenAI):
-        """
-        MOpenAI(*args, **kwargs)
+        """OpenAI client wrapper that memoizes the bound `post` method."""
 
-        Subclass of OpenAI that transparently memoizes the instance's `post` method.
-
-        This class forwards all constructor arguments to the OpenAI base class and then
-        replaces the instance's `post` method with a memoized wrapper:
-
-        Behavior
-        - The memoized `post` caches responses based on the arguments with which it is
-            invoked, preventing repeated identical requests from invoking the underlying
-            OpenAI API repeatedly.
-        - Because `post` is replaced on the instance, the cache is by-default tied to
-            the MOpenAI instance (per-instance cache).
-        - Any initialization arguments are passed unchanged to OpenAI.__init__.
-
-        Notes and cautions
-        - The exact semantics of caching (cache key construction, expiry, max size,
-            persistence) depend on the implementation of `memoize`. Ensure that the
-            provided `memoize` supports the desired behavior (e.g., hashing of mutable
-            inputs, thread-safety, TTL, cache invalidation).
-        - If the original `post` method has important side effects or relies on
-            non-deterministic behavior, memoization may change program behavior.
-        - If you need a shared cache across instances, or more advanced cache controls,
-            modify `memoize` or wrap at a class/static level instead of assigning to the
-            bound method.
-        - Type information is now fully preserved by the memoize decorator, eliminating
-            the need for type casting.
-
-        Example
-                m = MOpenAI(api_key="...", model="gpt-4")
-                r1 = m.post("Hello")         # executes API call and caches result
-                r2 = m.post("Hello")         # returns cached result (no API call)
-        """
-
-        def __init__(self, *args, cache=True, **kwargs):
-            _unset_proxy_env_for_localhost(kwargs.get("base_url"))
-            super().__init__(*args, **kwargs)
+        def __init__(
+            self,
+            *,
+            api_key: str | None | Callable[[], str] = None,
+            organization: str | None = None,
+            project: str | None = None,
+            webhook_secret: str | None = None,
+            base_url: str | httpx.URL | None = None,
+            websocket_base_url: str | httpx.URL | None = None,
+            timeout: float | Timeout | None | Any = None,
+            max_retries: int = 2,
+            default_headers: Mapping[str, str] | None = None,
+            default_query: Mapping[str, object] | None = None,
+            http_client: httpx.Client | None = None,
+            _strict_response_validation: bool = False,
+            cache: bool = True,
+            **kwargs: Any,
+        ) -> None:
+            _unset_proxy_env_for_localhost(base_url)
+            super().__init__(
+                api_key=api_key,
+                organization=organization,
+                project=project,
+                webhook_secret=webhook_secret,
+                base_url=base_url,
+                websocket_base_url=websocket_base_url,
+                timeout=timeout,
+                max_retries=max_retries,
+                default_headers=default_headers,
+                default_query=default_query,
+                http_client=http_client,
+                _strict_response_validation=_strict_response_validation,
+                **kwargs,
+            )
             self._orig_post = self.post
             if cache:
                 self.set_cache(cache)
@@ -110,31 +114,42 @@ def _get_masyncopenai_class():
     from openai import AsyncOpenAI
 
     class MAsyncOpenAI(AsyncOpenAI):
-        """
-        MAsyncOpenAI(*args, **kwargs)
+        """Async OpenAI client wrapper that memoizes the bound `post` method."""
 
-        Async subclass of AsyncOpenAI that transparently memoizes the instance's `post` method.
-
-        This class forwards all constructor arguments to the AsyncOpenAI base class and then
-        replaces the instance's `post` method with a memoized wrapper:
-
-        Behavior
-        - The memoized `post` caches responses based on the arguments with which it is
-            invoked, preventing repeated identical requests from invoking the underlying
-            OpenAI API repeatedly.
-        - Because `post` is replaced on the instance, the cache is by-default tied to
-            the MAsyncOpenAI instance (per-instance cache).
-        - Any initialization arguments are passed unchanged to AsyncOpenAI.__init__.
-
-        Example
-                m = MAsyncOpenAI(api_key="...", model="gpt-4")
-                r1 = await m.post("Hello")    # executes API call and caches result
-                r2 = await m.post("Hello")    # returns cached result (no API call)
-        """
-
-        def __init__(self, *args, cache=True, **kwargs):
-            _unset_proxy_env_for_localhost(kwargs.get("base_url"))
-            super().__init__(*args, **kwargs)
+        def __init__(
+            self,
+            *,
+            api_key: str | Callable[[], Awaitable[str]] | None = None,
+            organization: str | None = None,
+            project: str | None = None,
+            webhook_secret: str | None = None,
+            base_url: str | httpx.URL | None = None,
+            websocket_base_url: str | httpx.URL | None = None,
+            timeout: float | Timeout | None | Any = None,
+            max_retries: int = 2,
+            default_headers: Mapping[str, str] | None = None,
+            default_query: Mapping[str, object] | None = None,
+            http_client: httpx.AsyncClient | None = None,
+            _strict_response_validation: bool = False,
+            cache: bool = True,
+            **kwargs: Any,
+        ) -> None:
+            _unset_proxy_env_for_localhost(base_url)
+            super().__init__(
+                api_key=api_key,
+                organization=organization,
+                project=project,
+                webhook_secret=webhook_secret,
+                base_url=base_url,
+                websocket_base_url=websocket_base_url,
+                timeout=timeout,
+                max_retries=max_retries,
+                default_headers=default_headers,
+                default_query=default_query,
+                http_client=http_client,
+                _strict_response_validation=_strict_response_validation,
+                **kwargs,
+            )
             self._orig_post = self.post
             if cache:
                 self.set_cache(cache)
@@ -156,17 +171,260 @@ _MOpenAI_class = None
 _MAsyncOpenAI_class = None
 
 
-def MOpenAI(*args, **kwargs):
-    """Factory function for MOpenAI that lazily loads openai module."""
+_OPENAI_FACTORY_SIGNATURE = inspect.Signature(
+    [
+        inspect.Parameter(
+            "api_key",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=None,
+            annotation="str | None | Callable[[], str]",
+        ),
+        inspect.Parameter(
+            "organization",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=None,
+            annotation="str | None",
+        ),
+        inspect.Parameter(
+            "project",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=None,
+            annotation="str | None",
+        ),
+        inspect.Parameter(
+            "webhook_secret",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=None,
+            annotation="str | None",
+        ),
+        inspect.Parameter(
+            "base_url",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=None,
+            annotation="str | httpx.URL | None",
+        ),
+        inspect.Parameter(
+            "websocket_base_url",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=None,
+            annotation="str | httpx.URL | None",
+        ),
+        inspect.Parameter(
+            "timeout",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=None,
+            annotation="float | Timeout | None | Any",
+        ),
+        inspect.Parameter(
+            "max_retries",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=2,
+            annotation="int",
+        ),
+        inspect.Parameter(
+            "default_headers",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=None,
+            annotation="Mapping[str, str] | None",
+        ),
+        inspect.Parameter(
+            "default_query",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=None,
+            annotation="Mapping[str, object] | None",
+        ),
+        inspect.Parameter(
+            "http_client",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=None,
+            annotation="httpx.Client | None",
+        ),
+        inspect.Parameter(
+            "_strict_response_validation",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=False,
+            annotation="bool",
+        ),
+        inspect.Parameter(
+            "cache",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=True,
+            annotation="bool",
+        ),
+        inspect.Parameter(
+            "kwargs",
+            inspect.Parameter.VAR_KEYWORD,
+            annotation="Any",
+        ),
+    ]
+)
+
+_ASYNC_OPENAI_FACTORY_SIGNATURE = inspect.Signature(
+    [
+        inspect.Parameter(
+            "api_key",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=None,
+            annotation="str | Callable[[], Awaitable[str]] | None",
+        ),
+        inspect.Parameter(
+            "organization",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=None,
+            annotation="str | None",
+        ),
+        inspect.Parameter(
+            "project",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=None,
+            annotation="str | None",
+        ),
+        inspect.Parameter(
+            "webhook_secret",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=None,
+            annotation="str | None",
+        ),
+        inspect.Parameter(
+            "base_url",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=None,
+            annotation="str | httpx.URL | None",
+        ),
+        inspect.Parameter(
+            "websocket_base_url",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=None,
+            annotation="str | httpx.URL | None",
+        ),
+        inspect.Parameter(
+            "timeout",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=None,
+            annotation="float | Timeout | None | Any",
+        ),
+        inspect.Parameter(
+            "max_retries",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=2,
+            annotation="int",
+        ),
+        inspect.Parameter(
+            "default_headers",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=None,
+            annotation="Mapping[str, str] | None",
+        ),
+        inspect.Parameter(
+            "default_query",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=None,
+            annotation="Mapping[str, object] | None",
+        ),
+        inspect.Parameter(
+            "http_client",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=None,
+            annotation="httpx.AsyncClient | None",
+        ),
+        inspect.Parameter(
+            "_strict_response_validation",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=False,
+            annotation="bool",
+        ),
+        inspect.Parameter(
+            "cache",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=True,
+            annotation="bool",
+        ),
+        inspect.Parameter(
+            "kwargs",
+            inspect.Parameter.VAR_KEYWORD,
+            annotation="Any",
+        ),
+    ]
+)
+
+
+def MOpenAI(
+    *,
+    api_key: str | None | Callable[[], str] = None,
+    organization: str | None = None,
+    project: str | None = None,
+    webhook_secret: str | None = None,
+    base_url: str | httpx.URL | None = None,
+    websocket_base_url: str | httpx.URL | None = None,
+    timeout: float | Timeout | None | Any = None,
+    max_retries: int = 2,
+    default_headers: Mapping[str, str] | None = None,
+    default_query: Mapping[str, object] | None = None,
+    http_client: httpx.Client | None = None,
+    _strict_response_validation: bool = False,
+    cache: bool = True,
+    **kwargs: Any,
+):
+    """Lazily construct a memoized OpenAI client with an editor-friendly signature."""
     global _MOpenAI_class
     if _MOpenAI_class is None:
         _MOpenAI_class = _get_mopenai_class()
-    return _MOpenAI_class(*args, **kwargs)
+    return _MOpenAI_class(
+        api_key=api_key,
+        organization=organization,
+        project=project,
+        webhook_secret=webhook_secret,
+        base_url=base_url,
+        websocket_base_url=websocket_base_url,
+        timeout=timeout,
+        max_retries=max_retries,
+        default_headers=default_headers,
+        default_query=default_query,
+        http_client=http_client,
+        _strict_response_validation=_strict_response_validation,
+        cache=cache,
+        **kwargs,
+    )
 
 
-def MAsyncOpenAI(*args, **kwargs):
-    """Factory function for MAsyncOpenAI that lazily loads openai module."""
+def MAsyncOpenAI(
+    *,
+    api_key: str | Callable[[], Awaitable[str]] | None = None,
+    organization: str | None = None,
+    project: str | None = None,
+    webhook_secret: str | None = None,
+    base_url: str | httpx.URL | None = None,
+    websocket_base_url: str | httpx.URL | None = None,
+    timeout: float | Timeout | None | Any = None,
+    max_retries: int = 2,
+    default_headers: Mapping[str, str] | None = None,
+    default_query: Mapping[str, object] | None = None,
+    http_client: httpx.AsyncClient | None = None,
+    _strict_response_validation: bool = False,
+    cache: bool = True,
+    **kwargs: Any,
+):
+    """Lazily construct a memoized AsyncOpenAI client with an explicit signature."""
     global _MAsyncOpenAI_class
     if _MAsyncOpenAI_class is None:
         _MAsyncOpenAI_class = _get_masyncopenai_class()
-    return _MAsyncOpenAI_class(*args, **kwargs)
+    return _MAsyncOpenAI_class(
+        api_key=api_key,
+        organization=organization,
+        project=project,
+        webhook_secret=webhook_secret,
+        base_url=base_url,
+        websocket_base_url=websocket_base_url,
+        timeout=timeout,
+        max_retries=max_retries,
+        default_headers=default_headers,
+        default_query=default_query,
+        http_client=http_client,
+        _strict_response_validation=_strict_response_validation,
+        cache=cache,
+        **kwargs,
+    )
+
+
+cast(Any, MOpenAI).__signature__ = _OPENAI_FACTORY_SIGNATURE
+cast(Any, MAsyncOpenAI).__signature__ = _ASYNC_OPENAI_FACTORY_SIGNATURE

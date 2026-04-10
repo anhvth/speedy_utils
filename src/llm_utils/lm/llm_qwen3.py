@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple, cast
 
+from httpx import Timeout
 from loguru import logger
 from pydantic import BaseModel
 
@@ -217,12 +218,23 @@ class Qwen3LLM(LLM):
 
     def __init__(
         self,
-        *args,
+        client: Any = None,
+        cache: bool = True,
+        verbose: bool = False,
+        timeout: float | Timeout | None = None,
+        *,
         enable_thinking: bool = True,
+        model: str | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        stop: str | list[str] | tuple[str, ...] | None = None,
+        presence_penalty: float | None = None,
+        frequency_penalty: float | None = None,
         thinking_max_tokens: int = DEFAULT_THINKING_MAX_TOKENS,
         content_max_tokens: int = DEFAULT_CONTENT_MAX_TOKENS,
-        **kwargs,
-    ):
+        **model_kwargs: Any,
+    ) -> None:
         self._validate_prefix_completion_kwargs(
             n=1,
             thinking_max_tokens=thinking_max_tokens,
@@ -232,7 +244,21 @@ class Qwen3LLM(LLM):
         )
         self.default_thinking_max_tokens = thinking_max_tokens
         self.default_content_max_tokens = content_max_tokens
-        super().__init__(*args, enable_thinking=enable_thinking, **kwargs)
+        super().__init__(
+            client=client,
+            cache=cache,
+            verbose=verbose,
+            timeout=timeout,
+            enable_thinking=enable_thinking,
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            stop=stop,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            **model_kwargs,
+        )
 
     @classmethod
     def _get_tokenizer(cls):

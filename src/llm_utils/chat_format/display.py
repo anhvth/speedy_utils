@@ -400,7 +400,9 @@ def display_conversations(data1: Any, data2: Any) -> None:
     show_chat(data2)
 
 
-def display_chat_messages_as_html(*args, **kwargs):
+def display_chat_messages_as_html(
+    messages: list[dict[str, Any]], max_reasoning_length: int | None = 2000
+) -> None:
     """Deprecated alias for show_chat."""
     import warnings
 
@@ -409,7 +411,7 @@ def display_chat_messages_as_html(*args, **kwargs):
         DeprecationWarning,
         stacklevel=2,
     )
-    return show_chat(*args, **kwargs)
+    return show_chat(messages, max_reasoning_length)
 
 
 __all__ = [

@@ -165,4 +165,4 @@ class TestLLMSignature(TestCase):
         for kwargs in legacy_kwargs:
             label = next(iter(kwargs.keys()))  # Use just the key name for subTest
             with self.subTest(kwarg=label), self.assertRaises(TypeError):
-                LLMSignature(signature=self.JudgeSignature, **kwargs)
+                LLMSignature(signature=self.JudgeSignature, **kwargs)  # type: ignore[call-arg]

@@ -1,5 +1,6 @@
 """LLM wrapper that binds a `Signature` to runtime generation."""
 
+from httpx import Timeout
 from typing import Any
 
 from pydantic import BaseModel
@@ -11,16 +12,52 @@ from .signature import Signature
 class LLMSignature(LLM):
     """LLM wrapper that derives prompt and schema defaults from a Signature."""
 
-    def __init__(self, signature: type[Signature], **kwargs):
+    def __init__(
+        self,
+        signature: type[Signature],
+        client: Any = None,
+        cache: bool = True,
+        verbose: bool = False,
+        timeout: float | Timeout | None = None,
+        enable_thinking: bool | None = None,
+        *,
+        model: str | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        stop: str | list[str] | tuple[str, ...] | None = None,
+        presence_penalty: float | None = None,
+        frequency_penalty: float | None = None,
+        **model_kwargs: Any,
+    ):
         """
         Initialize a signature-backed LLM wrapper.
 
         Args:
             signature: Signature class for structured I/O
-            **kwargs: Additional arguments passed to LLM
+            client: OpenAI-compatible client, base URL, port, or list of clients
+            cache: Whether to cache requests by default
+            verbose: Whether to log available models and load-balancing details
+            timeout: Optional request timeout forwarded to the client
+            enable_thinking: Default thinking mode for supported backends
+            model: Default model name
+            max_tokens: Default generation token limit
+            temperature: Default sampling temperature
+            top_p: Default nucleus sampling value
+            stop: Default stop sequence or sequences
+            presence_penalty: Default OpenAI presence penalty
+            frequency_penalty: Default OpenAI frequency penalty
+            **model_kwargs: Additional provider-specific model options
         """
         legacy_keys = [
-            key for key in ("input_model", "output_model", "response_model") if key in kwargs
+            key
+            for key in (
+                "input_model",
+                "output_model",
+                "response_model",
+                "is_reasoning_model",
+            )
+            if key in model_kwargs
         ]
         if legacy_keys:
             raise TypeError(
@@ -32,7 +69,21 @@ class LLMSignature(LLM):
         self.output_model = signature.get_output_model()
         self.sft_data: list[dict[str, Any]] = []  # Store SFT training examples
 
-        super().__init__(**kwargs)
+        super().__init__(
+            client=client,
+            cache=cache,
+            verbose=verbose,
+            timeout=timeout,
+            enable_thinking=enable_thinking,
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            stop=stop,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            **model_kwargs,
+        )
 
     def _resolve_response_model(
         self,
