@@ -626,6 +626,53 @@ class TestQwen3LLM(unittest.TestCase):
         self.assertEqual(mock_completion_create.call_args.kwargs["temperature"], 0.2)
 
     @patch("llm_utils.lm.llm.get_base_client")
+    def test_generate_with_prefix_step_falls_back_without_transformers(
+        self, mock_get_client
+    ):
+        mock_get_client.return_value = self._make_mock_client()
+        llm = Qwen3LLM()
+        completion_choice = self._make_completion_choice(
+            "memory text",
+            finish_reason="stop",
+        )
+
+        with (
+            patch.object(Qwen3LLM, "_tokenizer", None),
+            patch.object(Qwen3LLM, "_tokenizer_checked", False),
+            patch.object(Qwen3LLM, "_tokenizer_import_error", None),
+            patch(
+                "llm_utils.lm.llm_qwen3._get_tokenizer",
+                side_effect=ImportError("transformers unavailable"),
+            ) as mock_load_tokenizer,
+            patch.object(
+                llm,
+                "_raw_completion_step",
+                return_value=completion_choice,
+            ) as mock_raw_completion,
+        ):
+            llm._generate_with_prefix_step(
+                [{"role": "user", "content": "prompt"}],
+                "<memory>",
+                prefix_mode="raw",
+                max_tokens=32,
+            )
+            llm._generate_with_prefix_step(
+                [{"role": "user", "content": "prompt"}],
+                "<memory>",
+                prefix_mode="raw",
+                max_tokens=32,
+            )
+
+        self.assertEqual(mock_load_tokenizer.call_count, 1)
+        self.assertEqual(
+            [call.args[0] for call in mock_raw_completion.call_args_list],
+            [
+                "<|im_start|>user\nprompt<|im_end|>\n<|im_start|>assistant\n<memory>",
+                "<|im_start|>user\nprompt<|im_end|>\n<|im_start|>assistant\n<memory>",
+            ],
+        )
+
+    @patch("llm_utils.lm.llm.get_base_client")
     def test_complete_until_state_inject_appends_prefix_text(self, mock_get_client):
         mock_get_client.return_value = self._make_mock_client()
         state = _CustomPrefixCompletionState(

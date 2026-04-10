@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple, cast
@@ -10,6 +11,7 @@ from pydantic import BaseModel
 
 from speedy_utils import clean_traceback
 
+from ..chat_format.transform import transform_messages
 from .llm import LLM, Messages
 
 
@@ -27,6 +29,11 @@ DEFAULT_CONTENT_MAX_TOKENS = 4096
 TRANSFORMERS_NO_ADVISORY_WARNINGS_ENV = "TRANSFORMERS_NO_ADVISORY_WARNINGS"
 _TOKENIZER_CACHE_ROOT = Path("/tmp/tokenizers")
 _AUTO_TOKENIZER_CLS = None
+_TOKENIZER_LOAD_LOCK = threading.Lock()
+_TRANSFORMERS_IMPORT_ERROR_MESSAGE = (
+    "transformers is required for Qwen3 tokenizer-backed prompt rendering. "
+    "Install with: pip install 'speedy-utils[transformers]'"
+)
 
 
 class _PrefixCompletionState(NamedTuple):
@@ -138,10 +145,7 @@ def _load_auto_tokenizer():
         try:
             from transformers import AutoTokenizer as tokenizer_cls
         except ImportError as exc:
-            raise ImportError(
-                "transformers is required for Qwen3 tool calling. "
-                "Install with: pip install 'speedy-utils[transformers]'"
-            ) from exc
+            raise ImportError(_TRANSFORMERS_IMPORT_ERROR_MESSAGE) from exc
         _AUTO_TOKENIZER_CLS = tokenizer_cls
     return _AUTO_TOKENIZER_CLS
 
@@ -179,6 +183,8 @@ def _get_tokenizer(name_or_path: str | os.PathLike[str]):
             trust_remote_code=True,
         )
         return tokenizer
+    except ImportError:
+        raise
     except Exception as exc:
         logger.error(f"Error loading tokenizer for {name_or_path}: {exc}")
         raise
@@ -189,11 +195,26 @@ def _get_tokenizer(name_or_path: str | os.PathLike[str]):
             os.environ[TRANSFORMERS_NO_ADVISORY_WARNINGS_ENV] = previous
 
 
+def _render_chatml_prompt(messages: Messages) -> str:
+    """Render ChatML text without requiring a Hugging Face tokenizer."""
+    prompt = transform_messages(
+        messages,
+        frm="chatml",
+        to="text",
+        add_generation_prompt=False,
+    )
+    if not isinstance(prompt, str):
+        raise TypeError("Qwen3 chat prompt must serialize to a string")
+    return prompt
+
+
 class Qwen3LLM(LLM):
     """Qwen3 helper for staged generation with a partial assistant prefix."""
 
     TOKENIZER_NAME: ClassVar[str] = "Qwen/Qwen3-0.6B"
     _tokenizer: ClassVar[Any | None] = None
+    _tokenizer_checked: ClassVar[bool] = False
+    _tokenizer_import_error: ClassVar[str | None] = None
 
     def __init__(
         self,
@@ -218,9 +239,39 @@ class Qwen3LLM(LLM):
     def _get_tokenizer(cls):
         tokenizer = cls._tokenizer
         if tokenizer is None:
-            tokenizer = _get_tokenizer(cls.TOKENIZER_NAME)
-            cls._tokenizer = tokenizer
+            with _TOKENIZER_LOAD_LOCK:
+                tokenizer = cls._tokenizer
+                if tokenizer is not None:
+                    return tokenizer
+                if cls._tokenizer_checked:
+                    raise ImportError(
+                        cls._tokenizer_import_error
+                        or _TRANSFORMERS_IMPORT_ERROR_MESSAGE
+                    )
+                cls._tokenizer_checked = True
+                try:
+                    tokenizer = _get_tokenizer(cls.TOKENIZER_NAME)
+                except ImportError as exc:
+                    cls._tokenizer_import_error = str(exc)
+                    raise
+                cls._tokenizer = tokenizer
+                cls._tokenizer_import_error = None
         return tokenizer
+
+    def _build_completion_prompt(self, messages: Messages) -> str:
+        try:
+            tokenizer = self._get_tokenizer()
+        except ImportError:
+            return _render_chatml_prompt(messages)
+
+        prompt = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=False,
+        )
+        if not isinstance(prompt, str):
+            raise TypeError("Qwen3 tokenizer prompt must be a string")
+        return prompt
 
     def _resolve_enable_thinking(self, enable_thinking: bool | None = None) -> bool:
         effective_enable_thinking = (
@@ -333,12 +384,7 @@ class Qwen3LLM(LLM):
         return_client_idx: bool = False,
         **runtime_kwargs,
     ) -> "CompletionChoice | tuple[CompletionChoice, int]":
-        tokenizer = self._get_tokenizer()
-        prompt = tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=False,
-        )
+        prompt = self._build_completion_prompt(messages)
         call_kwargs = dict(runtime_kwargs)
         enable_thinking = call_kwargs.pop("enable_thinking", None)
         if prefix_mode == "think":

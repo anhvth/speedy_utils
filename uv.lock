@@ -8280,9 +8280,13 @@ dependencies = [
     { name = "tabulate", version = "0.9.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "tabulate", version = "0.10.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "tqdm" },
+    { name = "xxhash" },
+]
+
+[package.optional-dependencies]
+transformers = [
     { name = "transformers", version = "4.57.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "transformers", version = "5.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
-    { name = "xxhash" },
 ]
 
 [package.dev-dependencies]
@@ -8320,9 +8324,10 @@ requires-dist = [
     { name = "scikit-learn" },
     { name = "tabulate" },
     { name = "tqdm" },
-    { name = "transformers", specifier = ">=4.57.6" },
+    { name = "transformers", marker = "extra == 'transformers'", specifier = ">=4.57.6" },
     { name = "xxhash" },
 ]
+provides-extras = ["transformers"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest-xdist", specifier = ">=3.8.0" }]
