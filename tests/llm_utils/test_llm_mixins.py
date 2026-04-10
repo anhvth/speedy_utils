@@ -9,7 +9,7 @@ from openai.types.completion_choice import CompletionChoice
 from openai.types.completion_usage import CompletionUsage
 
 import llm_utils
-from llm_utils.lm import Qwen3LLM
+from llm_utils import Qwen3LLM
 from llm_utils.lm.llm import LLM
 from llm_utils.lm.llm_qwen3 import (
     ASSISTANT_PREFIX,
@@ -27,8 +27,8 @@ class TestQwen3LLM(unittest.TestCase):
     def test_qwen3_llm_class_name(self):
         self.assertEqual(Qwen3LLM.__name__, "Qwen3LLM")
 
-    def test_qwen3_llm_is_available_from_lm_package(self):
-        self.assertFalse(hasattr(llm_utils, "Qwen3LLM"))
+    def test_qwen3_llm_is_available_from_top_level_package(self):
+        self.assertTrue(hasattr(llm_utils, "Qwen3LLM"))
         self.assertFalse(hasattr(llm_utils, "AsyncLM_Qwen3"))
         self.assertFalse(hasattr(llm_utils, "AsyncLM_DeepSeekR1"))
         self.assertFalse(hasattr(Qwen3LLM, "generate_with_prefix"))

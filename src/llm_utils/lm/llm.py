@@ -15,8 +15,7 @@ from httpx import Timeout
 from loguru import logger
 from pydantic import BaseModel
 
-from speedy_utils import clean_traceback
-
+from .._traceback import clean_traceback
 from .utils import get_base_client
 
 

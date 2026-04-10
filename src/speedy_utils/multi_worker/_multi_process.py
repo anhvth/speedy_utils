@@ -249,18 +249,70 @@ def _set_progress_postfix(pbar: tqdm, postfix: dict[str, Any]) -> None:
         pbar.set_postfix(postfix)
 
 
+def _refresh_progress_bar(pbar: tqdm) -> None:
+    """Force a visible redraw when tqdm is available."""
+    refresh = getattr(pbar, "refresh", None)
+    if callable(refresh):
+        refresh()
+
+
 def _build_multiprocess_postfix(
     *,
     error_stats: ErrorStats,
     processes: list[mp.Process],
+    total_processes: int | None = None,
+    started_tasks: int = 0,
+    active_tasks: int = 0,
 ) -> dict[str, Any]:
     """Return compact parent-owned status for the multiprocessing bar."""
     postfix: dict[str, Any] = error_stats.get_postfix_dict()
-    total_processes = len(processes)
-    if total_processes:
+    expected_processes = total_processes if total_processes is not None else len(processes)
+    if expected_processes:
         live_processes = sum(1 for proc in processes if proc.exitcode is None)
-        postfix["proc"] = f"{live_processes}/{total_processes}"
+        postfix["proc"] = f"{live_processes}/{expected_processes}"
+    postfix["start"] = started_tasks
+    postfix["active"] = active_tasks
     return postfix
+
+
+def _start_mp_progress_monitor(
+    *,
+    pbar: tqdm,
+    pbar_lock: threading.Lock,
+    stop_event: threading.Event,
+    error_stats: ErrorStats,
+    processes: list[mp.Process],
+    processes_lock: threading.Lock,
+    total_processes: int,
+    progress_state: dict[str, int],
+    interval: float = 0.1,
+) -> threading.Thread:
+    """Keep the multiprocessing tqdm visible even while workers are warming up."""
+
+    def _monitor() -> None:
+        while not stop_event.wait(interval):
+            with pbar_lock:
+                with processes_lock:
+                    processes_snapshot = list(processes)
+                _set_progress_postfix(
+                    pbar,
+                    _build_multiprocess_postfix(
+                        error_stats=error_stats,
+                        processes=processes_snapshot,
+                        total_processes=total_processes,
+                        started_tasks=progress_state["started"],
+                        active_tasks=progress_state["active"],
+                    ),
+                )
+                _refresh_progress_bar(pbar)
+
+    thread = threading.Thread(
+        target=_monitor,
+        name="speedy-mp-progress",
+        daemon=True,
+    )
+    thread.start()
+    return thread
 
 
 def _run_seq_backend(
@@ -435,6 +487,7 @@ def _run_mp_chunk(
     def process_one(payload: tuple[int, Any]) -> Any:
         nonlocal child_error_count
         idx, item = payload
+        event_queue.put(("started", 1))
         try:
             result = _call_with_log_control(
                 f_wrapped,
@@ -572,42 +625,12 @@ def _run_multiprocess_backend(
     ctx = mp.get_context("spawn")
     event_queue = ctx.Queue()
     processes: list[mp.Process] = []
+    total_processes = len(chunks)
 
     try:
-        for chunk in chunks:
-            proc = ctx.Process(
-                target=_multiprocess_entrypoint,
-                args=(
-                    chunk,
-                    process_func,
-                    serialized_func,
-                    cache_dir,
-                    dump_in_thread,
-                    num_threads,
-                    func_kwargs,
-                    log_worker,
-                    log_gate_path,
-                    error_handler,
-                    max_error_files,
-                    func_name,
-                    event_queue,
-                ),
-            )
-            proc.start()
-            processes.append(proc)  # type: ignore[arg-type]
-
-        tracked: list[psutil.Process] = []
-        for proc in processes:
-            if proc.pid is None:
-                continue
-            try:
-                tracked.append(psutil.Process(proc.pid))
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
-        _track_processes(tracked)
-
         results: list[Any] = [None] * total
         done_processes = 0
+        progress_state = {"started": 0, "active": 0}
 
         with tqdm(
             total=total,
@@ -616,50 +639,194 @@ def _run_multiprocess_backend(
             file=sys.stdout,
             dynamic_ncols=True,
         ) as pbar:
-            while done_processes < len(processes):
+            pbar_lock = threading.Lock()
+            processes_lock = threading.Lock()
+            stop_event = threading.Event()
+            spawn_done = threading.Event()
+            monitor_thread = _start_mp_progress_monitor(
+                pbar=pbar,
+                pbar_lock=pbar_lock,
+                stop_event=stop_event,
+                error_stats=error_stats,
+                processes=processes,
+                processes_lock=processes_lock,
+                total_processes=total_processes,
+                progress_state=progress_state,
+            )
+
+            def _spawn_processes() -> None:
                 try:
-                    msg = event_queue.get(timeout=0.1)
-                except queue.Empty:
-                    if all(proc.exitcode is not None for proc in processes):
-                        done_processes = len(processes)
-                    continue
+                    for chunk in chunks:
+                        proc = ctx.Process(
+                            target=_multiprocess_entrypoint,
+                            args=(
+                                chunk,
+                                process_func,
+                                serialized_func,
+                                cache_dir,
+                                dump_in_thread,
+                                num_threads,
+                                func_kwargs,
+                                log_worker,
+                                log_gate_path,
+                                error_handler,
+                                max_error_files,
+                                func_name,
+                                event_queue,
+                            ),
+                        )
+                        proc.start()
+                        with processes_lock:
+                            processes.append(proc)  # type: ignore[arg-type]
+                            processes_snapshot = list(processes)
+                        with pbar_lock:
+                            _set_progress_postfix(
+                                pbar,
+                                _build_multiprocess_postfix(
+                                    error_stats=error_stats,
+                                    processes=processes_snapshot,
+                                    total_processes=total_processes,
+                                    started_tasks=progress_state["started"],
+                                    active_tasks=progress_state["active"],
+                                ),
+                            )
+                            _refresh_progress_bar(pbar)
 
-                tag = msg[0]
-                if tag == "result":
-                    _, idx, result = msg
-                    results[idx] = result
-                    continue
-                if tag == "progress":
-                    _, ok_inc, err_inc = msg
-                    for _ in range(ok_inc):
-                        error_stats.record_success()
-                    _bump_error_count(error_stats, err_inc)
-                    pbar.update(ok_inc + err_inc)
-                    _set_progress_postfix(
-                        pbar,
-                        _build_multiprocess_postfix(
-                            error_stats=error_stats,
-                            processes=processes,
-                        ),
-                    )
-                    continue
-                if tag == "process_done":
-                    done_processes += 1
-                    continue
-                if tag == "fatal":
-                    _, exc_type_name, exc_msg, frames = msg
-                    _terminate_processes(processes)
-                    _display_formatted_error_and_exit(
-                        exc_type_name=exc_type_name,
-                        exc_msg=exc_msg,
-                        frames=frames,
-                        caller_info=caller_info,
-                        backend="mp",
-                        pbar=pbar,
-                    )
+                    tracked: list[psutil.Process] = []
+                    with processes_lock:
+                        processes_snapshot = list(processes)
+                    for proc in processes_snapshot:
+                        if proc.pid is None:
+                            continue
+                        try:
+                            tracked.append(psutil.Process(proc.pid))
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            continue
+                    _track_processes(tracked)
+                finally:
+                    spawn_done.set()
 
-            for proc in processes:
-                proc.join()
+            spawn_thread = threading.Thread(
+                target=_spawn_processes,
+                name="speedy-mp-spawn",
+                daemon=True,
+            )
+            with pbar_lock:
+                _set_progress_postfix(
+                    pbar,
+                    _build_multiprocess_postfix(
+                        error_stats=error_stats,
+                        processes=processes,
+                        total_processes=total_processes,
+                        started_tasks=progress_state["started"],
+                        active_tasks=progress_state["active"],
+                    ),
+                )
+                _refresh_progress_bar(pbar)
+
+            try:
+                spawn_thread.start()
+
+                while done_processes < total_processes:
+                    try:
+                        msg = event_queue.get(timeout=0.1)
+                    except queue.Empty:
+                        with processes_lock:
+                            processes_snapshot = list(processes)
+                        if spawn_done.is_set() and all(
+                            proc.exitcode is not None for proc in processes_snapshot
+                        ):
+                            done_processes = total_processes
+                        continue
+
+                    tag = msg[0]
+                    if tag == "result":
+                        _, idx, result = msg
+                        results[idx] = result
+                        continue
+                    if tag == "started":
+                        _, started_inc = msg
+                        with pbar_lock:
+                            with processes_lock:
+                                processes_snapshot = list(processes)
+                            progress_state["started"] += started_inc
+                            progress_state["active"] += started_inc
+                            _set_progress_postfix(
+                                pbar,
+                                _build_multiprocess_postfix(
+                                    error_stats=error_stats,
+                                    processes=processes_snapshot,
+                                    total_processes=total_processes,
+                                    started_tasks=progress_state["started"],
+                                    active_tasks=progress_state["active"],
+                                ),
+                            )
+                            _refresh_progress_bar(pbar)
+                        continue
+                    if tag == "progress":
+                        _, ok_inc, err_inc = msg
+                        with pbar_lock:
+                            with processes_lock:
+                                processes_snapshot = list(processes)
+                            for _ in range(ok_inc):
+                                error_stats.record_success()
+                            _bump_error_count(error_stats, err_inc)
+                            progress_state["active"] = max(
+                                0,
+                                progress_state["active"] - (ok_inc + err_inc),
+                            )
+                            pbar.update(ok_inc + err_inc)
+                            _set_progress_postfix(
+                                pbar,
+                                _build_multiprocess_postfix(
+                                    error_stats=error_stats,
+                                    processes=processes_snapshot,
+                                    total_processes=total_processes,
+                                    started_tasks=progress_state["started"],
+                                    active_tasks=progress_state["active"],
+                                ),
+                            )
+                            _refresh_progress_bar(pbar)
+                        continue
+                    if tag == "process_done":
+                        done_processes += 1
+                        with pbar_lock:
+                            with processes_lock:
+                                processes_snapshot = list(processes)
+                            _set_progress_postfix(
+                                pbar,
+                                _build_multiprocess_postfix(
+                                    error_stats=error_stats,
+                                    processes=processes_snapshot,
+                                    total_processes=total_processes,
+                                    started_tasks=progress_state["started"],
+                                    active_tasks=progress_state["active"],
+                                ),
+                            )
+                            _refresh_progress_bar(pbar)
+                        continue
+                    if tag == "fatal":
+                        _, exc_type_name, exc_msg, frames = msg
+                        spawn_done.set()
+                        spawn_thread.join(timeout=1)
+                        _terminate_processes(processes)
+                        _display_formatted_error_and_exit(
+                            exc_type_name=exc_type_name,
+                            exc_msg=exc_msg,
+                            frames=frames,
+                            caller_info=caller_info,
+                            backend="mp",
+                            pbar=pbar,
+                        )
+
+                spawn_thread.join(timeout=1)
+                with processes_lock:
+                    processes_snapshot = list(processes)
+                for proc in processes_snapshot:
+                    proc.join()
+            finally:
+                stop_event.set()
+                monitor_thread.join(timeout=1)
 
         _cleanup_log_gate(log_gate_path)
         return results

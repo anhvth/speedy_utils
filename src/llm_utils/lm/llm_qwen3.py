@@ -9,8 +9,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple, cast
 from loguru import logger
 from pydantic import BaseModel
 
-from speedy_utils import clean_traceback
-
+from .._traceback import clean_traceback
 from ..chat_format.transform import transform_messages
 from .llm import LLM, Messages
 
