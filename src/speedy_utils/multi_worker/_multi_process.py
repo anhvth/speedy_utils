@@ -84,6 +84,64 @@ def _is_spawn_importable_callable(func: Callable[[Any], Any]) -> bool:
     return resolved is func
 
 
+def _infer_importable_module(func: Callable[[Any], Any]) -> tuple[str, str] | None:
+    """For a ``__main__`` function, discover its real importable module.
+
+    When a user runs ``python src/pkg/mod.py``, the function's
+    ``__module__`` is ``"__main__"``, but the file is actually part of an
+    installed package.  This helper walks ``sys.path`` to find the
+    matching dotted module name so the child process can re-import by
+    reference instead of relying on ``dill`` serialization (which breaks
+    with pydantic models under ``from __future__ import annotations``).
+    """
+    qualname = getattr(func, "__qualname__", None)
+    if not qualname or "<locals>" in qualname:
+        return None
+
+    try:
+        source_file = inspect.getfile(func)
+    except (TypeError, OSError):
+        return None
+
+    source_path = Path(source_file).resolve()
+
+    for sp in sorted(sys.path, key=len, reverse=True):
+        if not sp:
+            continue
+        sp_path = Path(sp).resolve()
+        try:
+            rel = source_path.relative_to(sp_path)
+        except ValueError:
+            continue
+
+        parts = list(rel.parts)
+        if parts[-1].endswith(".py"):
+            parts[-1] = parts[-1][:-3]
+        if parts[-1] == "__init__":
+            parts = parts[:-1]
+
+        module_name = ".".join(parts)
+        if not module_name or module_name == "__main__":
+            continue
+
+        try:
+            mod = importlib.import_module(module_name)
+            resolved = _resolve_attr_path(mod, qualname)
+        except (ImportError, AttributeError):
+            continue
+
+        # Accept if the code objects match (identity may differ because
+        # __main__ and the re-imported module are separate copies).
+        if resolved is func:
+            return (module_name, qualname)
+        resolved_code = getattr(resolved, "__code__", None)
+        func_code = getattr(func, "__code__", None)
+        if resolved_code is not None and func_code is not None and resolved_code == func_code:
+            return (module_name, qualname)
+
+    return None
+
+
 def _ensure_module_globals(
     module_name: str | None, script_path: str | None
 ) -> None:
@@ -122,12 +180,22 @@ def _ensure_module_globals(
 def _serialize_spawn_callable(func: Callable[[Any], Any]) -> bytes:
     """Serialize non-importable callables for the notebook fallback path.
 
-    Tries full (recursive) dill serialization first.  When that fails due
-    to unpicklable objects in module globals (e.g. ``SSLContext``), falls
-    back to shallow serialization and records the source script path so
-    the child process can re-import it to reconstruct globals.
+    Tries import-by-reference first (for __main__ functions whose source
+    file is actually an installed package).  Falls back to dill.
     """
     import pickle
+
+    # --- Fast path: the function lives in __main__ but is actually part
+    # of an importable package (e.g. ``python src/pkg/mod.py``).
+    # Store (module_name, qualname) so the child can just re-import.
+    importable = _infer_importable_module(func)
+    if importable is not None:
+        return pickle.dumps({
+            "_v": 1,
+            "import_ref": True,
+            "module_name": importable[0],
+            "qualname": importable[1],
+        })
 
     try:
         import dill
@@ -182,10 +250,23 @@ def _deserialize_spawn_callable(payload: bytes) -> Callable[[Any], Any]:
     if not isinstance(data, dict) or data.get("_v") != 1:
         return dill.loads(payload)
 
+    # --- Import-by-reference path (no dill needed) ---
+    if data.get("import_ref"):
+        mod = importlib.import_module(data["module_name"])
+        return _resolve_attr_path(mod, data["qualname"])
+
     if data.get("shallow"):
         _ensure_module_globals(data.get("module_name"), data.get("script_path"))
 
-    return dill.loads(data["func_bytes"])
+    try:
+        return dill.loads(data["func_bytes"])
+    except RecursionError:
+        raise RuntimeError(
+            "dill deserialization hit infinite recursion (likely a pydantic "
+            "model with `from __future__ import annotations`). Run via "
+            "`python -m <module>` or use the tools/ wrapper so the worker "
+            "function is importable by reference."
+        ) from None
 
 
 def _serialize_exception_frames(exc: Exception) -> list[tuple[str, int, str, dict]]:

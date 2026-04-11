@@ -1,6 +1,7 @@
 import contextlib
 import multiprocessing
 import os
+import pickle
 import time
 import types
 
@@ -12,6 +13,8 @@ if hasattr(multiprocessing, "set_start_method"):
         multiprocessing.set_start_method("spawn", force=True)
 
 from speedy_utils import multi_thread
+from speedy_utils.common.utils_print import flatten_dict
+from speedy_utils.multi_worker import _multi_process as mp_mod
 from speedy_utils.multi_worker.process import multi_process, tqdm
 
 
@@ -71,6 +74,18 @@ def fibonacci(n):
     if n <= 1:
         return n
     return fibonacci(n - 1) + fibonacci(n - 2)
+
+
+def clone_as_main(func):
+    cloned = types.FunctionType(
+        func.__code__,
+        func.__globals__,
+        name=func.__name__,
+        argdefs=func.__defaults__,
+        closure=func.__closure__,
+    )
+    cloned.__module__ = "__main__"
+    return cloned
 
 
 # ────────────────────────────────────────────────────────────
@@ -270,6 +285,46 @@ def test_mp_notebook_style_main_callable():
         backend="mp",
     )
     assert out == [square(x) for x in range(8)]
+
+
+def test_infer_importable_module_for_main_clone():
+    main_flatten = clone_as_main(flatten_dict)
+
+    assert mp_mod._infer_importable_module(main_flatten) == (
+        "speedy_utils.common.utils_print",
+        "flatten_dict",
+    )
+
+
+def test_serialize_spawn_callable_uses_import_ref_for_main_clone():
+    main_flatten = clone_as_main(flatten_dict)
+
+    payload = mp_mod._serialize_spawn_callable(main_flatten)
+    data = pickle.loads(payload)
+
+    assert data == {
+        "_v": 1,
+        "import_ref": True,
+        "module_name": "speedy_utils.common.utils_print",
+        "qualname": "flatten_dict",
+    }
+
+    restored = mp_mod._deserialize_spawn_callable(payload)
+    assert restored({"outer": {"inner": 3}}) == {"outer.inner": 3}
+
+
+def test_mp_importable_main_callable_uses_import_ref_path():
+    main_flatten = clone_as_main(flatten_dict)
+
+    out = multi_process(
+        main_flatten,
+        [{"a": {"b": 1}}, {"x": 2}],
+        num_procs=2,
+        progress=False,
+        backend="mp",
+    )
+
+    assert out == [{"a.b": 1}, {"x": 2}]
 
 
 def test_mp_local_closure_callable():
