@@ -9,6 +9,7 @@ from openai.types.completion_choice import CompletionChoice
 from openai.types.completion_usage import CompletionUsage
 from pydantic import BaseModel
 
+from llm_utils._traceback import CleanTracebackError
 from llm_utils.lm.llm import LLM
 
 
@@ -375,7 +376,7 @@ class TestLLMCallContract(TestCase):
         mock_get_client.return_value = self._make_mock_client()
         llm = LLM()
 
-        with self.assertRaises(SystemExit):
+        with self.assertRaises(CleanTracebackError):
             llm.pydantic_parse("prompt", response_model=str)  # type: ignore[arg-type]
 
     @patch("llm_utils.lm.llm.get_base_client")

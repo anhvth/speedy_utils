@@ -10,6 +10,7 @@ import threading
 import traceback
 from typing import Any, Callable, TypeVar
 
+
 try:
     from rich.console import Console
     from rich.panel import Panel
@@ -226,10 +227,8 @@ def clean_traceback(func: F) -> F:
                         caller_context,
                         func_name,
                     )
-                    if threading.current_thread() is not threading.main_thread():
-                        raise clean_error from exc
                     clean_error.format_rich()
-                    sys.exit(1)
+                    raise clean_error from exc
 
             raise
 

@@ -14,6 +14,7 @@ if hasattr(multiprocessing, "set_start_method"):
         multiprocessing.set_start_method("spawn", force=True)
 
 from speedy_utils import multi_thread
+from speedy_utils.common.exceptions import SpeedySerializationError, SpeedyWorkerError
 from speedy_utils.common.utils_print import flatten_dict
 from speedy_utils.multi_worker import _multi_process as mp_mod
 from speedy_utils.multi_worker.process import multi_process, tqdm
@@ -416,7 +417,7 @@ def test_mp_error_handler_ignore_preserves_none_placeholders():
 
 
 def test_mp_error_handler_raise_aborts():
-    with pytest.raises(SystemExit):
+    with pytest.raises(SpeedyWorkerError):
         multi_process(
             always_fail,
             [1, 2, 3, 4],
@@ -452,3 +453,24 @@ def test_mp_lazy_output_returns_paths():
     if cache_dir and os.path.isdir(cache_dir):
         with contextlib.suppress(OSError):
             os.rmdir(cache_dir)
+
+
+def test_mp_unpicklable_result_raises_serialization_error():
+    """Regression: lazy_output with unpicklable result should raise SpeedySerializationError."""
+    import socket
+
+    def returns_socket(_x):
+        # socket objects are not picklable
+        return socket.socket()
+
+    with pytest.raises(SpeedySerializationError, match="Failed to pickle result"):
+        multi_process(
+            returns_socket,
+            [1],
+            num_procs=1,
+            progress=False,
+            backend="spawn",
+            lazy_output=True,
+            dump_in_thread=False,
+            error_handler="raise",
+        )

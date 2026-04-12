@@ -18,6 +18,8 @@ from typing import TYPE_CHECKING, Any, Callable, Literal
 import psutil
 from loguru import logger
 
+from speedy_utils.common.exceptions import SpeedyWorkerError
+
 from ._mp_progress import (
     MpProgressState,
     build_multiprocess_postfix,
@@ -37,7 +39,7 @@ from .common import (
     ErrorStats,
     _call_with_log_control,
     _cleanup_log_gate,
-    _display_formatted_error_and_exit,
+    _display_formatted_error_and_raise,
     _exit_on_worker_error,
     _prune_dead_processes,
     _ThreadLocalStream,
@@ -356,7 +358,7 @@ def _handle_multiprocess_event(
         if start_thread is not None:
             start_thread.join(timeout=1)
         terminate_processes(_snapshot_processes(processes, processes_lock))
-        _display_formatted_error_and_exit(
+        _display_formatted_error_and_raise(
             exc_type_name=exc_type_name,
             exc_msg=exc_msg,
             frames=frames,

@@ -29,6 +29,8 @@ from typing import (
 
 from loguru import logger
 
+from speedy_utils.common.exceptions import SpeedyWorkerError
+
 from .common import ErrorHandlerType, ErrorStats
 
 
@@ -1012,7 +1014,12 @@ def multi_thread(  # type: ignore[misc]
                         exc.format_rich()
                         sys.stderr.flush()
                         _cancel_futures(state.inflight)
-                        sys.exit(1)
+                        raise SpeedyWorkerError(
+                            message=str(exc),
+                            original_exception=exc.original_exception,
+                            backend="thread",
+                            func_name=exc.func_name,
+                        ) from exc.original_exception
 
                     input_val = _input_value_for_error(items_list, idx)
                     error_stats.record_error(
@@ -1023,7 +1030,12 @@ def multi_thread(  # type: ignore[misc]
                     # Other errors (infrastructure, batching, etc.)
                     if error_handler == 'raise':
                         _cancel_futures(state.inflight)
-                        raise
+                        raise SpeedyWorkerError(
+                            message=f"Infrastructure error: {exc}",
+                            original_exception=exc,
+                            backend="thread",
+                            func_name=func_name,
+                        ) from exc
 
                     input_val = _input_value_for_error(items_list, idx)
                     error_stats.record_error(idx, exc, input_val, func_name)

@@ -25,6 +25,12 @@ from typing import TYPE_CHECKING, Any, Callable, Literal
 import psutil
 from loguru import logger
 
+from speedy_utils.common.exceptions import (
+    SpeedyExecutionError,
+    SpeedySerializationError,
+    SpeedyWorkerError,
+)
+
 
 if TYPE_CHECKING:
     from tqdm import tqdm
@@ -262,10 +268,9 @@ def _should_show_local(name: str, value: object) -> bool:
 
     # Skip large objects that would clutter output
     skip_markers = ["module", "function", "method", "built-in"]
-    if value_str.startswith("<") and any(x in value_str for x in skip_markers):
-        return False
-
-    return True
+    return not (
+        value_str.startswith("<") and any(x in value_str for x in skip_markers)
+    )
 
 
 def _format_locals(frame_locals: dict) -> list[str]:
@@ -402,15 +407,17 @@ def _extract_frames(error: Exception) -> list[tuple[str, int, str, dict]]:
     return _extract_frames_from_traceback(error)
 
 
-def _display_formatted_error_and_exit(
+def _display_formatted_error_and_raise(
     exc_type_name: str,
     exc_msg: str,
     frames: list[tuple[str, int, str, dict]],
     caller_info: dict | None,
     backend: str,
     pbar: tqdm | None = None,
+    *,
+    func_name: str = "",
 ) -> None:
-    """Display a formatted error and exit the process."""
+    """Display a formatted error and raise a SpeedyWorkerError."""
     # Close progress bar cleanly if provided
     if pbar is not None:
         pbar.close()
@@ -451,7 +458,13 @@ def _display_formatted_error_and_exit(
     # Ensure output is flushed
     sys.stderr.flush()
     sys.stdout.flush()
-    sys.exit(1)
+
+    # Raise library exception instead of sys.exit
+    raise SpeedyWorkerError(
+        exc_msg,
+        backend=backend,
+        func_name=func_name,
+    )
 
 
 def _exit_on_worker_error(
@@ -460,15 +473,17 @@ def _exit_on_worker_error(
     caller_info: dict | None = None,
     backend: str = "unknown",
 ) -> None:
-    """Display a clean traceback for a worker error and exit the process."""
+    """Display a clean traceback for a worker error and raise SpeedyWorkerError."""
     frames = _extract_frames_from_traceback(error)
-    _display_formatted_error_and_exit(
+    func_name = getattr(error, "_speedy_func_name", "")
+    _display_formatted_error_and_raise(
         exc_type_name=type(error).__name__,
         exc_msg=str(error),
         frames=frames,
         caller_info=caller_info,
         backend=backend,
         pbar=pbar,
+        func_name=func_name,
     )
 
 
@@ -559,10 +574,8 @@ def _cleanup_log_gate(gate_path: Path | None) -> None:
     """Remove the log gate file if it exists."""
     if gate_path is None:
         return
-    try:
+    with contextlib.suppress(OSError):
         gate_path.unlink(missing_ok=True)
-    except OSError:
-        pass
 
 
 class _ThreadLocalStream:
@@ -712,8 +725,14 @@ def wrap_dump(
         p = cache_dir / f"{uuid.uuid4().hex}.pkl"
 
         def save():
-            with open(p, "wb") as fh:
-                pickle.dump(res, fh)
+            try:
+                with open(p, "wb") as fh:
+                    pickle.dump(res, fh)
+            except (pickle.PicklingError, TypeError) as exc:
+                raise SpeedySerializationError(
+                    f"Failed to pickle result for item {x!r}: {exc}",
+                    original_exception=exc,
+                ) from exc
 
         if dump_in_thread:
             thread = threading.Thread(target=save)
@@ -812,7 +831,7 @@ __all__ = [
     "_should_skip_frame",
     "_format_traceback_lines",
     "_extract_frames_from_traceback",
-    "_display_formatted_error_and_exit",
+    "_display_formatted_error_and_raise",
     "_exit_on_worker_error",
     # Process tracking
     "_prune_dead_processes",

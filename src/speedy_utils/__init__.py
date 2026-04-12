@@ -51,6 +51,13 @@ tabulate = __import__("tabulate").tabulate
 # Clock
 from speedy_utils.common.clock import Clock, speedy_timer, timef
 
+# Error handling utilities
+from speedy_utils.common.exceptions import (
+    SpeedyExecutionError,
+    SpeedySerializationError,
+    SpeedyWorkerError,
+)
+
 # Function decorators / logging
 from speedy_utils.common.function_decorator import retry_runtime
 from speedy_utils.common.logger import log, setup_logger
@@ -64,8 +71,6 @@ from speedy_utils.common.notebook_utils import (
 
 # Cache utilities
 from speedy_utils.common.utils_cache import identify, identify_uuid, imemoize, memoize
-
-# Error handling utilities
 from speedy_utils.common.utils_error import (
     clean_traceback,
     handle_exceptions_with_clean_traceback,
@@ -186,6 +191,9 @@ __all__ = [
     "setup_logger",
     "log",
     # Error handling utilities
+    "SpeedyExecutionError",
+    "SpeedySerializationError",
+    "SpeedyWorkerError",
     "clean_traceback",
     "handle_exceptions_with_clean_traceback",
     # Multi-worker processing
