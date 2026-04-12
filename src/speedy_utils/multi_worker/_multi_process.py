@@ -88,6 +88,15 @@ def _is_spawn_importable_callable(func: Callable[[Any], Any]) -> bool:
 _MISSING = object()
 
 
+class _SpawnFallbackRequired(RuntimeError):
+    """Internal signal that mp spawn payload is not serializable."""
+
+    def __init__(self, *, reason: str, exc: Exception) -> None:
+        super().__init__(f"{reason}: {type(exc).__name__}: {exc}")
+        self.reason = reason
+        self.exc = exc
+
+
 def _patch_main_spec_for_spawn() -> tuple[Any, Any]:
     """Temporarily give ``__main__`` a real ``__spec__`` before spawning.
 
@@ -122,6 +131,7 @@ def _patch_main_spec_for_spawn() -> tuple[Any, Any]:
     # Suppress the RuntimeWarning that runpy emits when it re-runs a module
     # that was already imported (harmless side-effect of _fixup_main_from_name).
     import warnings
+
     warnings.filterwarnings(
         "ignore",
         message=r".*found in sys\.modules after import.*",
@@ -208,15 +218,17 @@ def _infer_importable_module(func: Callable[[Any], Any]) -> tuple[str, str] | No
             return (module_name, qualname)
         resolved_code = getattr(resolved, "__code__", None)
         func_code = getattr(func, "__code__", None)
-        if resolved_code is not None and func_code is not None and resolved_code == func_code:
+        if (
+            resolved_code is not None
+            and func_code is not None
+            and resolved_code == func_code
+        ):
             return (module_name, qualname)
 
     return None
 
 
-def _ensure_module_globals(
-    module_name: str | None, script_path: str | None
-) -> None:
+def _ensure_module_globals(module_name: str | None, script_path: str | None) -> None:
     """Populate module globals by re-importing the source in the child process.
 
     For ``__main__`` functions this re-runs the script via
@@ -262,12 +274,14 @@ def _serialize_spawn_callable(func: Callable[[Any], Any]) -> bytes:
     # Store (module_name, qualname) so the child can just re-import.
     importable = _infer_importable_module(func)
     if importable is not None:
-        return pickle.dumps({
-            "_v": 1,
-            "import_ref": True,
-            "module_name": importable[0],
-            "qualname": importable[1],
-        })
+        return pickle.dumps(
+            {
+                "_v": 1,
+                "import_ref": True,
+                "module_name": importable[0],
+                "qualname": importable[1],
+            }
+        )
 
     try:
         import dill
@@ -310,8 +324,9 @@ def _serialize_spawn_callable(func: Callable[[Any], Any]) -> bytes:
 
 def _deserialize_spawn_callable(payload: bytes) -> Callable[[Any], Any]:
     """Restore a callable serialized for the notebook fallback path."""
-    import dill
     import pickle
+
+    import dill
 
     try:
         data = pickle.loads(payload)
@@ -350,6 +365,13 @@ def _serialize_exception_frames(exc: Exception) -> list[tuple[str, int, str, dic
         (frame.filename, frame.lineno or 0, frame.name, {})
         for frame in traceback.extract_tb(tb)
     ]
+
+
+def _probe_spawn_picklable(obj: Any) -> None:
+    """Raise when an object cannot be pickled for multiprocessing spawn."""
+    from multiprocessing.reduction import ForkingPickler
+
+    ForkingPickler.dumps(obj)
 
 
 def _bump_error_count(error_stats: ErrorStats, err_inc: int) -> None:
@@ -419,7 +441,9 @@ def _build_multiprocess_postfix(
 ) -> dict[str, Any]:
     """Return compact parent-owned status for the multiprocessing bar."""
     postfix: dict[str, Any] = error_stats.get_postfix_dict()
-    expected_processes = total_processes if total_processes is not None else len(processes)
+    expected_processes = (
+        total_processes if total_processes is not None else len(processes)
+    )
     if expected_processes:
         live_processes = sum(1 for proc in processes if proc.exitcode is None)
         postfix["proc"] = f"{live_processes}/{expected_processes}"
@@ -780,8 +804,30 @@ def _run_multiprocess_backend(
     serialized_func = None
     process_func: Callable[[Any], Any] | None = func
     if not _is_spawn_importable_callable(func):
-        serialized_func = _serialize_spawn_callable(func)
+        try:
+            serialized_func = _serialize_spawn_callable(func)
+        except Exception as exc:
+            raise _SpawnFallbackRequired(
+                reason="callable serialization failed",
+                exc=exc,
+            ) from exc
         process_func = None
+    else:
+        try:
+            _probe_spawn_picklable(process_func)
+        except Exception as exc:
+            raise _SpawnFallbackRequired(
+                reason="callable is not spawn-picklable",
+                exc=exc,
+            ) from exc
+
+    try:
+        _probe_spawn_picklable(func_kwargs)
+    except Exception as exc:
+        raise _SpawnFallbackRequired(
+            reason="func kwargs are not spawn-picklable",
+            exc=exc,
+        ) from exc
 
     # Prevent children from re-executing __main__ (the user's script) via
     # init_main_from_path.  By temporarily giving __main__ a real __spec__,
@@ -796,7 +842,9 @@ def _run_multiprocess_backend(
     _speedy_warn_filter = "ignore::RuntimeWarning:runpy"
     _prev_pywarn = os.environ.get("PYTHONWARNINGS", "")
     if _speedy_warn_filter not in _prev_pywarn:
-        os.environ["PYTHONWARNINGS"] = f"{_prev_pywarn},{_speedy_warn_filter}".lstrip(",")
+        os.environ["PYTHONWARNINGS"] = f"{_prev_pywarn},{_speedy_warn_filter}".lstrip(
+            ","
+        )
 
     ctx = mp.get_context("spawn")
     event_queue = ctx.Queue()
@@ -880,6 +928,15 @@ def _run_multiprocess_backend(
                         except (psutil.NoSuchProcess, psutil.AccessDenied):
                             continue
                     _track_processes(tracked)
+                except Exception as exc:
+                    event_queue.put(
+                        (
+                            "spawn_error",
+                            type(exc).__name__,
+                            str(exc),
+                            _serialize_exception_frames(exc),
+                        )
+                    )
                 finally:
                     spawn_done.set()
 
@@ -983,6 +1040,19 @@ def _run_multiprocess_backend(
                             _refresh_progress_bar(pbar)
                         continue
                     if tag == "fatal":
+                        _, exc_type_name, exc_msg, frames = msg
+                        spawn_done.set()
+                        spawn_thread.join(timeout=1)
+                        _terminate_processes(processes)
+                        _display_formatted_error_and_exit(
+                            exc_type_name=exc_type_name,
+                            exc_msg=exc_msg,
+                            frames=frames,
+                            caller_info=caller_info,
+                            backend="mp",
+                            pbar=pbar,
+                        )
+                    if tag == "spawn_error":
                         _, exc_type_name, exc_msg, frames = msg
                         spawn_done.set()
                         spawn_thread.join(timeout=1)
@@ -1161,24 +1231,71 @@ def multi_process(
             update_pbar_postfix=_update_pbar_postfix,
         )
 
-    return _run_multiprocess_backend(
-        func=func,
-        cache_dir=cache_dir,
-        dump_in_thread=dump_in_thread,
-        items=items,
-        total=total,
-        num_procs=num_procs or 1,
-        num_threads=num_threads,
-        desc=desc,
-        progress=progress,
-        func_kwargs=func_kwargs,
-        log_worker=log_worker,
-        log_gate_path=log_gate_path,
-        error_handler=error_handler,
-        error_stats=error_stats,
-        func_name=func_name,
-        max_error_files=max_error_files,
-    )
+    if (num_procs or 1) <= 1:
+        # With a single process requested, avoid spawn entirely. This keeps
+        # behavior stable for non-picklable kwargs (e.g. SSLContext/OpenAI
+        # client internals) while still honoring num_threads fanout.
+        return _run_threadpool_backend(
+            backend_label="thread",
+            f_wrapped=f_wrapped,
+            items=items,
+            total=total,
+            workers=num_threads,
+            desc=desc,
+            progress=progress,
+            func_kwargs=func_kwargs,
+            log_worker=log_worker,
+            log_gate_path=log_gate_path,
+            error_handler=error_handler,
+            error_stats=error_stats,
+            func_name=func_name,
+            update_pbar_postfix=_update_pbar_postfix,
+        )
+
+    try:
+        return _run_multiprocess_backend(
+            func=func,
+            cache_dir=cache_dir,
+            dump_in_thread=dump_in_thread,
+            items=items,
+            total=total,
+            num_procs=num_procs or 1,
+            num_threads=num_threads,
+            desc=desc,
+            progress=progress,
+            func_kwargs=func_kwargs,
+            log_worker=log_worker,
+            log_gate_path=log_gate_path,
+            error_handler=error_handler,
+            error_stats=error_stats,
+            func_name=func_name,
+            max_error_files=max_error_files,
+        )
+    except _SpawnFallbackRequired as exc:
+        warnings.warn(
+            (
+                "Falling back to thread backend because multiprocessing spawn "
+                f"payload is not serializable ({exc})."
+            ),
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return _run_threadpool_backend(
+            backend_label="thread",
+            f_wrapped=f_wrapped,
+            items=items,
+            total=total,
+            workers=num_threads,
+            desc=desc,
+            progress=progress,
+            func_kwargs=func_kwargs,
+            log_worker=log_worker,
+            log_gate_path=log_gate_path,
+            error_handler=error_handler,
+            error_stats=error_stats,
+            func_name=func_name,
+            update_pbar_postfix=_update_pbar_postfix,
+        )
 
 
 __all__ = ["multi_process"]

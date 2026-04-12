@@ -2,6 +2,7 @@ import contextlib
 import multiprocessing
 import os
 import pickle
+import ssl
 import time
 import types
 
@@ -67,6 +68,10 @@ def maybe_fail(x):
 
 def always_fail(x):
     raise RuntimeError(f"bad item: {x}")
+
+
+def passthrough_with_client(item, client=None):
+    return item
 
 
 def fibonacci(n):
@@ -341,6 +346,60 @@ def test_mp_local_closure_callable():
         backend="mp",
     )
     assert out == [8, 9, 10]
+
+
+def test_mp_kwargs_with_ssl_context_should_work_regression():
+    """Red test: multiprocessing should handle non-picklable client-like kwargs."""
+    out = multi_process(
+        passthrough_with_client,
+        [1, 2, 3],
+        num_procs=1,
+        num_threads=2,
+        progress=False,
+        backend="mp",
+        client=ssl.create_default_context(),
+    )
+    assert out == [1, 2, 3]
+
+
+def test_mp_kwargs_with_ssl_context_should_work_with_spawn_regression():
+    """Regression: mp spawn should degrade safely with non-picklable kwargs."""
+    out = multi_process(
+        passthrough_with_client,
+        [1, 2, 3],
+        num_procs=2,
+        num_threads=2,
+        progress=False,
+        backend="mp",
+        client=ssl.create_default_context(),
+    )
+    assert out == [1, 2, 3]
+
+
+def test_mp_notebook_callable_with_sslcontext_global_regression():
+    """Red test: spawn path should tolerate non-picklable notebook globals."""
+    namespace: dict[str, object] = {}
+    exec("def notebook_gate(x):\n    return x if ctx is not None else -1", namespace)
+    notebook_gate_impl = namespace["notebook_gate"]
+    assert isinstance(notebook_gate_impl, types.FunctionType)
+    notebook_gate = types.FunctionType(
+        notebook_gate_impl.__code__,
+        {
+            "__builtins__": __builtins__,
+            "ctx": ssl.create_default_context(),
+        },
+        name="notebook_gate",
+    )
+    notebook_gate.__module__ = "__main__"
+
+    out = multi_process(
+        notebook_gate,
+        [1, 2, 3],
+        num_procs=2,
+        progress=False,
+        backend="mp",
+    )
+    assert out == [1, 2, 3]
 
 
 def test_workers_alias_maps_to_num_procs():

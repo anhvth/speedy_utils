@@ -57,6 +57,33 @@ _SCRIPT_NOTEBOOK_STYLE = textwrap.dedent("""\
     print("OK:", results)
 """)
 
+_SCRIPT_NOTEBOOK_STYLE_SSL_CONTEXT = textwrap.dedent("""\
+    # Simulates notebook: code runs at module level and keeps a client-like
+    # object in globals, which is the regression reported from the memory tool
+    # notebook.
+    import ssl
+
+    from speedy_utils import multi_process
+
+    FACTOR = 3
+    CLIENT = ssl.create_default_context()
+
+    def compute(x, client=None):
+        _ = CLIENT
+        return x * FACTOR
+
+    results = multi_process(
+        compute,
+        list(range(6)),
+        num_procs=2,
+        client=CLIENT,
+        progress=False,
+    )
+    assert results == [i * 3 for i in range(6)], f"wrong: {results}"
+    print("OK:", results)
+                                                     
+""")
+
 
 def _run_script_file(src: str, timeout: int = 30) -> subprocess.CompletedProcess:
     """Write src to a real .py file and run it with `python script.py`.
@@ -94,6 +121,16 @@ def test_multi_process_no_main_guard():
 def test_multi_process_notebook_style():
     """multi_process must work for notebook-style top-level calls with global captures."""
     proc = _run_script_file(_SCRIPT_NOTEBOOK_STYLE)
+    assert proc.returncode == 0, (
+        f"Script failed (rc={proc.returncode}).\n"
+        f"stdout: {proc.stdout}\nstderr: {proc.stderr}"
+    )
+    assert "OK:" in proc.stdout
+
+
+def test_multi_process_notebook_style_with_ssl_context_global():
+    """multi_process should tolerate notebook-style globals that include client objects."""
+    proc = _run_script_file(_SCRIPT_NOTEBOOK_STYLE_SSL_CONTEXT)
     assert proc.returncode == 0, (
         f"Script failed (rc={proc.returncode}).\n"
         f"stdout: {proc.stdout}\nstderr: {proc.stderr}"
