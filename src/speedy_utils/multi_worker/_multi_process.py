@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Literal
 
 import psutil
+from loguru import logger
 from tqdm import tqdm
 
 from .common import (
@@ -84,6 +85,64 @@ def _is_spawn_importable_callable(func: Callable[[Any], Any]) -> bool:
     return resolved is func
 
 
+_MISSING = object()
+
+
+def _patch_main_spec_for_spawn() -> tuple[Any, Any]:
+    """Temporarily give ``__main__`` a real ``__spec__`` before spawning.
+
+    When multiprocessing uses the ``spawn`` start method, each child is
+    bootstrapped by calling ``prepare(data)`` which includes calling
+    ``init_main_from_path`` when ``__main__.__spec__`` is ``None`` (i.e. the
+    parent was started as ``python script.py``).  ``init_main_from_path``
+    re-executes the user's script in every child, which causes infinite
+    recursion when the script contains top-level ``multi_process`` calls
+    and also crashes if the script has assertions on the results.
+
+    By temporarily setting ``__main__.__spec__`` to our own module's spec
+    *before* calling ``proc.start()``, ``get_preparation_data()`` uses
+    ``init_main_from_name`` (safe package import) instead, completely skipping
+    ``init_main_from_path``.  We restore the original spec afterwards.
+
+    Returns ``(main_module, original_spec)`` for restoration via
+    :func:`_restore_main_spec_for_spawn`.
+    """
+    main = sys.modules.get("__main__")
+    if main is None:
+        return None, _MISSING
+    original_spec = main.__dict__.get("__spec__", _MISSING)
+    if original_spec is not _MISSING and original_spec is not None:
+        # Already has a real spec (e.g. running as ``python -m pkg``); no patch.
+        return None, _MISSING
+    # Use our own module's spec so children import-by-name instead.
+    our_mod = sys.modules.get(__name__)
+    our_spec = getattr(our_mod, "__spec__", None) if our_mod else None
+    if our_spec is None:
+        return None, _MISSING
+    # Suppress the RuntimeWarning that runpy emits when it re-runs a module
+    # that was already imported (harmless side-effect of _fixup_main_from_name).
+    import warnings
+    warnings.filterwarnings(
+        "ignore",
+        message=r".*found in sys\.modules after import.*",
+        category=RuntimeWarning,
+        module=r"runpy",
+    )
+    main.__spec__ = our_spec
+    return main, original_spec
+
+
+def _restore_main_spec_for_spawn(state: tuple[Any, Any]) -> None:
+    """Undo the temporary ``__spec__`` patch set by :func:`_patch_main_spec_for_spawn`."""
+    main, original_spec = state
+    if main is None:
+        return
+    if original_spec is _MISSING:
+        main.__dict__.pop("__spec__", None)
+    else:
+        main.__spec__ = original_spec
+
+
 def _infer_importable_module(func: Callable[[Any], Any]) -> tuple[str, str] | None:
     """For a ``__main__`` function, discover its real importable module.
 
@@ -105,10 +164,23 @@ def _infer_importable_module(func: Callable[[Any], Any]) -> tuple[str, str] | No
 
     source_path = Path(source_file).resolve()
 
+    # sys.path[0] is the directory of the running script (or the CWD when
+    # invoked as ``python dir/``).  Importing a module found there would
+    # re-execute the user's script (since it's importable by its own
+    # basename).  We exclude that entry to avoid silent re-execution.
+    _main_module = sys.modules.get("__main__")
+    _main_file = getattr(_main_module, "__file__", None)
+    _script_dir: Path | None = None
+    if _main_file and getattr(_main_module, "__spec__", None) is None:
+        # Running as ``python script.py'' — sys.path[0] is the script dir.
+        _script_dir = Path(_main_file).resolve().parent
+
     for sp in sorted(sys.path, key=len, reverse=True):
         if not sp:
             continue
         sp_path = Path(sp).resolve()
+        if _script_dir is not None and sp_path == _script_dir:
+            continue  # Skip the script's own dir to prevent re-execution
         try:
             rel = source_path.relative_to(sp_path)
         except ValueError:
@@ -550,10 +622,16 @@ def _run_mp_chunk(
     event_queue: mp.queues.Queue,
 ) -> None:
     """Execute one process chunk, optionally with a per-process thread pool."""
-    if serialized_func is not None:
-        func = _deserialize_spawn_callable(serialized_func)
-    if func is None:
-        raise ValueError("func or serialized_func must be provided")
+    try:
+        if serialized_func is not None:
+            func = _deserialize_spawn_callable(serialized_func)
+        if func is None:
+            raise ValueError("func or serialized_func must be provided")
+    except Exception:
+        # Deserialization failed — still signal the parent so it doesn't
+        # wait forever for a process_done that would never arrive.
+        event_queue.put(("process_done", os.getpid()))
+        raise
 
     f_wrapped = wrap_dump(func, cache_dir, dump_in_thread)
     child_error_stats = (
@@ -581,12 +659,14 @@ def _run_mp_chunk(
             if child_error_stats is not None:
                 child_error_count += 1
                 if child_error_count <= max_error_files:
-                    child_error_stats._write_error_log(  # type: ignore[attr-defined]
+                    log_path = child_error_stats._write_error_log(  # type: ignore[attr-defined]
                         idx,
                         exc,
                         item,
                         func_name,
                     )
+                    if log_path is not None:
+                        event_queue.put(("error_log", log_path))
             event_queue.put(("progress", 0, 1))
             if error_handler == "raise":
                 event_queue.put(
@@ -703,6 +783,21 @@ def _run_multiprocess_backend(
         serialized_func = _serialize_spawn_callable(func)
         process_func = None
 
+    # Prevent children from re-executing __main__ (the user's script) via
+    # init_main_from_path.  By temporarily giving __main__ a real __spec__,
+    # get_preparation_data() uses init_main_from_name (safe package import)
+    # instead.  The env-var guard is kept as an additional safety net.
+    _spec_patch_state = _patch_main_spec_for_spawn()
+    _prev_child_flag = os.environ.get("_SPEEDY_MP_CHILD")
+    os.environ["_SPEEDY_MP_CHILD"] = "1"
+    # Suppress the harmless RuntimeWarning that runpy emits in each child when
+    # _fixup_main_from_name re-runs a module that was already imported while
+    # unpickling the target function.
+    _speedy_warn_filter = "ignore::RuntimeWarning:runpy"
+    _prev_pywarn = os.environ.get("PYTHONWARNINGS", "")
+    if _speedy_warn_filter not in _prev_pywarn:
+        os.environ["PYTHONWARNINGS"] = f"{_prev_pywarn},{_speedy_warn_filter}".lstrip(",")
+
     ctx = mp.get_context("spawn")
     event_queue = ctx.Queue()
     processes: list[mp.Process] = []
@@ -712,6 +807,7 @@ def _run_multiprocess_backend(
         results: list[Any] = [None] * total
         done_processes = 0
         progress_state = {"started": 0, "active": 0}
+        announced_error_log = False
 
         with tqdm(
             total=total,
@@ -899,6 +995,12 @@ def _run_multiprocess_backend(
                             backend="mp",
                             pbar=pbar,
                         )
+                    if tag == "error_log":
+                        _, log_path = msg
+                        if not announced_error_log:
+                            logger.opt(depth=1).warning("Error log: {}", log_path)
+                            announced_error_log = True
+                        continue
 
                 spawn_thread.join(timeout=1)
                 with processes_lock:
@@ -914,6 +1016,16 @@ def _run_multiprocess_backend(
     finally:
         _cleanup_log_gate(log_gate_path)
         _terminate_processes(processes)
+        # Restore env flags so subsequent calls are not affected.
+        if _prev_child_flag is None:
+            os.environ.pop("_SPEEDY_MP_CHILD", None)
+        else:
+            os.environ["_SPEEDY_MP_CHILD"] = _prev_child_flag
+        if _prev_pywarn:
+            os.environ["PYTHONWARNINGS"] = _prev_pywarn
+        else:
+            os.environ.pop("PYTHONWARNINGS", None)
+        _restore_main_spec_for_spawn(_spec_patch_state)
 
 
 def multi_process(
@@ -939,6 +1051,11 @@ def multi_process(
     **func_kwargs: Any,
 ) -> list[Any]:
     """Map `func` over `items` using the surviving non-Ray backends."""
+    # Guard: when multiprocessing 'spawn' re-executes __main__ in a child
+    # process, any top-level multi_process() call in the user's script will
+    # reach here.  Returning early prevents infinite spawn recursion.
+    if os.environ.get("_SPEEDY_MP_CHILD") == "1":
+        return []
     del process_update_interval, batch, ordered
 
     if stop_on_error is not None:
