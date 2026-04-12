@@ -35,9 +35,10 @@ def test_process_basic_execution():
     result = multi_process(
         slow_identity,
         test_input,
+        num_procs=1,
         num_threads=2,
         progress=False,  # Disable progress to avoid fastcore's progress bar
-        backend="thread",
+        backend="spawn",
     )
 
     # Check results
@@ -49,25 +50,25 @@ def test_worker_error_handling():
     # Errors are logged but not raised (error_handler='log' by default).
 
     # Test with a smaller set that should fail (returns None for failed items)
-    result = multi_process(failing_function, [5], backend="thread", progress=False)
+    result = multi_process(failing_function, [5], backend="spawn", progress=False)
     assert result == [None]  # Failed item returns None
 
     # Test with a set that should succeed
     result = multi_process(
         failing_function,
         [1, 2, 3, 4],
-        backend="thread",
+        backend="spawn",
         progress=False,
     )
     assert result == [1, 2, 3, 4]
 
 
-def test_thread_backend_basic_map():
-    """Test thread backend mapping with default settings."""
+def test_sequential_backend_basic_map():
+    """Test sequential mapping with default settings."""
     # Create a list of 20 items to process
     test_input = list(range(20))
 
-    result = multi_process(identity, test_input, backend="thread")
+    result = multi_process(identity, test_input, backend="spawn")
 
     # Check results
     assert result == test_input
@@ -115,7 +116,7 @@ def test_mp_progress_uses_single_parent_bar():
             num_procs=2,
             num_threads=2,
             progress=True,
-            backend="mp",
+            backend="spawn",
         )
 
     assert result == list(range(8))
@@ -123,7 +124,7 @@ def test_mp_progress_uses_single_parent_bar():
     bar = _FakeTqdm.created[0]
     assert bar.updated == 8
     assert bar.total == 8
-    assert bar.desc == "Multi-process [mp: 2p x 2t]"
+    assert bar.desc == "Multi-worker [hybrid: 2p x 2t]"
     assert bar.kwargs["dynamic_ncols"] is True
     assert bar.postfix is not None
     assert bar.postfix["proc"].endswith("/2")

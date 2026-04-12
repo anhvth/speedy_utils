@@ -196,16 +196,17 @@ data = list(range(12))
 results = multi_process(
     risky_computation, 
     data, 
-    backend='mp',
+    backend='spawn',
     error_handler='log',
     max_error_files=5
 )
 print(results)  # [0, 1, 4, 9, 16, None, 36, 49, 64, 81, None, 121]
 ```
 
-#### Multi-Process with Inner Thread Pools
+#### Multi-Worker Routing
 
-For maximum parallelism, `multi_process` supports nested parallelism where each process has its own thread pool. This is ideal for CPU-bound tasks that also benefit from I/O parallelism.
+`multi_process` now routes work based on `num_procs` and `num_threads`.
+Use `backend='spawn'` for all cases for now.
 
 ```python
 from speedy_utils import multi_process
@@ -226,7 +227,7 @@ results = multi_process(
     data,
     num_procs=4,      # Number of processes
     num_threads=4,    # Threads per process
-    backend='mp',
+    backend='spawn',
     progress=True,
 )
 ```
@@ -235,9 +236,7 @@ results = multi_process(
 
 | Backend | Description | Use Case |
 |---------|-------------|----------|
-| `'mp'` | Multi-processing with optional inner threads | CPU-bound work, bypasses GIL |
-| `'safe'` | In-process thread pool (for testing) | Debugging, unit tests |
-| `'seq'` | Sequential execution | Debugging, reproducibility |
+| `'spawn'` | Routes to sequential, thread, process, or hybrid execution | Default for all multi-worker calls |
 
 **When to use `num_procs` vs `num_threads`:**
 
@@ -257,7 +256,7 @@ results = multi_process(
     urls,
     num_procs=4,
     num_threads=8,
-    backend='mp',
+    backend='spawn',
     error_handler='log',  # Continue on failed URLs
 )
 ```

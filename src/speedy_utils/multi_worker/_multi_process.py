@@ -14,7 +14,7 @@ import os
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterable, Literal, cast
+from typing import Any, Callable, Iterable, Literal
 
 from tqdm import tqdm
 
@@ -49,7 +49,8 @@ from .common import (
 )
 
 
-BackendName = Literal["seq", "mp", "thread"]
+BackendName = Literal["spawn"]
+ExecutionMode = Literal["seq", "thread", "spawn", "hybrid"]
 
 _deserialize_spawn_callable = _spawn._deserialize_spawn_callable
 _infer_importable_module = _spawn._infer_importable_module
@@ -60,7 +61,7 @@ _serialize_spawn_callable = _spawn._serialize_spawn_callable
 class NormalizedRequest:
     items: list[Any]
     backend: BackendName
-    num_procs: int | None
+    num_procs: int
     num_threads: int
 
 
@@ -71,6 +72,33 @@ class PreparedRun:
     dump_in_thread: bool
     max_error_files: int
     backend_ctx: BackendRunContext
+
+
+def _normalize_backend_choice(backend: str) -> BackendName:
+    if backend == "spawn":
+        return "spawn"
+    if backend == "mp":
+        raise ValueError(
+            "backend='mp' was removed; use backend='spawn' and control "
+            "parallelism with num_procs and num_threads."
+        )
+    if backend == "thread":
+        raise ValueError(
+            "backend='thread' was removed; use num_threads > 1 with "
+            "num_procs <= 1 to select the in-process thread backend."
+        )
+    if backend == "seq":
+        raise ValueError(
+            "backend='seq' was removed; use num_procs <= 1 and "
+            "num_threads <= 1 to select the sequential backend."
+        )
+    if backend == "fork":
+        raise ValueError(
+            "backend='fork' is not supported yet; use backend='spawn'."
+        )
+    raise ValueError(
+        f"Unsupported backend: {backend!r}. Use backend='spawn'."
+    )
 
 
 def _normalize_request(
@@ -89,17 +117,19 @@ def _normalize_request(
         raise ValueError("'items' must be provided")
 
     normalized_items = list(items)
-    if backend not in {"seq", "mp", "thread"}:
-        raise ValueError(f"Unsupported backend: {backend!r}")
-    normalized_backend = backend
+    normalized_backend = _normalize_backend_choice(backend)
 
-    if num_procs is None and normalized_backend == "mp":
-        num_procs = os.cpu_count() or 1
+    if num_procs is None:
+        normalized_num_procs = 1
+    elif num_procs <= 0:
+        raise ValueError("num_procs must be a positive integer")
+    else:
+        normalized_num_procs = num_procs
 
     return NormalizedRequest(
         items=normalized_items,
-        backend=cast(BackendName, normalized_backend),
-        num_procs=num_procs,
+        backend=normalized_backend,
+        num_procs=normalized_num_procs,
         num_threads=num_threads,
     )
 
@@ -133,7 +163,7 @@ def _prepare_run(
         total=len(request.items),
         desc=build_progress_desc(
             desc=desc,
-            backend=request.backend,
+            mode=_resolve_execution_mode(request),
             num_procs=request.num_procs,
             num_threads=request.num_threads,
         ),
@@ -159,20 +189,24 @@ def _update_error_postfix(pbar: tqdm, error_stats: ErrorStats) -> None:
     set_progress_postfix(pbar, error_stats.get_postfix_dict())
 
 
-def _resolve_backend(request: NormalizedRequest) -> BackendName:
-    if request.backend == "mp" and (request.num_procs or 1) <= 1:
+def _resolve_execution_mode(request: NormalizedRequest) -> ExecutionMode:
+    if request.num_procs <= 1 and request.num_threads <= 1:
+        return "seq"
+    if request.num_procs <= 1 and request.num_threads > 1:
         return "thread"
-    return request.backend
+    if request.num_threads <= 1:
+        return "spawn"
+    return "hybrid"
 
 
 def _run_local_backend(
     *,
-    backend: BackendName,
+    mode: ExecutionMode,
     request: NormalizedRequest,
     prepared: PreparedRun,
     update_pbar_postfix: Callable[[tqdm], None],
 ) -> list[Any]:
-    if backend == "seq":
+    if mode == "seq":
         return run_seq_backend(
             prepared.backend_ctx,
             update_pbar_postfix=update_pbar_postfix,
@@ -197,7 +231,7 @@ def _run_multiprocess_with_fallback(
         func=prepared.func,
         cache_dir=prepared.cache_dir,
         dump_in_thread=prepared.dump_in_thread,
-        num_procs=request.num_procs or 1,
+        num_procs=request.num_procs,
         num_threads=request.num_threads,
         max_error_files=prepared.max_error_files,
         caller_info=_caller_info_from_stack(depth=2),
@@ -230,7 +264,7 @@ def multi_process(
     num_threads: int = 1,
     lazy_output: bool = False,
     progress: bool = True,
-    backend: str = "mp",
+    backend: str = "spawn",
     desc: str | None = None,
     dump_in_thread: bool = True,
     log_worker: Literal["zero", "first", "all"] = "first",
@@ -268,10 +302,10 @@ def multi_process(
     def update_pbar_postfix(pbar: tqdm) -> None:
         _update_error_postfix(pbar, prepared.backend_ctx.error_stats)
 
-    backend = _resolve_backend(request)
-    if backend != "mp":
+    mode = _resolve_execution_mode(request)
+    if mode in {"seq", "thread"}:
         return _run_local_backend(
-            backend=backend,
+            mode=mode,
             request=request,
             prepared=prepared,
             update_pbar_postfix=update_pbar_postfix,

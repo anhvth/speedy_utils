@@ -24,25 +24,30 @@ class MpProgressState:
 def build_progress_desc(
     *,
     desc: str | None,
-    backend: str,
+    mode: str,
     num_procs: int | None = None,
     num_threads: int | None = None,
 ) -> str:
     """Build a compact progress label with backend topology."""
-    base_desc = desc.strip() if desc and desc.strip() else "Multi-process"
+    base_desc = desc.strip() if desc and desc.strip() else "Multi-worker"
 
-    if backend == "mp":
-        proc_count = max(1, num_procs or 1)
-        thread_count = max(1, num_threads or 1)
-        if thread_count > 1:
-            return f"{base_desc} [mp: {proc_count}p x {thread_count}t]"
-        return f"{base_desc} [mp: {proc_count}p]"
+    if mode == "seq":
+        return f"{base_desc} [seq]"
 
-    if backend == "thread":
+    if mode == "thread":
         thread_count = max(1, num_threads or 1)
         return f"{base_desc} [thread: {thread_count}t]"
 
-    return f"{base_desc} [seq]"
+    if mode == "spawn":
+        proc_count = max(1, num_procs or 1)
+        return f"{base_desc} [spawn: {proc_count}p]"
+
+    if mode == "hybrid":
+        proc_count = max(1, num_procs or 1)
+        thread_count = max(1, num_threads or 1)
+        return f"{base_desc} [hybrid: {proc_count}p x {thread_count}t]"
+
+    return f"{base_desc} [{mode}]"
 
 
 def set_progress_postfix(pbar: "tqdm", postfix: dict[str, Any]) -> None:

@@ -103,7 +103,7 @@ def test_scalar_single_param():
         inp,
         num_threads=2,
         progress=False,
-        backend="thread",
+        backend="spawn",
     ) == [
         2,
         4,
@@ -113,7 +113,7 @@ def test_scalar_single_param():
 
 def test_string_scalar():
     inp = ["ab", "cd"]
-    assert multi_process(to_upper, inp, progress=False, backend="thread") == [
+    assert multi_process(to_upper, inp, progress=False, backend="spawn") == [
         "AB",
         "CD",
     ]
@@ -126,7 +126,7 @@ def test_batch_ordered():
         inp,
         num_threads=4,
         progress=False,
-        backend="thread",
+        backend="spawn",
     )
     assert out == [i * i for i in inp]
 
@@ -138,7 +138,7 @@ def test_unordered():
         inp,
         num_threads=8,
         progress=False,
-        backend="thread",
+        backend="spawn",
     )
     assert out == [i * i for i in inp]
 
@@ -152,7 +152,7 @@ def test_stop_on_error_false():
         error_handler="log",
         num_threads=2,
         progress=False,
-        backend="thread",
+        backend="spawn",
     )
     assert result[3] is None
     assert result[0] == 0
@@ -169,7 +169,7 @@ def test_multi_process_vs_serial():
         inp,
         num_threads=4,
         progress=False,
-        backend="thread",
+        backend="spawn",
     )
     dur_mp = time.perf_counter() - start_mp
 
@@ -199,7 +199,7 @@ def test_process_vs_thread_heavy():
         inp,
         num_threads=4,
         progress=False,
-        backend="thread",
+        backend="spawn",
     )
     dur_proc = time.perf_counter() - start_proc
 
@@ -237,7 +237,7 @@ def test_mp_default_num_threads_matches_sequential_results():
         inp,
         num_procs=2,
         progress=False,
-        backend="mp",
+        backend="spawn",
     )
     assert out_mp == [square(x) for x in inp]
 
@@ -250,7 +250,7 @@ def test_mp_nested_process_and_thread_fanout():
         num_procs=2,
         num_threads=4,
         progress=False,
-        backend="mp",
+        backend="spawn",
     )
     assert out == [i * i for i in inp]
 
@@ -263,7 +263,7 @@ def test_mp_unordered_returns_full_result_set():
         num_procs=2,
         num_threads=3,
         progress=False,
-        backend="mp",
+        backend="spawn",
     )
     assert out == [i * i for i in inp]
 
@@ -283,7 +283,7 @@ def test_mp_notebook_style_main_callable():
         list(range(8)),
         num_procs=2,
         progress=False,
-        backend="mp",
+        backend="spawn",
     )
     assert out == [square(x) for x in range(8)]
 
@@ -322,7 +322,7 @@ def test_mp_importable_main_callable_uses_import_ref_path():
         [{"a": {"b": 1}}, {"x": 2}],
         num_procs=2,
         progress=False,
-        backend="mp",
+        backend="spawn",
     )
 
     assert out == [{"a.b": 1}, {"x": 2}]
@@ -339,7 +339,7 @@ def test_mp_local_closure_callable():
         [1, 2, 3],
         num_procs=2,
         progress=False,
-        backend="mp",
+        backend="spawn",
     )
     assert out == [8, 9, 10]
 
@@ -353,7 +353,7 @@ def test_mp_kwargs_with_ssl_context_should_work_with_spawn_regression():
             num_procs=2,
             num_threads=2,
             progress=False,
-            backend="mp",
+            backend="spawn",
             client=ssl.create_default_context(),
         )
     assert out == [1, 2, 3]
@@ -381,7 +381,7 @@ def test_mp_notebook_callable_with_sslcontext_global_regression():
             [1, 2, 3],
             num_procs=2,
             progress=False,
-            backend="mp",
+            backend="spawn",
         )
     assert out == [1, 2, 3]
 
@@ -394,7 +394,7 @@ def test_safe_backend_ignores_num_procs_and_honors_num_threads():
         num_procs=8,
         num_threads=2,
         progress=False,
-        backend="thread",
+        backend="spawn",
     )
     assert out == [i * i for i in inp]
 
@@ -407,7 +407,7 @@ def test_mp_error_handler_ignore_preserves_none_placeholders():
         num_procs=2,
         num_threads=3,
         progress=False,
-        backend="mp",
+        backend="spawn",
         error_handler="ignore",
     )
     assert out[3] is None
@@ -423,7 +423,7 @@ def test_mp_error_handler_raise_aborts():
             num_procs=2,
             num_threads=2,
             progress=False,
-            backend="mp",
+            backend="spawn",
             error_handler="raise",
         )
 
@@ -436,7 +436,7 @@ def test_mp_lazy_output_returns_paths():
         num_procs=2,
         num_threads=2,
         progress=False,
-        backend="mp",
+        backend="spawn",
         lazy_output=True,
         dump_in_thread=False,
     )

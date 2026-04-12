@@ -354,7 +354,7 @@ def _handle_multiprocess_event(
             exc_msg=exc_msg,
             frames=frames,
             caller_info=caller_info,
-            backend="mp",
+            backend="spawn",
             pbar=pbar,
         )
 
@@ -519,7 +519,7 @@ def run_threadpool_backend(
 
 
 def run_multiprocess_backend(ctx: MultiprocessBackendContext) -> list[Any]:
-    """Run the multiprocessing backend with a parent-owned progress loop."""
+    """Run the spawn multiprocessing backend with a parent-owned progress loop."""
     chunks = chunk_indexed_items(list(enumerate(ctx.backend.items)), ctx.num_procs)
     if not chunks:
         _cleanup_log_gate(ctx.backend.log_gate_path)

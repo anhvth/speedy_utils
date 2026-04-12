@@ -218,9 +218,9 @@ def _serialize_spawn_callable(func: Callable[[Any], Any]) -> bytes:
         import dill
     except ImportError as exc:  # pragma: no cover - dependency contract
         raise RuntimeError(
-            "multi_process(..., backend='mp') needs 'dill' when the callable "
-            "is defined in __main__, locally, or otherwise cannot be imported "
-            "by child processes started with 'spawn'."
+            "multi_process(..., backend='spawn') needs 'dill' when the "
+            "callable is defined in __main__, locally, or otherwise cannot be "
+            "imported by child processes started with 'spawn'."
         ) from exc
 
     try:

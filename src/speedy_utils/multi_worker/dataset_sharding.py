@@ -79,7 +79,7 @@ def _run_shard_jobs(jobs: list[dict[str, Any]], dataset_size: int, num_workers: 
         _process_shard_wrapper,
         jobs,
         num_procs=num_workers,
-        backend='mp',
+        backend='spawn',
         desc=f'Processing {dataset_size:,} items',
     )
 

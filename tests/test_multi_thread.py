@@ -39,7 +39,7 @@ def test_process_vs_thread_heavy():
         inp,
         num_threads=4,
         progress=False,
-        backend="thread",
+        backend="spawn",
     )
     dur_proc = time.perf_counter() - start_proc
 
@@ -79,7 +79,7 @@ def test_process_faster_than_thread_for_cpu_bound():
         inp,
         num_threads=4,
         progress=False,
-        backend="mp",
+        backend="spawn",
     )
     dur_mp = time.perf_counter() - start_mp
 

@@ -53,23 +53,25 @@ def _cleanup_paths(paths: list[str]) -> None:
 
 
 @pytest.mark.parametrize("num_threads", [1, 2])
-def test_thread_backend_basic_square(num_threads):
+def test_spawn_backend_basic_square(num_threads):
     result = multi_process(
         square,
         [0, 1, 2, 3],
+        num_procs=1,
         num_threads=num_threads,
         progress=False,
-        backend="thread",
+        backend="spawn",
     )
     assert result == [0, 1, 4, 9]
 
 
-def test_seq_backend_error_handler_ignore():
+def test_sequential_backend_error_handler_ignore():
     result = multi_process(
         maybe_fail,
         list(range(6)),
+        num_procs=1,
         progress=False,
-        backend="seq",
+        backend="spawn",
         error_handler="ignore",
     )
     assert result == [0, 1, 2, None, 4, 5]
@@ -79,9 +81,10 @@ def test_thread_backend_error_handler_ignore():
     result = multi_process(
         maybe_fail,
         list(range(6)),
+        num_procs=1,
         num_threads=2,
         progress=False,
-        backend="thread",
+        backend="spawn",
         error_handler="ignore",
     )
     assert result == [0, 1, 2, None, 4, 5]
@@ -91,20 +94,22 @@ def test_thread_ordered_results():
     result = multi_process(
         square,
         list(range(20)),
+        num_procs=1,
         num_threads=3,
         progress=False,
-        backend="thread",
+        backend="spawn",
     )
     assert result == [x * x for x in range(20)]
 
 
-def test_mp_lazy_output_returns_paths():
+def test_thread_lazy_output_returns_paths():
     out = multi_process(
         square,
         list(range(6)),
+        num_procs=1,
         num_threads=2,
         progress=False,
-        backend="thread",
+        backend="spawn",
         lazy_output=True,
         dump_in_thread=False,
     )
@@ -119,9 +124,10 @@ def test_nested_threads():
     result = multi_process(
         nested_parallel_work,
         list(range(5)),
+        num_procs=1,
         num_threads=2,
         progress=False,
-        backend="thread",
+        backend="spawn",
     )
     assert result == [
         [0, 1, 4],
@@ -137,6 +143,16 @@ def test_zero_threads_raises():
         multi_process(square, [1, 2, 3], num_threads=0, progress=False)
 
 
-def test_invalid_backend_raises():
-    with pytest.raises(ValueError, match="Unsupported backend"):
-        multi_process(square, [1, 2, 3], backend="invalid", progress=False)
+@pytest.mark.parametrize(
+    ("backend", "match"),
+    [
+        ("mp", "backend='mp' was removed"),
+        ("thread", "backend='thread' was removed"),
+        ("seq", "backend='seq' was removed"),
+        ("fork", "backend='fork' is not supported yet"),
+        ("invalid", "Unsupported backend"),
+    ],
+)
+def test_invalid_backend_raises(backend, match):
+    with pytest.raises(ValueError, match=match):
+        multi_process(square, [1, 2, 3], backend=backend, progress=False)
