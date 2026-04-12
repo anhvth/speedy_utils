@@ -20,8 +20,11 @@ uv run pytest -v
 # Check import time (must be < 0.4s)
 uv run python -c "import time; start=time.perf_counter(); import speedy_utils; print(f'{time.perf_counter()-start:.3f}s')"
 
-# Detailed import analysis
-uv run python scripts/debug_import_time.py speedy_utils --min-sec 0.05 --no-stdlib
+# Detailed import analysis / import budget check
+uv run python scripts/debug_import_time.py speedy_utils --max-total-sec 0.4 --top 12 --min-sec 0.01 --no-stdlib
+
+# Check all public packages with the same helper used by pre-commit
+uv run python scripts/debug_import_time.py speedy_utils llm_utils vision_utils --max-total-sec 0.4 --top 12 --min-sec 0.01 --no-stdlib
 
 # Lint with ruff
 uv run ruff check .
@@ -39,6 +42,16 @@ uv run ruff format .
 ## Performance Requirement: Import Time < 0.4s
 
 **CRITICAL:** All modules must import in under 0.4 seconds. This is enforced by a git pre-commit hook.
+
+When the import-time hook fails, rerun `scripts/debug_import_time.py` with the
+same package list and budget. The helper now prints both:
+
+- top-level contributors by aggregated self time
+- slowest full import paths from `python -X importtime`
+
+Use that output to pinpoint which import chain needs to be moved behind a lazy
+import. Keep the helper's default package list and thresholds aligned with the
+packages this repo exports as the project evolves.
 
 ### Lazy Import Strategy
 
@@ -180,6 +193,9 @@ Pylance shows as red diagnostics.
 ```bash
 # Full check (src/ + tests/, honours pyrightconfig.json)
 uv run python tools/check_syntax.py
+
+# Import-time budget check with root-cause breakdown
+uv run python scripts/debug_import_time.py speedy_utils llm_utils vision_utils --max-total-sec 0.4 --top 12 --min-sec 0.01 --no-stdlib
 
 # Check a single file
 uv run python tools/check_syntax.py --file src/llm_utils/lm/llm_qwen3.py
