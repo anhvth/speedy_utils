@@ -1,4 +1,3 @@
-from .base_prompt_builder import BasePromptBuilder
 from .llm import LLM, Qwen3LLM
 from .llm_signature import LLMSignature
 from .lm_base import LMBase, get_model_name
@@ -11,7 +10,6 @@ __all__ = [
     "LLM",
     "Qwen3LLM",
     "MOpenAI",
-    "BasePromptBuilder",
     "LLMSignature",
     "Signature",
     "InputField",

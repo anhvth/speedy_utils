@@ -3,8 +3,8 @@
 This script shows the practical difference between:
 - sequential execution
 - thread-only execution
-- spawn multiprocessing
-- hybrid spawn + threads
+- spawn/fork multiprocessing
+- hybrid spawn/fork + threads
 - error handling
 
 Use `cat $file` to inspect it, then run:
@@ -14,6 +14,7 @@ Use `cat $file` to inspect it, then run:
 
 from __future__ import annotations
 
+import multiprocessing as mp
 import time
 from typing import Any, Callable
 
@@ -87,6 +88,16 @@ def main() -> None:
         backend="spawn",
     )
 
+    if "fork" in mp.get_all_start_methods():
+        timed_run(
+            "Fork-only mode",
+            sleep_and_count,
+            items,
+            num_procs=4,
+            num_threads=1,
+            backend="fork",
+        )
+
     timed_run(
         "Hybrid mode",
         sleep_and_count,
@@ -109,7 +120,7 @@ def main() -> None:
     print("\nTip: tweak `num_procs` and `num_threads` to feel the routing rules:")
     print("  - 1/1 -> sequential")
     print("  - 1/>1 -> threads")
-    print("  - >1/1 -> spawn processes")
+    print("  - >1/1 -> spawn/fork processes")
     print("  - >1/>1 -> hybrid")
 
 

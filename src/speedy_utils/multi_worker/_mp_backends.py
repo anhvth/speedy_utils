@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import concurrent.futures
+import contextlib
 import inspect
 import multiprocessing as mp
 import os
 import queue
 import sys
 import threading
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Literal
@@ -89,6 +91,7 @@ class MpWorkerContext:
 @dataclass(frozen=True)
 class MultiprocessBackendContext:
     backend: BackendRunContext
+    start_method: Literal["spawn", "fork"]
     func: Callable[[Any], Any]
     cache_dir: Path | None
     dump_in_thread: bool
@@ -140,6 +143,7 @@ def build_backend_context(
 def build_multiprocess_context(
     *,
     backend: BackendRunContext,
+    start_method: Literal["spawn", "fork"] = "spawn",
     func: Callable[[Any], Any],
     cache_dir: Path | None,
     dump_in_thread: bool,
@@ -150,6 +154,7 @@ def build_multiprocess_context(
 ) -> MultiprocessBackendContext:
     return MultiprocessBackendContext(
         backend=backend,
+        start_method=start_method,
         func=func,
         cache_dir=cache_dir,
         dump_in_thread=dump_in_thread,
@@ -250,7 +255,7 @@ def _track_spawned_processes(processes: list[mp.Process]) -> None:
     _track_processes(tracked)
 
 
-def _spawn_worker_processes(
+def _start_worker_processes(
     *,
     mp_context: Any,
     chunks: list[list[tuple[int, Any]]],
@@ -299,8 +304,9 @@ def _handle_multiprocess_event(
     processes: list[mp.Process],
     processes_lock: threading.Lock,
     spawn_done: threading.Event,
-    spawn_thread: threading.Thread,
+    start_thread: threading.Thread | None,
     caller_info: dict[str, Any] | None,
+    backend_label: str,
 ) -> None:
     tag = msg[0]
 
@@ -347,14 +353,15 @@ def _handle_multiprocess_event(
     if tag in {"fatal", "spawn_error"}:
         _, exc_type_name, exc_msg, frames = msg
         spawn_done.set()
-        spawn_thread.join(timeout=1)
+        if start_thread is not None:
+            start_thread.join(timeout=1)
         terminate_processes(_snapshot_processes(processes, processes_lock))
         _display_formatted_error_and_exit(
             exc_type_name=exc_type_name,
             exc_msg=exc_msg,
             frames=frames,
             caller_info=caller_info,
-            backend="spawn",
+            backend=backend_label,
             pbar=pbar,
         )
 
@@ -365,7 +372,7 @@ def _consume_multiprocess_events(
     runtime: _MultiprocessRuntime,
     total_processes: int,
     spawn_done: threading.Event,
-    spawn_thread: threading.Thread,
+    start_thread: threading.Thread | None,
     processes: list[mp.Process],
     processes_lock: threading.Lock,
     pbar: "tqdm",
@@ -373,6 +380,7 @@ def _consume_multiprocess_events(
     sync_pbar: Callable[[], None],
     error_stats: ErrorStats,
     caller_info: dict[str, Any] | None,
+    backend_label: str,
 ) -> None:
     while runtime.done_processes < total_processes:
         try:
@@ -397,8 +405,9 @@ def _consume_multiprocess_events(
             processes=processes,
             processes_lock=processes_lock,
             spawn_done=spawn_done,
-            spawn_thread=spawn_thread,
+            start_thread=start_thread,
             caller_info=caller_info,
+            backend_label=backend_label,
         )
 
 
@@ -519,16 +528,23 @@ def run_threadpool_backend(
 
 
 def run_multiprocess_backend(ctx: MultiprocessBackendContext) -> list[Any]:
-    """Run the spawn multiprocessing backend with a parent-owned progress loop."""
+    """Run the multiprocessing backend with a parent-owned progress loop."""
     chunks = chunk_indexed_items(list(enumerate(ctx.backend.items)), ctx.num_procs)
     if not chunks:
         _cleanup_log_gate(ctx.backend.log_gate_path)
         return []
 
-    process_func, serialized_func = prepare_spawn_callable(ctx.func)
-    validate_spawn_kwargs(ctx.backend.func_kwargs)
+    start_method = ctx.start_method
+    backend_label = start_method
+    use_spawn = start_method == "spawn"
+    if use_spawn:
+        process_func, serialized_func = prepare_spawn_callable(ctx.func)
+        validate_spawn_kwargs(ctx.backend.func_kwargs)
+    else:
+        process_func = ctx.func
+        serialized_func = None
 
-    mp_context = mp.get_context("spawn")
+    mp_context = mp.get_context(start_method)
     event_queue = mp_context.Queue()
     processes: list[mp.Process] = []
     total_processes = len(chunks)
@@ -547,7 +563,11 @@ def run_multiprocess_backend(ctx: MultiprocessBackendContext) -> list[Any]:
     )
 
     try:
-        with patched_spawn_environment():
+        with (
+            patched_spawn_environment()
+            if use_spawn
+            else contextlib.nullcontext()
+        ):
             runtime = _MultiprocessRuntime(results=[None] * ctx.backend.total)
             with ctx.backend.tqdm_cls(
                 total=ctx.backend.total,
@@ -560,6 +580,8 @@ def run_multiprocess_backend(ctx: MultiprocessBackendContext) -> list[Any]:
                 processes_lock = threading.Lock()
                 stop_event = threading.Event()
                 spawn_done = threading.Event()
+                monitor_thread: threading.Thread | None = None
+                start_thread: threading.Thread | None = None
 
                 def sync_pbar() -> None:
                     _sync_multiprocess_pbar(
@@ -570,58 +592,114 @@ def run_multiprocess_backend(ctx: MultiprocessBackendContext) -> list[Any]:
                         total_processes=total_processes,
                     )
 
-                monitor_thread = start_mp_progress_monitor(
-                    pbar=pbar,
-                    pbar_lock=pbar_lock,
-                    stop_event=stop_event,
-                    error_stats=ctx.backend.error_stats,
-                    processes=processes,
-                    processes_lock=processes_lock,
-                    total_processes=total_processes,
-                    state=runtime.progress,
-                )
-                spawn_thread = threading.Thread(
-                    target=_spawn_worker_processes,
-                    kwargs={
-                        "mp_context": mp_context,
-                        "chunks": chunks,
-                        "worker_ctx": worker_ctx,
-                        "event_queue": event_queue,
-                        "processes": processes,
-                        "processes_lock": processes_lock,
-                        "pbar_lock": pbar_lock,
-                        "sync_pbar": sync_pbar,
-                        "spawn_done": spawn_done,
-                    },
-                    name="speedy-mp-spawn",
-                    daemon=True,
-                )
-
                 with pbar_lock:
                     sync_pbar()
 
-                try:
-                    spawn_thread.start()
-                    _consume_multiprocess_events(
-                        event_queue=event_queue,
-                        runtime=runtime,
-                        total_processes=total_processes,
-                        spawn_done=spawn_done,
-                        spawn_thread=spawn_thread,
-                        processes=processes,
-                        processes_lock=processes_lock,
+                if use_spawn:
+                    monitor_thread = start_mp_progress_monitor(
                         pbar=pbar,
                         pbar_lock=pbar_lock,
-                        sync_pbar=sync_pbar,
+                        stop_event=stop_event,
                         error_stats=ctx.backend.error_stats,
-                        caller_info=ctx.caller_info,
+                        processes=processes,
+                        processes_lock=processes_lock,
+                        total_processes=total_processes,
+                        state=runtime.progress,
                     )
-                    spawn_thread.join(timeout=1)
-                    for proc in _snapshot_processes(processes, processes_lock):
-                        proc.join()
-                finally:
-                    stop_event.set()
-                    monitor_thread.join(timeout=1)
+                    start_thread = threading.Thread(
+                        target=_start_worker_processes,
+                        kwargs={
+                            "mp_context": mp_context,
+                            "chunks": chunks,
+                            "worker_ctx": worker_ctx,
+                            "event_queue": event_queue,
+                            "processes": processes,
+                            "processes_lock": processes_lock,
+                            "pbar_lock": pbar_lock,
+                            "sync_pbar": sync_pbar,
+                            "spawn_done": spawn_done,
+                        },
+                        name="speedy-mp-start",
+                        daemon=True,
+                    )
+                    try:
+                        start_thread.start()
+                        _consume_multiprocess_events(
+                            event_queue=event_queue,
+                            runtime=runtime,
+                            total_processes=total_processes,
+                            spawn_done=spawn_done,
+                            start_thread=start_thread,
+                            processes=processes,
+                            processes_lock=processes_lock,
+                            pbar=pbar,
+                            pbar_lock=pbar_lock,
+                            sync_pbar=sync_pbar,
+                            error_stats=ctx.backend.error_stats,
+                            caller_info=ctx.caller_info,
+                            backend_label=backend_label,
+                        )
+                        start_thread.join(timeout=1)
+                        for proc in _snapshot_processes(processes, processes_lock):
+                            proc.join()
+                    finally:
+                        stop_event.set()
+                        if monitor_thread is not None:
+                            monitor_thread.join(timeout=1)
+                else:
+                    with warnings.catch_warnings():
+                        warnings.filterwarnings(
+                            "ignore",
+                            message=(
+                                r"This process .* is multi-threaded, use of "
+                                r"fork\(\) may lead to deadlocks in the child\."
+                            ),
+                            category=DeprecationWarning,
+                            module=r"multiprocessing\.popen_fork",
+                        )
+                        _start_worker_processes(
+                            mp_context=mp_context,
+                            chunks=chunks,
+                            worker_ctx=worker_ctx,
+                            event_queue=event_queue,
+                            processes=processes,
+                            processes_lock=processes_lock,
+                            pbar_lock=pbar_lock,
+                            sync_pbar=sync_pbar,
+                            spawn_done=spawn_done,
+                        )
+                    monitor_thread = start_mp_progress_monitor(
+                        pbar=pbar,
+                        pbar_lock=pbar_lock,
+                        stop_event=stop_event,
+                        error_stats=ctx.backend.error_stats,
+                        processes=processes,
+                        processes_lock=processes_lock,
+                        total_processes=total_processes,
+                        state=runtime.progress,
+                    )
+                    try:
+                        _consume_multiprocess_events(
+                            event_queue=event_queue,
+                            runtime=runtime,
+                            total_processes=total_processes,
+                            spawn_done=spawn_done,
+                            start_thread=None,
+                            processes=processes,
+                            processes_lock=processes_lock,
+                            pbar=pbar,
+                            pbar_lock=pbar_lock,
+                            sync_pbar=sync_pbar,
+                            error_stats=ctx.backend.error_stats,
+                            caller_info=ctx.caller_info,
+                            backend_label=backend_label,
+                        )
+                        for proc in _snapshot_processes(processes, processes_lock):
+                            proc.join()
+                    finally:
+                        stop_event.set()
+                        if monitor_thread is not None:
+                            monitor_thread.join(timeout=1)
 
             return runtime.results
     finally:

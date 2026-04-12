@@ -37,13 +37,6 @@ try:
 except ImportError:  # pragma: no cover
     tqdm = None  # type: ignore[assignment]
 
-try:
-    from rich.console import Console
-    from rich.panel import Panel
-except ImportError:  # pragma: no cover
-    Console = None  # type: ignore[assignment, misc]
-    Panel = None  # type: ignore[assignment, misc]
-
 # Sensible defaults
 DEFAULT_WORKERS = (os.cpu_count() or 4) * 2
 _SAFE_WORKER_LIMIT_ENV = 'SPEEDY_UTILS_MAX_WORKERS'
@@ -96,7 +89,10 @@ class UserFunctionError(Exception):
 
     def format_rich(self) -> None:
         """Format and print error with rich panels and code context."""
-        if Console is None or Panel is None:
+        try:
+            from rich.console import Console
+            from rich.panel import Panel
+        except ImportError:  # pragma: no cover
             # Fallback to plain text
             print(str(self), file=sys.stderr)
             return

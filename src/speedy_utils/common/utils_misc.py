@@ -34,6 +34,8 @@ def is_notebook() -> bool:
 
 def convert_to_builtin_python(input_data: Any) -> Any:
     """Convert input data to built-in Python types."""
+    from pydantic import BaseModel
+
     if isinstance(input_data, dict):
         return {k: convert_to_builtin_python(v) for k, v in input_data.items()}
     if isinstance(input_data, list):

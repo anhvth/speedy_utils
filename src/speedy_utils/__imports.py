@@ -88,6 +88,7 @@ from tqdm import tqdm
 tabulate = __import__("tabulate").tabulate
 import xxhash
 
+
 # numpy — lazy to keep `import speedy_utils` under 0.4 s
 def __getattr__(name):
     if name == "np":
@@ -243,10 +244,6 @@ try:
 except ImportError:
     Image = None
 
-try:
-    from pydantic import BaseModel
-except ImportError:
-    BaseModel = None
 if TYPE_CHECKING:
     import matplotlib.pyplot as plt
     import numpy as np
@@ -259,7 +256,6 @@ if TYPE_CHECKING:
     from IPython.display import HTML, display  # type: ignore
     from loguru import logger  # type: ignore
     from PIL import Image
-    from pydantic import BaseModel  # type: ignore
     from tabulate import tabulate  # type: ignore
     from tqdm import tqdm  # type: ignore
 
@@ -276,7 +272,6 @@ __all__ = [
     "get_ipython",
     "HTML",
     "display",
-    "BaseModel",
     "Image",
     "matplotlib",
     "plt",

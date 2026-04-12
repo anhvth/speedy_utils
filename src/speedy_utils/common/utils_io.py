@@ -38,6 +38,8 @@ def dump_json_or_pickle(
     """
     Dump an object to a file, supporting both JSON and pickle formats.
     """
+    from pydantic import BaseModel
+
     if isinstance(fname, Path):
         fname = str(fname)
     mkdir_or_exist(osp.abspath(os.path.dirname(osp.abspath(fname))))

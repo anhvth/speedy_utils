@@ -25,6 +25,7 @@ def build_progress_desc(
     *,
     desc: str | None,
     mode: str,
+    backend: str | None = None,
     num_procs: int | None = None,
     num_threads: int | None = None,
 ) -> str:
@@ -40,11 +41,14 @@ def build_progress_desc(
 
     if mode == "spawn":
         proc_count = max(1, num_procs or 1)
-        return f"{base_desc} [spawn: {proc_count}p]"
+        backend_label = "fork" if backend == "fork" else "spawn"
+        return f"{base_desc} [{backend_label}: {proc_count}p]"
 
     if mode == "hybrid":
         proc_count = max(1, num_procs or 1)
         thread_count = max(1, num_threads or 1)
+        if backend == "fork":
+            return f"{base_desc} [fork hybrid: {proc_count}p x {thread_count}t]"
         return f"{base_desc} [hybrid: {proc_count}p x {thread_count}t]"
 
     return f"{base_desc} [{mode}]"

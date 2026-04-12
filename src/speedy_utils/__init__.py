@@ -44,35 +44,9 @@ import xxhash
 from loguru import logger
 from tqdm import tqdm
 
+
 tabulate = __import__("tabulate").tabulate
 
-# Heavy third-party modules — imported lazily on first access to keep
-# `import speedy_utils` under 0.4 s.  Access them like any other attribute;
-# Python calls __getattr__ below the first time each name is used.
-_HEAVY = {
-    "np": ("numpy", None),
-    "pd": ("pandas", None),
-    "matplotlib": ("matplotlib", None),
-    "plt": ("matplotlib.pyplot", None),
-    "get_ipython": ("IPython.core.getipython", "get_ipython"),
-    "HTML": ("IPython.display", "HTML"),
-    "display": ("IPython.display", "display"),
-    "BaseModel": ("pydantic", "BaseModel"),
-}
-
-
-def __getattr__(name: str):
-    if name in _HEAVY:
-        module_path, attr = _HEAVY[name]
-        try:
-            import importlib
-            mod = importlib.import_module(module_path)
-            value = getattr(mod, attr) if attr else mod
-        except ImportError:
-            value = None
-        globals()[name] = value
-        return value
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 # Clock
 from speedy_utils.common.clock import Clock, speedy_timer, timef
@@ -90,6 +64,12 @@ from speedy_utils.common.notebook_utils import (
 
 # Cache utilities
 from speedy_utils.common.utils_cache import identify, identify_uuid, imemoize, memoize
+
+# Error handling utilities
+from speedy_utils.common.utils_error import (
+    clean_traceback,
+    handle_exceptions_with_clean_traceback,
+)
 
 # IO utilities
 from speedy_utils.common.utils_io import (
@@ -115,16 +95,11 @@ from speedy_utils.common.utils_misc import (
 # Print utilities
 from speedy_utils.common.utils_print import flatten_dict, fprint
 
-# Error handling utilities
-from speedy_utils.common.utils_error import (
-    clean_traceback,
-    handle_exceptions_with_clean_traceback,
-)
-
 # Multi-worker processing
+from speedy_utils.multi_worker.dataset_sharding import multi_process_dataset
 from speedy_utils.multi_worker.process import multi_process
 from speedy_utils.multi_worker.thread import kill_all_thread, multi_thread
-from speedy_utils.multi_worker.dataset_sharding import multi_process_dataset
+
 
 __all__ = [
     # Standard library
@@ -177,10 +152,6 @@ __all__ = [
     "logger",
     "tabulate",
     "tqdm",
-    # Heavy third-party — omitted from __all__ so `from speedy_utils import *`
-    # does NOT eagerly load them.  Access via `speedy_utils.pd` or
-    # `from speedy_utils import pd` (triggers __getattr__ lazily).
-    # "np", "pd", "matplotlib", "plt", "get_ipython", "HTML", "display", "BaseModel"
     # Clock
     "Clock",
     "speedy_timer",

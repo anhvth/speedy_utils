@@ -8,7 +8,10 @@ deprecated aliases or the deprecated safe backend.
 from __future__ import annotations
 
 import contextlib
+import multiprocessing as mp
 import os
+import ssl
+import warnings
 
 import pytest
 
@@ -38,6 +41,10 @@ def fail_on_multiples_of_5(x):
 
 def nested_parallel_work(x):
     return multi_thread(lambda y: y * y, [x, x + 1, x + 2], workers=2, progress=False)
+
+
+def passthrough_with_client(item, client=None):
+    return item
 
 
 def _cleanup_paths(paths: list[str]) -> None:
@@ -120,6 +127,38 @@ def test_thread_lazy_output_returns_paths():
     _cleanup_paths(out)
 
 
+FORK_SUPPORTED = "fork" in mp.get_all_start_methods()
+
+
+@pytest.mark.skipif(not FORK_SUPPORTED, reason="fork backend unavailable")
+def test_fork_backend_basic_square():
+    result = multi_process(
+        square,
+        [0, 1, 2, 3],
+        num_procs=2,
+        progress=False,
+        backend="fork",
+    )
+    assert result == [0, 1, 4, 9]
+
+
+@pytest.mark.skipif(not FORK_SUPPORTED, reason="fork backend unavailable")
+def test_fork_backend_accepts_unpicklable_kwargs_without_warning():
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        result = multi_process(
+            passthrough_with_client,
+            [1, 2, 3],
+            num_procs=2,
+            progress=False,
+            backend="fork",
+            client=ssl.create_default_context(),
+        )
+
+    assert result == [1, 2, 3]
+    assert caught == []
+
+
 def test_nested_threads():
     result = multi_process(
         nested_parallel_work,
@@ -149,7 +188,6 @@ def test_zero_threads_raises():
         ("mp", "backend='mp' was removed"),
         ("thread", "backend='thread' was removed"),
         ("seq", "backend='seq' was removed"),
-        ("fork", "backend='fork' is not supported yet"),
         ("invalid", "Unsupported backend"),
     ],
 )

@@ -10,14 +10,6 @@ import threading
 import traceback
 from typing import Any, Callable, TypeVar
 
-try:
-    from rich.console import Console
-    from rich.panel import Panel
-    from rich.text import Text
-except ImportError:
-    Console = None
-    Panel = None
-    Text = None
 
 F = TypeVar('F', bound=Callable[..., Any])
 
@@ -52,7 +44,11 @@ class CleanTracebackError(Exception):
 
     def format_rich(self) -> None:
         """Format and print error with rich panels and code context."""
-        if Console is None or Panel is None or Text is None:
+        try:
+            from rich.console import Console
+            from rich.panel import Panel
+            from rich.text import Text
+        except ImportError:
             print(str(self), file=sys.stderr)
             return
 
@@ -192,7 +188,7 @@ def _filter_traceback_frames(tb_list: list[traceback.FrameSummary]) -> list[trac
     if not user_frames:
         for frame in reversed(tb_list):
             # Keep if it's not in site-packages and not in standard library
-            if ('site-packages/' not in frame.filename and 
+            if ('site-packages/' not in frame.filename and
                 'dist-packages/' not in frame.filename and
                 not frame.filename.startswith('/usr/') and
                 not frame.filename.startswith('/opt/') and
@@ -230,7 +226,7 @@ def clean_traceback(func: F) -> F:
                     if frame and frame.f_code.co_name not in ['wrapper', '__call__', '__inner_call__']:
                         caller_info = inspect.getframeinfo(frame)
                         if not any(skip in caller_info.filename for skip in [
-                            'speedy_utils/common/', 'speedy_utils/multi_worker/', 
+                            'speedy_utils/common/', 'speedy_utils/multi_worker/',
                             'llm_utils/lm/', 'site-packages/', 'dist-packages/'
                         ]):
                             caller_context = traceback.FrameSummary(

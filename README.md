@@ -206,7 +206,8 @@ print(results)  # [0, 1, 4, 9, 16, None, 36, 49, 64, 81, None, 121]
 #### Multi-Worker Routing
 
 `multi_process` now routes work based on `num_procs` and `num_threads`.
-Use `backend='spawn'` for all cases for now.
+Use `backend='spawn'` by default; `backend='fork'` is available on POSIX when
+you need to inherit non-picklable state from the parent process.
 
 ```python
 from speedy_utils import multi_process
@@ -236,7 +237,8 @@ results = multi_process(
 
 | Backend | Description | Use Case |
 |---------|-------------|----------|
-| `'spawn'` | Routes to sequential, thread, process, or hybrid execution | Default for all multi-worker calls |
+| `'spawn'` | Routes to sequential, thread, process, or hybrid execution | Default and portable across platforms |
+| `'fork'` | Uses the fork start method for process and hybrid execution | POSIX-only, useful for inherited state |
 
 **When to use `num_procs` vs `num_threads`:**
 

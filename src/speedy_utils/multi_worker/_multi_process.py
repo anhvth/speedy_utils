@@ -49,7 +49,7 @@ from .common import (
 )
 
 
-BackendName = Literal["spawn"]
+BackendName = Literal["spawn", "fork"]
 ExecutionMode = Literal["seq", "thread", "spawn", "hybrid"]
 
 _deserialize_spawn_callable = _spawn._deserialize_spawn_callable
@@ -77,6 +77,8 @@ class PreparedRun:
 def _normalize_backend_choice(backend: str) -> BackendName:
     if backend == "spawn":
         return "spawn"
+    if backend == "fork":
+        return "fork"
     if backend == "mp":
         raise ValueError(
             "backend='mp' was removed; use backend='spawn' and control "
@@ -92,12 +94,8 @@ def _normalize_backend_choice(backend: str) -> BackendName:
             "backend='seq' was removed; use num_procs <= 1 and "
             "num_threads <= 1 to select the sequential backend."
         )
-    if backend == "fork":
-        raise ValueError(
-            "backend='fork' is not supported yet; use backend='spawn'."
-        )
     raise ValueError(
-        f"Unsupported backend: {backend!r}. Use backend='spawn'."
+        f"Unsupported backend: {backend!r}. Use backend='spawn' or backend='fork'."
     )
 
 
@@ -164,6 +162,7 @@ def _prepare_run(
         desc=build_progress_desc(
             desc=desc,
             mode=_resolve_execution_mode(request),
+            backend=request.backend,
             num_procs=request.num_procs,
             num_threads=request.num_threads,
         ),
@@ -228,6 +227,7 @@ def _run_multiprocess_with_fallback(
 ) -> list[Any]:
     mp_ctx = build_multiprocess_context(
         backend=prepared.backend_ctx,
+        start_method=request.backend,
         func=prepared.func,
         cache_dir=prepared.cache_dir,
         dump_in_thread=prepared.dump_in_thread,

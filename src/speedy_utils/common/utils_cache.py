@@ -87,6 +87,8 @@ def identify(obj: Any, depth: int = 0, max_depth: int = 2) -> str:
     Produce a stable, content-based identifier string for arbitrary Python objects.
     Includes a quick path using a weakref cache for large, user-defined objects.
     """
+    from pydantic import BaseModel
+
     # Quick-path for user-defined objects (weakref-able)
     if depth == 0:
         quick = _try_get_quick_id(obj)
