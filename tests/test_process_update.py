@@ -4,7 +4,7 @@ Tests for the updated multi_process functionality with process_update_interval.
 
 import queue
 import time
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from speedy_utils.multi_worker.process import multi_process
 from speedy_utils.multi_worker import _multi_process as mp_mod
@@ -240,3 +240,90 @@ def test_mp_progress_bar_appears_before_process_start_and_refreshes_while_idle()
     assert bar.postfix["start"] >= 1
     assert bar.postfix["active"] >= 1
     assert bar.refresh_calls >= 2
+
+
+def test_error_stats_logs_first_error_path():
+    with patch("speedy_utils.multi_worker.common.logger") as mock_logger:
+        mock_logger.opt.return_value.warning = MagicMock()
+        error_stats = mp_mod.ErrorStats(
+            func_name="identity",
+            max_error_files=10,
+            write_logs=True,
+        )
+
+        with patch.object(error_stats, "_write_error_log", return_value="/tmp/demo.log"):
+            error_stats.record_error(0, ValueError("boom"), {"x": 1}, "identity")
+
+    mock_logger.opt.return_value.warning.assert_called_once_with(
+        "Error log: {}",
+        "/tmp/demo.log",
+    )
+
+
+def test_mp_parent_logs_first_error_path():
+    class _ErrorLogQueue:
+        def __init__(self):
+            self._calls = 0
+
+        def get(self, timeout=None):
+            time.sleep(min(timeout or 0, 0.02))
+            self._calls += 1
+            if self._calls == 1:
+                return ("error_log", "/tmp/mp-error.log")
+            raise queue.Empty
+
+    class _ErrorLogContext:
+        def Queue(self):
+            return _ErrorLogQueue()
+
+        def Process(self, *args, **kwargs):
+            return _FakeProcess(*args, **kwargs)
+
+    _FakeTqdm.created.clear()
+    _FAKE_MP_ORDER.clear()
+
+    with patch("speedy_utils.multi_worker._multi_process.tqdm", _FakeTqdm):
+        with patch(
+            "speedy_utils.multi_worker._multi_process.mp.get_context",
+            return_value=_ErrorLogContext(),
+        ):
+            with patch(
+                "speedy_utils.multi_worker._multi_process.psutil.Process",
+                side_effect=lambda pid: pid,
+            ):
+                with patch(
+                    "speedy_utils.multi_worker._multi_process._track_processes",
+                    return_value=None,
+                ):
+                    with patch(
+                        "speedy_utils.multi_worker._multi_process.logger"
+                    ) as mock_logger:
+                        mock_logger.opt.return_value.warning = MagicMock()
+                        result = mp_mod._run_multiprocess_backend(
+                            func=identity,
+                            cache_dir=None,
+                            dump_in_thread=True,
+                            items=[1, 2],
+                            total=2,
+                            num_procs=2,
+                            num_threads=1,
+                            desc="Test MP",
+                            progress=True,
+                            func_kwargs={},
+                            log_worker="first",
+                            log_gate_path=None,
+                            error_handler="log",
+                            error_stats=mp_mod.ErrorStats(
+                                func_name="identity",
+                                max_error_files=10,
+                                write_logs=True,
+                            ),
+                            func_name="identity",
+                            max_error_files=10,
+                        )
+
+    assert result == [None, None]
+    mock_logger.opt.return_value.warning.assert_called_once_with(
+        "Error log: {}",
+        "/tmp/mp-error.log",
+    )

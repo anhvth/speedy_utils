@@ -7,6 +7,7 @@ Includes:
 - Cache helpers
 - Process/thread tracking
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -22,22 +23,21 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Literal
 
 import psutil
+from loguru import logger
+
 
 if TYPE_CHECKING:
     from tqdm import tqdm
 
 # ─── error handler types ────────────────────────────────────────
-ErrorHandlerType = Literal['raise', 'ignore', 'log']
+ErrorHandlerType = Literal["raise", "ignore", "log"]
 
 
 class ErrorStats:
     """Thread-safe error statistics tracker."""
 
     def __init__(
-        self,
-        func_name: str,
-        max_error_files: int = 100,
-        write_logs: bool = True
+        self, func_name: str, max_error_files: int = 100, write_logs: bool = True
     ):
         self._lock = threading.Lock()
         self._success_count = 0
@@ -52,25 +52,25 @@ class ErrorStats:
     @staticmethod
     def _get_error_log_dir(func_name: str) -> Path:
         """Generate unique error log directory with run counter."""
-        base_dir = Path('.cache/speedy_utils/error_logs')
+        base_dir = Path(".cache/speedy_utils/error_logs")
         base_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Find the next run counter
         counter = 1
-        existing = list(base_dir.glob(f'{func_name}_run_*'))
+        existing = list(base_dir.glob(f"{func_name}_run_*"))
         if existing:
             counters = []
             for p in existing:
                 try:
-                    parts = p.name.split('_run_')
+                    parts = p.name.split("_run_")
                     if len(parts) == 2:
                         counters.append(int(parts[1]))
                 except (ValueError, IndexError):
                     pass
             if counters:
                 counter = max(counters) + 1
-        
-        return base_dir / f'{func_name}_run_{counter}'
+
+        return base_dir / f"{func_name}_run_{counter}"
 
     def record_success(self) -> None:
         with self._lock:
@@ -98,14 +98,10 @@ class ErrorStats:
 
         log_path = None
         if should_write:
-            log_path = self._write_error_log(
-                idx, error, input_value, func_name
-            )
+            log_path = self._write_error_log(idx, error, input_value, func_name)
 
         if should_show_first:
-            self._print_first_error(
-                error, input_value, func_name, log_path
-            )
+            self._print_first_error(error, input_value, func_name, log_path)
 
         return log_path
 
@@ -118,42 +114,44 @@ class ErrorStats:
     ) -> str:
         """Write error details to a log file."""
         from io import StringIO
+
         from rich.console import Console
-        
-        log_path = self._error_log_dir / f'{idx}.log'
-        
+
+        log_path = self._error_log_dir / f"{idx}.log"
+
         output = StringIO()
         console = Console(file=output, width=120, no_color=False)
-        
+
         # Format traceback using unified extraction
         tb_lines = _format_traceback_lines(
             _extract_frames(error),
             include_locals=False,
         )
-        
-        console.print(f'{"=" * 60}')
-        console.print(f'Error at index: {idx}')
-        console.print(f'Function: {func_name}')
-        console.print(f'Error Type: {type(error).__name__}')
-        console.print(f'Error Message: {error}')
-        console.print(f'{"=" * 60}')
-        console.print('')
-        console.print('Input:')
-        console.print('-' * 40)
+
+        console.print(f"{'=' * 60}")
+        console.print(f"Error at index: {idx}")
+        console.print(f"Function: {func_name}")
+        console.print(f"Error Type: {type(error).__name__}")
+        console.print(f"Error Message: {error}")
+        console.print(f"{'=' * 60}")
+        console.print("")
+        console.print("Input:")
+        console.print("-" * 40)
         try:
             import json
+
             console.print(json.dumps(input_value, indent=2))
         except Exception:
             console.print(repr(input_value))
-        console.print('')
-        console.print('Traceback:')
-        console.print('-' * 40)
+        console.print("")
+        console.print("Traceback:")
+        console.print("-" * 40)
         for line in tb_lines:
             console.print(line)
-        
-        with open(log_path, 'w') as f:
+
+        with open(log_path, "w") as f:
             f.write(output.getvalue())
-        
+
         return str(log_path)
 
     def _print_first_error(
@@ -167,39 +165,38 @@ class ErrorStats:
         try:
             from rich.console import Console
             from rich.panel import Panel
+
             console = Console(stderr=True)
-            
+
             # Use unified frame extraction
             tb_lines = _format_traceback_lines(
                 _extract_frames(error),
                 include_locals=False,
             )
-            
+
             console.print()
             console.print(
                 Panel(
-                    '\n'.join(tb_lines),
+                    "\n".join(tb_lines),
                     title=(
-                        '[bold red]First Error '
-                        '(continuing with remaining items)[/bold red]'
+                        "[bold red]First Error "
+                        "(continuing with remaining items)[/bold red]"
                     ),
-                    border_style='yellow',
+                    border_style="yellow",
                     expand=False,
                 )
             )
-            console.print(
-                f'[bold red]{type(error).__name__}[/bold red]: {error}'
-            )
+            console.print(f"[bold red]{type(error).__name__}[/bold red]: {error}")
             if log_path:
-                console.print(f'[dim]Error log: {log_path}[/dim]')
+                logger.opt(depth=1).warning("Error log: {}", log_path)
             console.print()
         except ImportError:
             # Fallback to plain print
-            print('\n--- First Error ---', file=sys.stderr)
-            print(f'{type(error).__name__}: {error}', file=sys.stderr)
+            print("\n--- First Error ---", file=sys.stderr)
+            print(f"{type(error).__name__}: {error}", file=sys.stderr)
             if log_path:
-                print(f'Error log: {log_path}', file=sys.stderr)
-            print('', file=sys.stderr)
+                logger.opt(depth=1).warning("Error log: {}", log_path)
+            print("", file=sys.stderr)
 
     @property
     def success_count(self) -> int:
@@ -214,7 +211,7 @@ class ErrorStats:
     def get_postfix_dict(self) -> dict[str, int]:
         """Get dict for pbar postfix."""
         with self._lock:
-            return {'ok': self._success_count, 'err': self._error_count}
+            return {"ok": self._success_count, "err": self._error_count}
 
 
 # ─── Traceback formatting utilities ─────────────────────────────
@@ -223,15 +220,15 @@ class ErrorStats:
 def _should_skip_frame(filepath: str) -> bool:
     """Check if a frame should be filtered from traceback display."""
     skip_patterns = [
-        'speedy_utils/multi_worker',
-        'concurrent/futures',
-        'multiprocessing/',
-        'fastcore/parallel',
-        'fastcore/foundation',
-        'fastcore/basics',
-        'site-packages/fastcore',
-        '/threading.py',
-        '/concurrent/',
+        "speedy_utils/multi_worker",
+        "concurrent/futures",
+        "multiprocessing/",
+        "fastcore/parallel",
+        "fastcore/foundation",
+        "fastcore/basics",
+        "site-packages/fastcore",
+        "/threading.py",
+        "/concurrent/",
     ]
     return any(skip in filepath for skip in skip_patterns)
 
@@ -239,74 +236,72 @@ def _should_skip_frame(filepath: str) -> bool:
 def _should_show_local(name: str, value: object) -> bool:
     """Check if a local variable should be displayed in traceback."""
     import types
-    
+
     # Skip dunder variables
-    if name.startswith('__') and name.endswith('__'):
+    if name.startswith("__") and name.endswith("__"):
         return False
-    
+
     # Skip modules
     if isinstance(value, types.ModuleType):
         return False
-    
+
     # Skip type objects and classes
     if isinstance(value, type):
         return False
-    
+
     # Skip functions and methods
     if isinstance(
-        value,
-        (types.FunctionType, types.MethodType, types.BuiltinFunctionType)
+        value, (types.FunctionType, types.MethodType, types.BuiltinFunctionType)
     ):
         return False
-    
+
     # Skip common typing aliases
     value_str = str(value)
-    if value_str.startswith('typing.'):
+    if value_str.startswith("typing."):
         return False
-    
+
     # Skip large objects that would clutter output
-    skip_markers = ['module', 'function', 'method', 'built-in']
-    if value_str.startswith('<') and any(x in value_str for x in skip_markers):
+    skip_markers = ["module", "function", "method", "built-in"]
+    if value_str.startswith("<") and any(x in value_str for x in skip_markers):
         return False
-    
+
     return True
 
 
 def _format_locals(frame_locals: dict) -> list[str]:
     """Format local variables for display, filtering out noisy imports."""
     from io import StringIO
+
     from rich.console import Console
     from rich.pretty import Pretty
-    
+
     # Filter locals
-    clean_locals = {
-        k: v for k, v in frame_locals.items() if _should_show_local(k, v)
-    }
-    
+    clean_locals = {k: v for k, v in frame_locals.items() if _should_show_local(k, v)}
+
     if not clean_locals:
         return []
-    
+
     lines = []
-    lines.append('[dim]╭─ locals ─╮[/dim]')
-    
+    lines.append("[dim]╭─ locals ─╮[/dim]")
+
     # Format each local variable
     for name, value in clean_locals.items():
         # Use Rich's Pretty for nice formatting
         try:
             console = Console(file=StringIO(), width=60)
-            console.print(Pretty(value), end='')
+            console.print(Pretty(value), end="")
             value_str = console.file.getvalue().strip()
             # Limit length
             if len(value_str) > 100:
-                value_str = value_str[:97] + '...'
+                value_str = value_str[:97] + "..."
         except Exception:
             value_str = repr(value)
             if len(value_str) > 100:
-                value_str = value_str[:97] + '...'
-        
-        lines.append(f'[dim]│[/dim] {name} = {value_str}')
-    
-    lines.append('[dim]╰──────────╯[/dim]')
+                value_str = value_str[:97] + "..."
+
+        lines.append(f"[dim]│[/dim] {name} = {value_str}")
+
+    lines.append("[dim]╰──────────╯[/dim]")
     return lines
 
 
@@ -320,33 +315,33 @@ def _format_frame_with_context(
     lines = []
     # Frame header
     lines.append(
-        f'[cyan]{filepath}[/cyan]:[yellow]{lineno}[/yellow] '
-        f'in [green]{funcname}[/green]'
+        f"[cyan]{filepath}[/cyan]:[yellow]{lineno}[/yellow] "
+        f"in [green]{funcname}[/green]"
     )
-    lines.append('')
-    
+    lines.append("")
+
     # Get context lines
     context_size = 3
     start_line = max(1, lineno - context_size)
     end_line = lineno + context_size + 1
-    
+
     for line_num in range(start_line, end_line):
         line_text = linecache.getline(filepath, line_num).rstrip()
         if line_text:
             num_str = str(line_num).rjust(4)
             if line_num == lineno:
-                lines.append(f'[dim]{num_str}[/dim] [red]❱[/red] {line_text}')
+                lines.append(f"[dim]{num_str}[/dim] [red]❱[/red] {line_text}")
             else:
-                lines.append(f'[dim]{num_str} │[/dim] {line_text}')
-    
+                lines.append(f"[dim]{num_str} │[/dim] {line_text}")
+
     # Add locals if available
     if frame_locals:
         locals_lines = _format_locals(frame_locals)
         if locals_lines:
-            lines.append('')
+            lines.append("")
             lines.extend(locals_lines)
-    
-    lines.append('')
+
+    lines.append("")
     return lines
 
 
@@ -361,9 +356,9 @@ def _format_traceback_lines(
     if caller_info:
         display_lines.extend(
             _format_frame_with_context(
-                caller_info['filename'],
-                caller_info['lineno'],
-                caller_info['function'],
+                caller_info["filename"],
+                caller_info["lineno"],
+                caller_info["function"],
                 None,
             )
         )
@@ -385,19 +380,19 @@ def _extract_frames_from_traceback(
 ) -> list[tuple[str, int, str, dict]]:
     """Extract user frames from exception traceback object with locals."""
     frames = []
-    if hasattr(error, '__traceback__') and error.__traceback__ is not None:
+    if hasattr(error, "__traceback__") and error.__traceback__ is not None:
         tb = error.__traceback__
         while tb is not None:
             frame = tb.tb_frame
             filename = frame.f_code.co_filename
             lineno = tb.tb_lineno
             funcname = frame.f_code.co_name
-            
+
             if not _should_skip_frame(filename):
                 # Get local variables from the frame
                 frame_locals = dict(frame.f_locals)
                 frames.append((filename, lineno, funcname, frame_locals))
-            
+
             tb = tb.tb_next
     return frames
 
@@ -422,6 +417,7 @@ def _display_formatted_error_and_exit(
 
     from rich.console import Console
     from rich.panel import Panel
+
     console = Console(stderr=True)
 
     if frames or caller_info:
@@ -435,21 +431,21 @@ def _display_formatted_error_and_exit(
         console.print()
         console.print(
             Panel(
-                '\n'.join(display_lines),
+                "\n".join(display_lines),
                 title=(
-                    f'[bold red]Traceback (most recent call last) '
-                    f'[{backend}][/bold red]'
+                    f"[bold red]Traceback (most recent call last) "
+                    f"[{backend}][/bold red]"
                 ),
-                border_style='red',
+                border_style="red",
                 expand=False,
             )
         )
-        console.print(f'[bold red]{exc_type_name}[/bold red]: {exc_msg}')
+        console.print(f"[bold red]{exc_type_name}[/bold red]: {exc_msg}")
         console.print()
     else:
         # No frames found, minimal output
         console.print()
-        console.print(f'[bold red]{exc_type_name}[/bold red]: {exc_msg}')
+        console.print(f"[bold red]{exc_type_name}[/bold red]: {exc_msg}")
         console.print()
 
     # Ensure output is flushed
@@ -462,7 +458,7 @@ def _exit_on_worker_error(
     error: Exception,
     pbar: tqdm | None = None,
     caller_info: dict | None = None,
-    backend: str = 'unknown',
+    backend: str = "unknown",
 ) -> None:
     """Display a clean traceback for a worker error and exit the process."""
     frames = _extract_frames_from_traceback(error)
@@ -531,15 +527,15 @@ _LOG_GATE_CACHE: dict[str, bool] = {}
 
 
 def _should_allow_worker_logs(
-    mode: Literal['all', 'zero', 'first'],
+    mode: Literal["all", "zero", "first"],
     gate_path: Path | None,
 ) -> bool:
     """Determine if current worker should emit logs for the given mode."""
-    if mode == 'all':
+    if mode == "all":
         return True
-    if mode == 'zero':
+    if mode == "zero":
         return False
-    if mode == 'first':
+    if mode == "first":
         if gate_path is None:
             return True
         key = str(gate_path)
@@ -556,7 +552,7 @@ def _should_allow_worker_logs(
             allowed = True
         _LOG_GATE_CACHE[key] = allowed
         return allowed
-    raise ValueError(f'Unsupported log mode: {mode!r}')
+    raise ValueError(f"Unsupported log mode: {mode!r}")
 
 
 def _cleanup_log_gate(gate_path: Path | None) -> None:
@@ -624,7 +620,7 @@ class _PrefixedWriter:
                 total += len(self._prefix)
             self._stream.write(chunk)
             total += len(chunk)
-            self._at_line_start = chunk.endswith('\n')
+            self._at_line_start = chunk.endswith("\n")
         return total
 
     def flush(self):
@@ -635,7 +631,7 @@ def _call_with_log_control(
     func: Callable,
     x: Any,
     func_kwargs: dict[str, Any],
-    log_mode: Literal['all', 'zero', 'first'],
+    log_mode: Literal["all", "zero", "first"],
     gate_path: Path | None,
 ):
     """Call a function, silencing stdout/stderr based on log mode."""
@@ -651,7 +647,7 @@ def _call_with_log_control(
         stderr = sys.stderr
 
         if allow_logs:
-            prefix = f'[worker-{os.getpid()}] '
+            prefix = f"[worker-{os.getpid()}] "
             # Route worker logs to stderr to reduce clobbering tqdm on stdout.
             out = _PrefixedWriter(stderr.default_stream, prefix)
             stdout.set_target(out)
@@ -662,7 +658,7 @@ def _call_with_log_control(
                 stdout.clear_target()
                 stderr.clear_target()
 
-        with open(os.devnull, 'w') as devnull:
+        with open(os.devnull, "w") as devnull:
             stdout.set_target(devnull)
             stderr.set_target(devnull)
             try:
@@ -672,14 +668,14 @@ def _call_with_log_control(
                 stderr.clear_target()
 
     if allow_logs:
-        prefix = f'[worker-{os.getpid()}] '
+        prefix = f"[worker-{os.getpid()}] "
         # Route worker logs to stderr to reduce clobbering tqdm on stdout
         out = _PrefixedWriter(sys.stderr, prefix)
         err = out
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             return func(x, **func_kwargs)
     with (
-        open(os.devnull, 'w') as devnull,
+        open(os.devnull, "w") as devnull,
         contextlib.redirect_stdout(devnull),
         contextlib.redirect_stderr(devnull),
     ):
@@ -692,11 +688,12 @@ def _call_with_log_control(
 def _build_cache_dir(func: Callable, items: list[Any]) -> Path:
     """Build cache dir with function name + timestamp."""
     import datetime
-    func_name = getattr(func, '__name__', 'func')
+
+    func_name = getattr(func, "__name__", "func")
     now = datetime.datetime.now()
-    stamp = now.strftime('%m%d_%Hh%Mm%Ss')
-    run_id = f'{func_name}_{stamp}_{uuid.uuid4().hex[:6]}'
-    path = Path('.cache') / run_id
+    stamp = now.strftime("%m%d_%Hh%Mm%Ss")
+    run_id = f"{func_name}_{stamp}_{uuid.uuid4().hex[:6]}"
+    path = Path(".cache") / run_id
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -712,10 +709,10 @@ def wrap_dump(
 
     def wrapped(x, *args, **kwargs):
         res = func(x, *args, **kwargs)
-        p = cache_dir / f'{uuid.uuid4().hex}.pkl'
+        p = cache_dir / f"{uuid.uuid4().hex}.pkl"
 
         def save():
-            with open(p, 'wb') as fh:
+            with open(p, "wb") as fh:
                 pickle.dump(res, fh)
 
         if dump_in_thread:
@@ -734,16 +731,16 @@ def wrap_dump(
 
 
 def create_log_gate_path(
-    log_worker: Literal['zero', 'first', 'all'],
+    log_worker: Literal["zero", "first", "all"],
 ) -> Path | None:
     """Create a log gate path for first-worker-only logging."""
-    if log_worker == 'first':
+    if log_worker == "first":
         return (
             Path(tempfile.gettempdir())
-            / f'speedy_utils_log_gate_{os.getpid()}_{uuid.uuid4().hex}.gate'
+            / f"speedy_utils_log_gate_{os.getpid()}_{uuid.uuid4().hex}.gate"
         )
-    elif log_worker not in ('zero', 'all'):
-        raise ValueError(f'Unsupported log_worker: {log_worker!r}')
+    if log_worker not in ("zero", "all"):
+        raise ValueError(f"Unsupported log_worker: {log_worker!r}")
     return None
 
 
@@ -762,21 +759,18 @@ def cleanup_phantom_workers() -> None:
     with _SPEEDY_PROCESSES_LOCK:
         for process in SPEEDY_RUNNING_PROCESSES[:]:
             try:
-                print(
-                    f'🔪 Killing tracked process {process.pid} '
-                    f'({process.name()})'
-                )
+                print(f"🔪 Killing tracked process {process.pid} ({process.name()})")
                 process.kill()
                 killed_processes += 1
             except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
-                print(f'⚠️ Could not kill process {process.pid}: {e}')
+                print(f"⚠️ Could not kill process {process.pid}: {e}")
         SPEEDY_RUNNING_PROCESSES.clear()
 
     # Also kill any remaining child processes (fallback)
     parent = psutil.Process(os.getpid())
     for child in parent.children(recursive=True):
         try:
-            print(f'🔪 Killing child process {child.pid} ({child.name()})')
+            print(f"🔪 Killing child process {child.pid} ({child.name()})")
             child.kill()
         except psutil.NoSuchProcess:
             pass
@@ -792,51 +786,48 @@ def cleanup_phantom_workers() -> None:
         _prune_dead_threads()
         killed_threads = kill_all_thread()
         if killed_threads > 0:
-            print(f'🔪 Killed {killed_threads} tracked threads')
+            print(f"🔪 Killed {killed_threads} tracked threads")
     except ImportError:
         # Fallback: just report stray threads
         for t in threading.enumerate():
             if t is threading.current_thread():
                 continue
             if not t.daemon:
-                print(
-                    f'⚠️ Thread {t.name} is still running '
-                    f'(cannot be force-killed).'
-                )
+                print(f"⚠️ Thread {t.name} is still running (cannot be force-killed).")
 
     print(
-        f'✅ Cleaned up {killed_processes} tracked processes and '
-        f'child processes (kernel untouched).'
+        f"✅ Cleaned up {killed_processes} tracked processes and "
+        f"child processes (kernel untouched)."
     )
 
 
 __all__ = [
     # Types
-    'ErrorHandlerType',
-    'ErrorStats',
+    "ErrorHandlerType",
+    "ErrorStats",
     # Process tracking globals
-    'SPEEDY_RUNNING_PROCESSES',
-    '_SPEEDY_PROCESSES_LOCK',
+    "SPEEDY_RUNNING_PROCESSES",
+    "_SPEEDY_PROCESSES_LOCK",
     # Error utilities
-    '_should_skip_frame',
-    '_format_traceback_lines',
-    '_extract_frames_from_traceback',
-    '_display_formatted_error_and_exit',
-    '_exit_on_worker_error',
+    "_should_skip_frame",
+    "_format_traceback_lines",
+    "_extract_frames_from_traceback",
+    "_display_formatted_error_and_exit",
+    "_exit_on_worker_error",
     # Process tracking
-    '_prune_dead_processes',
-    '_track_processes',
-    '_track_multiprocessing_processes',
+    "_prune_dead_processes",
+    "_track_processes",
+    "_track_multiprocessing_processes",
     # Log gating
-    '_LOG_GATE_CACHE',
-    '_should_allow_worker_logs',
-    '_cleanup_log_gate',
-    '_PrefixedWriter',
-    '_call_with_log_control',
-    'create_log_gate_path',
+    "_LOG_GATE_CACHE",
+    "_should_allow_worker_logs",
+    "_cleanup_log_gate",
+    "_PrefixedWriter",
+    "_call_with_log_control",
+    "create_log_gate_path",
     # Cache helpers
-    '_build_cache_dir',
-    'wrap_dump',
+    "_build_cache_dir",
+    "wrap_dump",
     # Cleanup
-    'cleanup_phantom_workers',
+    "cleanup_phantom_workers",
 ]
