@@ -126,3 +126,4 @@ edu_results.json
 .playwright-mcp
 .DS_Store
 .chainlit
+chainlit.md

@@ -427,6 +427,37 @@ class TestLLMCallContract(TestCase):
             llm("prompt", stream=True, return_dict=True)
 
     @patch("llm_utils.lm.llm.get_base_client")
+    def test_init_caches_model_list_from_health_check(self, mock_get_client):
+        """Auto-detect model without a second models.list() call.
+
+        Regression test: LLM.__init__ used to call models.list() twice — once
+        for the health check and again for model auto-detection.  A transient
+        APIConnectionError on the second call would crash init even though the
+        health check already retrieved the model list.
+
+        The fix should cache the result from the health check so model
+        auto-detection never needs a second network call.
+        """
+        from openai import APIConnectionError
+
+        mock_client = MagicMock()
+        mock_model = MagicMock(id="cached-model")
+        models_response = MagicMock(data=[mock_model])
+
+        # First call (health check) succeeds; second call (auto-detect) fails.
+        mock_client.models.list = MagicMock(
+            side_effect=[models_response, APIConnectionError(request=MagicMock())]
+        )
+        mock_get_client.return_value = mock_client
+
+        # Should NOT raise — the health-check result should be reused.
+        llm = LLM()
+
+        self.assertEqual(llm.model_kwargs["model"], "cached-model")
+        # models.list() should have been called exactly once (health check).
+        mock_client.models.list.assert_called_once()
+
+    @patch("llm_utils.lm.llm.get_base_client")
     def test_call_streams_from_chat_api(self, mock_get_client):
         mock_client = self._make_mock_client()
         mock_get_client.return_value = mock_client
