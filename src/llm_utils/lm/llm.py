@@ -676,12 +676,20 @@ class LLM:
         with self._borrow_client() as client:
             self._set_cache(cache, client=client)
             try:
-                completion = client.chat.completions.parse(
-                    model=model_name,
-                    messages=messages,
-                    response_format=pydantic_model_to_use,
-                    **api_kwargs,
-                )
+                import warnings
+
+                with warnings.catch_warnings():
+                    warnings.filterwarnings(
+                        "ignore",
+                        message="Pydantic serializer warnings",
+                        category=UserWarning,
+                    )
+                    completion = client.chat.completions.parse(
+                        model=model_name,
+                        messages=messages,
+                        response_format=pydantic_model_to_use,
+                        **api_kwargs,
+                    )
             except Exception as exc:
                 # Import openai exceptions for type checking
                 from openai import AuthenticationError, BadRequestError, RateLimitError

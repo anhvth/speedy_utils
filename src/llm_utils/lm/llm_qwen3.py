@@ -409,6 +409,9 @@ class Qwen3LLM(LLM):
         return_client_idx: bool = False,
         **runtime_kwargs,
     ) -> "CompletionChoice | tuple[CompletionChoice, int]":
+        if client_idx is not None:
+            self._get_tracked_client(client_idx)
+
         prompt = self._build_completion_prompt(messages)
         call_kwargs = dict(runtime_kwargs)
         enable_thinking = call_kwargs.pop("enable_thinking", None)

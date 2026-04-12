@@ -758,10 +758,13 @@ class TestQwen3LLM(unittest.TestCase):
             client_idx=5,
         )
 
-        with self.assertRaisesRegex(RuntimeError, "out of range"):
-            llm.complete_until(
-                "prompt", state, stop="</think_efficient>", max_tokens=32
-            )
+        with patch.object(llm, "_build_completion_prompt") as mock_build_prompt:
+            with self.assertRaisesRegex(RuntimeError, "out of range"):
+                llm.complete_until(
+                    "prompt", state, stop="</think_efficient>", max_tokens=32
+                )
+
+        mock_build_prompt.assert_not_called()
 
     @patch("llm_utils.lm.llm.get_base_client")
     def test_inspect_history_is_public(self, mock_get_client):
