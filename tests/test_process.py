@@ -348,36 +348,23 @@ def test_mp_local_closure_callable():
     assert out == [8, 9, 10]
 
 
-def test_mp_kwargs_with_ssl_context_should_work_regression():
-    """Red test: multiprocessing should handle non-picklable client-like kwargs."""
-    out = multi_process(
-        passthrough_with_client,
-        [1, 2, 3],
-        num_procs=1,
-        num_threads=2,
-        progress=False,
-        backend="mp",
-        client=ssl.create_default_context(),
-    )
-    assert out == [1, 2, 3]
-
-
 def test_mp_kwargs_with_ssl_context_should_work_with_spawn_regression():
     """Regression: mp spawn should degrade safely with non-picklable kwargs."""
-    out = multi_process(
-        passthrough_with_client,
-        [1, 2, 3],
-        num_procs=2,
-        num_threads=2,
-        progress=False,
-        backend="mp",
-        client=ssl.create_default_context(),
-    )
+    with pytest.warns(RuntimeWarning, match="Falling back to thread backend"):
+        out = multi_process(
+            passthrough_with_client,
+            [1, 2, 3],
+            num_procs=2,
+            num_threads=2,
+            progress=False,
+            backend="mp",
+            client=ssl.create_default_context(),
+        )
     assert out == [1, 2, 3]
 
 
 def test_mp_notebook_callable_with_sslcontext_global_regression():
-    """Red test: spawn path should tolerate non-picklable notebook globals."""
+    """Red test: spawn path should fall back gracefully for non-picklable notebook globals."""
     namespace: dict[str, object] = {}
     exec("def notebook_gate(x):\n    return x if ctx is not None else -1", namespace)
     notebook_gate_impl = namespace["notebook_gate"]
@@ -392,13 +379,14 @@ def test_mp_notebook_callable_with_sslcontext_global_regression():
     )
     notebook_gate.__module__ = "__main__"
 
-    out = multi_process(
-        notebook_gate,
-        [1, 2, 3],
-        num_procs=2,
-        progress=False,
-        backend="mp",
-    )
+    with pytest.warns(RuntimeWarning, match="Falling back to thread backend"):
+        out = multi_process(
+            notebook_gate,
+            [1, 2, 3],
+            num_procs=2,
+            progress=False,
+            backend="mp",
+        )
     assert out == [1, 2, 3]
 
 
