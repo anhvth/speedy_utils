@@ -227,7 +227,7 @@ def test_mp_progress_bar_appears_before_process_start_and_refreshes_while_idle()
                             write_logs=True,
                         ),
                         func_name="identity",
-                        tqdm_cls=_FakeTqdm,
+                        tqdm_cls=_FakeTqdm,  # type: ignore[arg-type]
                     )
                     mp_ctx = mp_mod.build_multiprocess_context(
                         backend=backend_ctx,
@@ -322,7 +322,7 @@ def test_mp_parent_logs_first_error_path():
                             write_logs=True,
                         ),
                         func_name="identity",
-                        tqdm_cls=_FakeTqdm,
+                        tqdm_cls=_FakeTqdm,  # type: ignore[arg-type]
                     )
                     mp_ctx = mp_mod.build_multiprocess_context(
                         backend=backend_ctx,

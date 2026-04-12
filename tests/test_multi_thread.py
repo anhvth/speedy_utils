@@ -37,6 +37,7 @@ def test_process_vs_thread_heavy():
     out_proc = multi_process(
         fibonacci,
         inp,
+        num_procs=4,
         num_threads=4,
         progress=False,
         backend="spawn",
@@ -77,6 +78,7 @@ def test_process_faster_than_thread_for_cpu_bound():
     result_mp = multi_process(
         fibonacci,
         inp,
+        num_procs=4,
         num_threads=4,
         progress=False,
         backend="spawn",
