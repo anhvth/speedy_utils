@@ -390,10 +390,10 @@ def load_by_ext(fname: str | list[str], do_memoize: bool = False) -> Any:
         if isinstance(fname, str) and '*' in fname:
             paths = glob(fname)
             paths = sorted(paths)
-            return multi_process(load_by_ext, paths, workers=16)
+            return multi_process(load_by_ext, paths, num_procs=16)
         if isinstance(fname, list):
             paths = fname
-            return multi_process(load_by_ext, paths, workers=16)
+            return multi_process(load_by_ext, paths, num_procs=16)
 
         def load_csv(path: str, **pd_kwargs) -> Any:
             import pandas as pd

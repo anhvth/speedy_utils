@@ -92,61 +92,10 @@ def test_thread_ordered_results():
         square,
         list(range(20)),
         num_threads=3,
-        ordered=True,
         progress=False,
         backend="thread",
     )
     assert result == [x * x for x in range(20)]
-
-
-def test_thread_unordered_results():
-    result = multi_process(
-        square,
-        list(range(20)),
-        num_threads=3,
-        ordered=False,
-        progress=False,
-        backend="thread",
-    )
-    assert sorted(result) == [x * x for x in range(20)]
-
-
-def test_workers_alias_for_num_procs():
-    with pytest.deprecated_call(match="num_procs"):
-        result = multi_process(
-            square,
-            list(range(5)),
-            workers=2,
-            num_threads=1,
-            progress=False,
-            backend="thread",
-        )
-    assert result == [0, 1, 4, 9, 16]
-
-
-def test_workers_and_num_procs_still_runs_with_thread_backend():
-    with pytest.deprecated_call(match="num_procs"):
-        result = multi_process(
-            square,
-            [1, 2, 3],
-            workers=2,
-            num_procs=3,
-            num_threads=1,
-            progress=False,
-            backend="thread",
-        )
-    assert result == [1, 4, 9]
-
-
-def test_inputs_alias_for_items():
-    result = multi_process(
-        square,
-        inputs=[1, 2, 3],
-        num_threads=2,
-        progress=False,
-        backend="thread",
-    )
-    assert result == [1, 4, 9]
 
 
 def test_mp_lazy_output_returns_paths():

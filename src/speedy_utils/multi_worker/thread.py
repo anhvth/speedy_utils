@@ -1,8 +1,35 @@
-import linecache
-import queue
+from __future__ import annotations
 
-from ..__imports import *
-from .process import ErrorHandlerType, ErrorStats
+import ctypes
+import inspect
+import linecache
+import os
+import queue
+import sys
+import threading
+import time
+import traceback
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from dataclasses import dataclass
+from heapq import heappop, heappush
+from itertools import islice
+from types import MappingProxyType
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Generic,
+    Iterable,
+    Iterator,
+    Mapping,
+    Sequence,
+    TypeVar,
+    cast,
+)
+
+from loguru import logger
+
+from .common import ErrorHandlerType, ErrorStats
 
 
 try:
@@ -13,13 +40,9 @@ except ImportError:  # pragma: no cover
 try:
     from rich.console import Console
     from rich.panel import Panel
-    from rich.syntax import Syntax
-    from rich.text import Text
 except ImportError:  # pragma: no cover
     Console = None  # type: ignore[assignment, misc]
     Panel = None  # type: ignore[assignment, misc]
-    Syntax = None  # type: ignore[assignment, misc]
-    Text = None  # type: ignore[assignment, misc]
 
 # Sensible defaults
 DEFAULT_WORKERS = (os.cpu_count() or 4) * 2
@@ -73,7 +96,7 @@ class UserFunctionError(Exception):
 
     def format_rich(self) -> None:
         """Format and print error with rich panels and code context."""
-        if Console is None or Panel is None or Text is None:
+        if Console is None or Panel is None:
             # Fallback to plain text
             print(str(self), file=sys.stderr)
             return
@@ -123,23 +146,6 @@ class UserFunctionError(Exception):
             f'{self.original_exception}'
         )
         console.print()
-
-
-def _get_code_context(filename: str, lineno: int, context_lines: int = 3) -> list[str]:
-    """Get code context around a line with line numbers and highlighting."""
-    lines: list[str] = []
-    start = max(1, lineno - context_lines)
-    end = lineno + context_lines
-
-    for i in range(start, end + 1):
-        line = linecache.getline(filename, i)
-        if not line:
-            continue
-        line = line.rstrip()
-        marker = '❱' if i == lineno else ' '
-        lines.append(f'  {i:4d} {marker} {line}')
-
-    return lines
 
 
 def _get_code_context_rich(
@@ -225,7 +231,7 @@ def _worker(
         )
 
     try:
-        return func(item)
+        return func(item, **fixed_kwargs)
     except Exception as exc:
         # Extract user code traceback (filter out infrastructure)
         exc_tb = sys.exc_info()[2]
@@ -463,6 +469,198 @@ class _ResultCollector(Generic[R]):
         return self._results
 
 
+@dataclass(frozen=True)
+class _ThreadPreparedInputs:
+    inputs: Iterable[Any]
+    items_list: list[Any] | None
+    logical_total: int | None
+    progress_total: int | None
+    batch: int
+
+
+@dataclass
+class _ThreadPoolState:
+    collector: _ResultCollector[Any]
+    inflight: set[Future[Any]]
+    completed_items: int = 0
+    next_logical_idx: int = 0
+
+    def items_inflight(self) -> int:
+        return self.next_logical_idx - self.completed_items
+
+
+def _normalize_error_handler(
+    *,
+    stop_on_error: bool | None,
+    error_handler: ErrorHandlerType,
+) -> ErrorHandlerType:
+    if stop_on_error is None:
+        return error_handler
+
+    import warnings
+
+    warnings.warn(
+        'stop_on_error is deprecated, use error_handler instead',
+        DeprecationWarning,
+        stacklevel=3,
+    )
+    return 'raise' if stop_on_error else 'log'
+
+
+def _coerce_dataframe_inputs(inputs: Iterable[T]) -> Iterable[T]:
+    try:
+        import pandas as pd
+
+        if isinstance(inputs, pd.DataFrame):
+            return cast(Iterable[T], inputs.to_dict(orient='records'))
+    except ImportError:  # pragma: no cover - optional dependency
+        pass
+    return cast(Iterable[T], inputs)
+
+
+def _logical_len(inputs: Iterable[Any]) -> int | None:
+    try:
+        return len(inputs)  # type: ignore[arg-type]
+    except Exception:  # pragma: no cover - generic iterable
+        return None
+
+
+def _resolve_batch_size(batch: int, logical_total: int | None, workers: int) -> int:
+    if batch == 1 and logical_total and logical_total / max(workers, 1) > 20_000:
+        return 32
+    return batch
+
+
+def _prepare_thread_inputs(
+    *,
+    inputs: Iterable[T],
+    batch: int,
+    workers: int,
+    error_handler: ErrorHandlerType,
+    progress: bool,
+    progress_weight: Callable[[T], int] | None,
+    progress_total: int | None,
+) -> _ThreadPreparedInputs:
+    logical_total = _logical_len(inputs)
+    batch = _resolve_batch_size(batch, logical_total, workers)
+
+    items_list: list[Any] | None = None
+    needs_materialized_inputs = error_handler != 'raise' or (
+        progress and progress_weight is not None and progress_total is None
+    )
+    if needs_materialized_inputs:
+        try:
+            items_list = list(inputs)
+            inputs = cast(Iterable[T], items_list)
+            logical_total = len(items_list)
+        except Exception:
+            items_list = None
+
+    effective_progress_total = progress_total
+    if effective_progress_total is None:
+        if progress_weight is None:
+            effective_progress_total = logical_total
+        elif items_list is not None:
+            effective_progress_total = sum(
+                _progress_units_for_item(item, progress_weight=progress_weight)
+                for item in items_list
+            )
+
+    return _ThreadPreparedInputs(
+        inputs=inputs,
+        items_list=items_list,
+        logical_total=logical_total,
+        progress_total=effective_progress_total,
+        batch=batch,
+    )
+
+
+def _build_caller_context() -> traceback.FrameSummary | None:
+    caller_frame_obj = inspect.currentframe()
+    if caller_frame_obj is None or caller_frame_obj.f_back is None:
+        return None
+    caller_info = inspect.getframeinfo(caller_frame_obj.f_back)
+    return traceback.FrameSummary(
+        caller_info.filename,
+        caller_info.lineno,
+        caller_info.function,
+    )
+
+
+def _run_multi_process_fanout(
+    func: Callable[[T], R],
+    inputs: Iterable[T],
+    *,
+    workers: int | None,
+    batch: int,
+    ordered: bool,
+    progress: bool,
+    progress_update: int,
+    prefetch_factor: int,
+    timeout: float | None,
+    error_handler: ErrorHandlerType,
+    max_error_files: int,
+    n_proc: int,
+    fixed_kwargs: Mapping[str, Any],
+) -> list[R | None]:
+    import tempfile
+
+    from fastcore.all import threaded
+
+    from speedy_utils import load_by_ext
+
+    items = list(inputs)
+    if not items:
+        return []
+
+    n_per_proc = max(len(items) // n_proc, 1)
+    chunks = [items[i : i + n_per_proc] for i in range(0, len(items), n_per_proc)]
+    in_process_multi_thread = threaded(process=True)(multi_thread)
+    results: list[R | None] = []
+    processes: list[tuple[Any, str]] = []
+
+    for proc_idx, chunk in enumerate(chunks):
+        with tempfile.NamedTemporaryFile(delete=False, suffix='multi_thread.pkl') as fh:
+            file_pkl = fh.name
+        assert isinstance(in_process_multi_thread, Callable)
+        proc = in_process_multi_thread(
+            func,
+            chunk,
+            workers=workers,
+            batch=batch,
+            ordered=ordered,
+            progress=progress and proc_idx == 0,
+            progress_update=progress_update,
+            prefetch_factor=prefetch_factor,
+            timeout=timeout,
+            error_handler=error_handler,
+            max_error_files=max_error_files,
+            n_proc=0,
+            store_output_pkl_file=file_pkl,
+            **fixed_kwargs,
+        )
+        processes.append((proc, file_pkl))
+
+    for proc, file_pkl in processes:
+        proc.join()
+        logger.info('process finished: {}', proc)
+        try:
+            results.extend(load_by_ext(file_pkl))
+        finally:
+            try:
+                os.unlink(file_pkl)
+            except OSError as exc:  # pragma: no cover - best effort cleanup
+                logger.warning('failed to remove temp file {}: {}', file_pkl, exc)
+
+    return results
+
+
+def _input_value_for_error(items_list: list[Any] | None, idx: int) -> Any:
+    if items_list is None or idx >= len(items_list):
+        return None
+    return items_list[idx]
+
+
 def _safe_worker_limit() -> int | None:
     raw_limit = os.getenv(_SAFE_WORKER_LIMIT_ENV)
     if raw_limit is not None:
@@ -654,76 +852,30 @@ def multi_thread(  # type: ignore[misc]
         Collected results, preserving order when requested. Failed tasks yield
         ``None`` entries if ``error_handler`` is not 'raise'.
     """
-    from speedy_utils import dump_json_or_pickle, load_by_ext
+    from speedy_utils import dump_json_or_pickle
 
-    # Handle deprecated stop_on_error parameter
-    if stop_on_error is not None:
-        import warnings
-
-        warnings.warn(
-            'stop_on_error is deprecated, use error_handler instead',
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        error_handler = 'raise' if stop_on_error else 'log'
-
+    error_handler = _normalize_error_handler(
+        stop_on_error=stop_on_error,
+        error_handler=error_handler,
+    )
     if n_proc > 1:
-        import tempfile
+        return _run_multi_process_fanout(
+            func,
+            inputs,
+            workers=workers,
+            batch=batch,
+            ordered=ordered,
+            progress=progress,
+            progress_update=progress_update,
+            prefetch_factor=prefetch_factor,
+            timeout=timeout,
+            error_handler=error_handler,
+            max_error_files=max_error_files,
+            n_proc=n_proc,
+            fixed_kwargs=fixed_kwargs,
+        )
 
-        from fastcore.all import threaded
-
-        items = list(inputs)
-        if not items:
-            return []
-        n_per_proc = max(len(items) // n_proc, 1)
-        chunks = [items[i : i + n_per_proc] for i in range(0, len(items), n_per_proc)]
-        procs = []
-        in_process_multi_thread = threaded(process=True)(multi_thread)
-        results: list[R | None] = []
-
-        for proc_idx, chunk in enumerate(chunks):
-            with tempfile.NamedTemporaryFile(
-                delete=False, suffix='multi_thread.pkl'
-            ) as fh:
-                file_pkl = fh.name
-            assert isinstance(in_process_multi_thread, Callable)
-            proc = in_process_multi_thread(
-                func,
-                chunk,
-                workers=workers,
-                batch=batch,
-                ordered=ordered,
-                progress=proc_idx == 0,
-                progress_update=progress_update,
-                prefetch_factor=prefetch_factor,
-                timeout=timeout,
-                error_handler=error_handler,
-                max_error_files=max_error_files,
-                n_proc=0,
-                store_output_pkl_file=file_pkl,
-                **fixed_kwargs,
-            )
-            procs.append((proc, file_pkl))
-
-        for proc, file_pkl in procs:
-            proc.join()
-            logger.info('process finished: %s', proc)
-            try:
-                results.extend(load_by_ext(file_pkl))
-            finally:
-                try:
-                    os.unlink(file_pkl)
-                except OSError as exc:  # pragma: no cover - best effort cleanup
-                    logger.warning('failed to remove temp file %s: %s', file_pkl, exc)
-        return results
-
-    try:
-        import pandas as pd
-
-        if isinstance(inputs, pd.DataFrame):
-            inputs = cast(Iterable[T], inputs.to_dict(orient='records'))
-    except ImportError:  # pragma: no cover - optional dependency
-        pass
+    inputs = _coerce_dataframe_inputs(inputs)
 
     if batch <= 0:
         raise ValueError('batch must be a positive integer')
@@ -740,29 +892,24 @@ def multi_thread(  # type: ignore[misc]
         if progress_total < 0:
             raise ValueError('progress_total must be a non-negative integer')
 
-    try:
-        logical_total = len(inputs)  # type: ignore[arg-type]
-    except Exception:  # pragma: no cover - generic iterable
-        logical_total = None
-
-    if batch == 1 and logical_total and logical_total / max(workers_val, 1) > 20_000:
-        batch = 32
-
-    items_list: list[Any] | None = None
-    needs_materialized_inputs = error_handler != 'raise' or (
-        progress and progress_weight is not None and progress_total is None
+    prepared_inputs = _prepare_thread_inputs(
+        inputs=inputs,
+        batch=batch,
+        workers=workers_val,
+        error_handler=error_handler,
+        progress=progress,
+        progress_weight=progress_weight,
+        progress_total=progress_total,
     )
-    if needs_materialized_inputs:
-        try:
-            items_list = list(inputs)
-            inputs = items_list
-            logical_total = len(items_list)
-        except Exception:
-            items_list = None
+    batch = prepared_inputs.batch
+    items_list = prepared_inputs.items_list
+    logical_total = prepared_inputs.logical_total
+    effective_progress_total = prepared_inputs.progress_total
 
-    src_iter: Iterator[Any] = iter(inputs)
+    src_iter: Iterator[Any] = iter(prepared_inputs.inputs)
     if batch > 1:
         src_iter = iter(_group_iter(src_iter, batch))
+
     collector: _ResultCollector[Any] = _ResultCollector(ordered, logical_total)
 
     # Initialize error stats for error handling
@@ -772,27 +919,7 @@ def multi_thread(  # type: ignore[misc]
         max_error_files=max_error_files,
         write_logs=error_handler == 'log',
     )
-
-    effective_progress_total = progress_total
-    if effective_progress_total is None:
-        if progress_weight is None:
-            effective_progress_total = logical_total
-        elif items_list is not None:
-            effective_progress_total = sum(
-                _progress_units_for_item(item, progress_weight=progress_weight)
-                for item in items_list
-            )
-
-    # Capture caller context for error reporting
-    caller_frame_obj = inspect.currentframe()
-    caller_context: traceback.FrameSummary | None = None
-    if caller_frame_obj and caller_frame_obj.f_back:
-        caller_info = inspect.getframeinfo(caller_frame_obj.f_back)
-        caller_context = traceback.FrameSummary(
-            caller_info.filename,
-            caller_info.lineno,
-            caller_info.function,
-        )
+    caller_context = _build_caller_context()
 
     deadline = time.monotonic() + timeout if timeout is not None else None
     max_inflight = max(workers_val * prefetch_factor, 1)
@@ -800,13 +927,7 @@ def multi_thread(  # type: ignore[misc]
         # Scale in-flight logical items so we still keep
         # ~workers*prefetch_factor futures active when batching.
         max_inflight *= batch
-    completed_items = 0
-    next_logical_idx = 0
-
-    def items_inflight() -> int:
-        return next_logical_idx - completed_items
-
-    inflight: set[Future[Any]] = set()
+    state = _ThreadPoolState(collector=collector, inflight=set())
     reporter = _ProgressReporter(
         enabled=progress,
         total=effective_progress_total,
@@ -826,7 +947,6 @@ def multi_thread(  # type: ignore[misc]
     try:
 
         def submit_arg(arg: Any) -> None:
-            nonlocal next_logical_idx
             if batch > 1:
                 batch_items = list(arg)
                 if not batch_items:
@@ -845,43 +965,43 @@ def multi_thread(  # type: ignore[misc]
                 )
                 fut = pool.submit(_worker, arg, func, fixed_kwargs_map, caller_context)
                 logical_size = 1
-            _attach_metadata(fut, next_logical_idx, logical_size)
+            _attach_metadata(fut, state.next_logical_idx, logical_size)
             fut._speedy_progress_units = progress_units
-            next_logical_idx += logical_size
-            inflight.add(fut)
+            state.next_logical_idx += logical_size
+            state.inflight.add(fut)
             _track_executor_threads(pool)
 
         try:
-            while items_inflight() < max_inflight:
+            while state.items_inflight() < max_inflight:
                 submit_arg(next(src_iter))
         except StopIteration:
             pass
 
-        while inflight:
+        while state.inflight:
             wait_timeout = None
             if deadline is not None:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    _cancel_futures(inflight)
+                    _cancel_futures(state.inflight)
                     raise TimeoutError(
                         f'multi_thread timed out after {timeout} seconds',
                     )
                 wait_timeout = max(remaining, 0.0)
 
             done, _ = wait(
-                inflight,
+                state.inflight,
                 timeout=wait_timeout,
                 return_when=FIRST_COMPLETED,
             )
 
             if not done:
-                _cancel_futures(inflight)
+                _cancel_futures(state.inflight)
                 raise TimeoutError(
                     f'multi_thread timed out after {timeout} seconds',
                 )
 
             for fut in done:
-                inflight.remove(fut)
+                state.inflight.remove(fut)
                 idx, logical_size, progress_units = _future_meta(fut)
                 try:
                     result = fut.result()
@@ -895,13 +1015,10 @@ def multi_thread(  # type: ignore[misc]
                         sys.stdout.flush()
                         exc.format_rich()
                         sys.stderr.flush()
-                        _cancel_futures(inflight)
+                        _cancel_futures(state.inflight)
                         sys.exit(1)
 
-                    # Log error with ErrorStats
-                    input_val = None
-                    if items_list is not None and idx < len(items_list):
-                        input_val = items_list[idx]
+                    input_val = _input_value_for_error(items_list, idx)
                     error_stats.record_error(
                         idx, exc.original_exception, input_val, func_name
                     )
@@ -909,38 +1026,36 @@ def multi_thread(  # type: ignore[misc]
                 except Exception as exc:
                     # Other errors (infrastructure, batching, etc.)
                     if error_handler == 'raise':
-                        _cancel_futures(inflight)
+                        _cancel_futures(state.inflight)
                         raise
 
-                    input_val = None
-                    if items_list is not None and idx < len(items_list):
-                        input_val = items_list[idx]
+                    input_val = _input_value_for_error(items_list, idx)
                     error_stats.record_error(idx, exc, input_val, func_name)
                     out_items = [None] * logical_size
                 else:
                     try:
                         out_items = _normalize_batch_result(result, logical_size)
                     except Exception as exc:
-                        _cancel_futures(inflight)
+                        _cancel_futures(state.inflight)
                         raise RuntimeError(
                             'batched callable returned an unexpected shape',
                         ) from exc
 
-                collector.add(idx, out_items)
-                completed_items += len(out_items)
+                state.collector.add(idx, out_items)
+                state.completed_items += len(out_items)
                 reporter.advance(progress_units)
 
             try:
-                while items_inflight() < max_inflight:
+                while state.items_inflight() < max_inflight:
                     submit_arg(next(src_iter))
             except StopIteration:
                 pass
 
-        results = collector.finalize()
+        results = state.collector.finalize()
 
     except KeyboardInterrupt:
         shutdown_kwargs = {'wait': False, 'cancel_futures': True}
-        _cancel_futures(inflight)
+        _cancel_futures(state.inflight)
         kill_all_thread(SystemExit)
         raise KeyboardInterrupt() from None
     finally:
@@ -950,7 +1065,7 @@ def multi_thread(  # type: ignore[misc]
             pool.shutdown(shutdown_kwargs.get('wait', True))
         reporter.close()
 
-    results = collector.finalize() if 'results' not in locals() else results
+    results = state.collector.finalize() if 'results' not in locals() else results
     if store_output_pkl_file:
         dump_json_or_pickle(results, store_output_pkl_file)
     _prune_dead_threads()
@@ -1017,9 +1132,9 @@ def kill_all_thread(
                 terminated += 1
                 thread.join(timeout=join_timeout)
             else:
-                logger.warning('Unable to signal thread %s', thread.name)
+                logger.warning('Unable to signal thread {}', thread.name)
         except Exception as exc:  # pragma: no cover - defensive
-            logger.error('Failed to stop thread %s: %s', thread.name, exc)
+            logger.error('Failed to stop thread {}: {}', thread.name, exc)
     _prune_dead_threads()
     return terminated
 

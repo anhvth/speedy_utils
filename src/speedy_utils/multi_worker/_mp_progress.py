@@ -27,7 +27,6 @@ def build_progress_desc(
     backend: str,
     num_procs: int | None = None,
     num_threads: int | None = None,
-    workers: int | None = None,
 ) -> str:
     """Build a compact progress label with backend topology."""
     base_desc = desc.strip() if desc and desc.strip() else "Multi-process"
@@ -40,7 +39,7 @@ def build_progress_desc(
         return f"{base_desc} [mp: {proc_count}p]"
 
     if backend == "thread":
-        thread_count = max(1, workers or num_threads or 1)
+        thread_count = max(1, num_threads or 1)
         return f"{base_desc} [thread: {thread_count}t]"
 
     return f"{base_desc} [seq]"

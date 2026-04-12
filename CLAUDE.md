@@ -9,13 +9,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 uv sync
 
 # Run tests
-uv run pytest -n 32
+./tools/uv_test.sh -n 32
 
 # Run a single test file
-uv run pytest tests/test_thread.py
+./tools/uv_test.sh tests/test_thread.py
 
 # Run with verbose output
-uv run pytest -v
+./tools/uv_test.sh -v
 
 # Check import time (must be < 0.4s)
 uv run python -c "import time; start=time.perf_counter(); import speedy_utils; print(f'{time.perf_counter()-start:.3f}s')"
@@ -183,6 +183,7 @@ The package provides these CLI commands:
 - Ignore rules `E402`, `F401`, `F403` in `__init__.py` files for lazy import patterns
 - Quote style: double quotes
 - Avoid hacky workarounds like sys.path.insert
+- Follow `CODE_STYLE.md` for general style guidelines
 
 ## Type Checking with Pyright
 

@@ -1,6 +1,4 @@
-"""
-Tests for the updated multi_process functionality with process_update_interval.
-"""
+"""Tests for multi_process progress and error behavior."""
 
 import queue
 import time
@@ -29,18 +27,16 @@ def failing_function(x):
     return x
 
 
-def test_process_update_interval():
-    """Test that the process_update_interval parameter works correctly."""
+def test_process_basic_execution():
+    """Test that multi_process maps values correctly."""
     # Create a list of 20 items to process
     test_input = list(range(20))
 
-    # Run multi_process with progress=True and process_update_interval=5.
     result = multi_process(
         slow_identity,
         test_input,
         num_threads=2,
         progress=False,  # Disable progress to avoid fastcore's progress bar
-        process_update_interval=5,
         backend="thread",
     )
 
@@ -66,13 +62,12 @@ def test_worker_error_handling():
     assert result == [1, 2, 3, 4]
 
 
-def test_batch_parameter():
-    """Test the batch parameter for multi_process."""
+def test_thread_backend_basic_map():
+    """Test thread backend mapping with default settings."""
     # Create a list of 20 items to process
     test_input = list(range(20))
 
-    # Process with batch=5
-    result = multi_process(identity, test_input, batch=5, backend="thread")
+    result = multi_process(identity, test_input, backend="thread")
 
     # Check results
     assert result == test_input
@@ -203,32 +198,47 @@ def test_mp_progress_bar_appears_before_process_start_and_refreshes_while_idle()
         original_init(self, *args, **kwargs)
 
     with patch.object(_FakeTqdm, "__init__", _recording_init):
-        with patch("speedy_utils.multi_worker._multi_process.tqdm", _FakeTqdm):
-            with patch("speedy_utils.multi_worker._multi_process.mp.get_context", return_value=_FakeContext()):
-                with patch("speedy_utils.multi_worker._multi_process.psutil.Process", side_effect=lambda pid: pid):
-                    with patch("speedy_utils.multi_worker._multi_process._track_processes", return_value=None):
-                        result = mp_mod._run_multiprocess_backend(
-                            func=identity,
-                            cache_dir=None,
-                            dump_in_thread=True,
-                            items=[1, 2],
-                            total=2,
-                            num_procs=2,
-                            num_threads=1,
-                            desc="Test MP",
-                            progress=True,
-                            func_kwargs={},
-                            log_worker="first",
-                            log_gate_path=None,
-                            error_handler="log",
-                            error_stats=mp_mod.ErrorStats(
-                                func_name="identity",
-                                max_error_files=10,
-                                write_logs=True,
-                            ),
+        with patch(
+            "speedy_utils.multi_worker._mp_backends.mp.get_context",
+            return_value=_FakeContext(),
+        ):
+            with patch(
+                "speedy_utils.multi_worker._mp_backends.psutil.Process",
+                side_effect=lambda pid: pid,
+            ):
+                with patch(
+                    "speedy_utils.multi_worker._mp_backends._track_processes",
+                    return_value=None,
+                ):
+                    backend_ctx = mp_mod.build_backend_context(
+                        f_wrapped=identity,
+                        items=[1, 2],
+                        total=2,
+                        desc="Test MP",
+                        progress=True,
+                        func_kwargs={},
+                        log_worker="first",
+                        log_gate_path=None,
+                        error_handler="log",
+                        error_stats=mp_mod.ErrorStats(
                             func_name="identity",
                             max_error_files=10,
-                        )
+                            write_logs=True,
+                        ),
+                        func_name="identity",
+                        tqdm_cls=_FakeTqdm,
+                    )
+                    mp_ctx = mp_mod.build_multiprocess_context(
+                        backend=backend_ctx,
+                        func=identity,
+                        cache_dir=None,
+                        dump_in_thread=True,
+                        num_procs=2,
+                        num_threads=1,
+                        max_error_files=10,
+                        caller_info=None,
+                    )
+                    result = mp_mod.run_multiprocess_backend(mp_ctx)
 
     assert result == [None, None]
     assert _FAKE_MP_ORDER[0] == "bar"
@@ -282,45 +292,48 @@ def test_mp_parent_logs_first_error_path():
     _FakeTqdm.created.clear()
     _FAKE_MP_ORDER.clear()
 
-    with patch("speedy_utils.multi_worker._multi_process.tqdm", _FakeTqdm):
+    with patch("speedy_utils.multi_worker._mp_backends.mp.get_context", return_value=_ErrorLogContext()):
         with patch(
-            "speedy_utils.multi_worker._multi_process.mp.get_context",
-            return_value=_ErrorLogContext(),
+            "speedy_utils.multi_worker._mp_backends.psutil.Process",
+            side_effect=lambda pid: pid,
         ):
             with patch(
-                "speedy_utils.multi_worker._multi_process.psutil.Process",
-                side_effect=lambda pid: pid,
+                "speedy_utils.multi_worker._mp_backends._track_processes",
+                return_value=None,
             ):
                 with patch(
-                    "speedy_utils.multi_worker._multi_process._track_processes",
-                    return_value=None,
-                ):
-                    with patch(
-                        "speedy_utils.multi_worker._multi_process.logger"
-                    ) as mock_logger:
-                        mock_logger.opt.return_value.warning = MagicMock()
-                        result = mp_mod._run_multiprocess_backend(
-                            func=identity,
-                            cache_dir=None,
-                            dump_in_thread=True,
-                            items=[1, 2],
-                            total=2,
-                            num_procs=2,
-                            num_threads=1,
-                            desc="Test MP",
-                            progress=True,
-                            func_kwargs={},
-                            log_worker="first",
-                            log_gate_path=None,
-                            error_handler="log",
-                            error_stats=mp_mod.ErrorStats(
-                                func_name="identity",
-                                max_error_files=10,
-                                write_logs=True,
-                            ),
+                    "speedy_utils.multi_worker._mp_backends.logger"
+                ) as mock_logger:
+                    mock_logger.opt.return_value.warning = MagicMock()
+                    backend_ctx = mp_mod.build_backend_context(
+                        f_wrapped=identity,
+                        items=[1, 2],
+                        total=2,
+                        desc="Test MP",
+                        progress=True,
+                        func_kwargs={},
+                        log_worker="first",
+                        log_gate_path=None,
+                        error_handler="log",
+                        error_stats=mp_mod.ErrorStats(
                             func_name="identity",
                             max_error_files=10,
-                        )
+                            write_logs=True,
+                        ),
+                        func_name="identity",
+                        tqdm_cls=_FakeTqdm,
+                    )
+                    mp_ctx = mp_mod.build_multiprocess_context(
+                        backend=backend_ctx,
+                        func=identity,
+                        cache_dir=None,
+                        dump_in_thread=True,
+                        num_procs=2,
+                        num_threads=1,
+                        max_error_files=10,
+                        caller_info=None,
+                    )
+                    result = mp_mod.run_multiprocess_backend(mp_ctx)
 
     assert result == [None, None]
     mock_logger.opt.return_value.warning.assert_called_once_with(

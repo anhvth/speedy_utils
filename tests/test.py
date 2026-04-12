@@ -29,7 +29,10 @@ def test_multi_process_success():
 
     inputs = range(5)
     results = multi_process(
-        func=multiply_by_three, inputs=inputs, workers=2, progress=False
+        func=multiply_by_three,
+        items=inputs,
+        num_procs=2,
+        progress=False,
     )
     expected = [x * 3 for x in inputs]
     assert results == expected, f"Expected {expected}, got {results}"
@@ -40,8 +43,8 @@ def test_multi_process_with_kwargs():
     inputs = range(5)
     results = multi_process(
         func=multiply,
-        inputs=inputs,
-        workers=2,
+        items=inputs,
+        num_procs=2,
         progress=False,
         factor=4,  # Pass as kwarg
     )

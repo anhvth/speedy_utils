@@ -124,8 +124,6 @@ def test_batch_ordered():
     out = multi_process(
         square,
         inp,
-        batch=4,
-        ordered=True,
         num_threads=4,
         progress=False,
         backend="thread",
@@ -138,16 +136,15 @@ def test_unordered():
     out = multi_process(
         square,
         inp,
-        ordered=False,
         num_threads=8,
         progress=False,
         backend="thread",
     )
-    assert sorted(out) == [i * i for i in inp]
+    assert out == [i * i for i in inp]
 
 
 def test_stop_on_error_false():
-    """Test that with stop_on_error=False, errors don't halt processing."""
+    """Test that log-mode error handling continues processing."""
     inp = list(range(5))
     result = multi_process(
         maybe_fail,
@@ -265,11 +262,10 @@ def test_mp_unordered_returns_full_result_set():
         inp,
         num_procs=2,
         num_threads=3,
-        ordered=False,
         progress=False,
         backend="mp",
     )
-    assert sorted(out) == [i * i for i in inp]
+    assert out == [i * i for i in inp]
 
 
 def test_mp_notebook_style_main_callable():
@@ -388,33 +384,6 @@ def test_mp_notebook_callable_with_sslcontext_global_regression():
             backend="mp",
         )
     assert out == [1, 2, 3]
-
-
-def test_workers_alias_maps_to_num_procs():
-    inp = list(range(10))
-    with pytest.deprecated_call(match="num_procs"):
-        out = multi_process(
-            square,
-            inp,
-            workers=2,
-            num_threads=2,
-            progress=False,
-            backend="mp",
-        )
-    assert out == [i * i for i in inp]
-
-
-def test_workers_and_num_procs_prefers_num_procs():
-    with pytest.deprecated_call(match="num_procs"):
-        out = multi_process(
-            square,
-            [1, 2, 3],
-            workers=2,
-            num_procs=3,
-            progress=False,
-            backend="mp",
-        )
-    assert out == [1, 4, 9]
 
 
 def test_safe_backend_ignores_num_procs_and_honors_num_threads():

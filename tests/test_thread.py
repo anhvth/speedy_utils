@@ -1,6 +1,7 @@
 # tests/test_multi_thread.py
 import threading
 import time
+from typing import Callable, cast
 
 import pytest
 
@@ -55,6 +56,15 @@ def test_scalar_extra_default():
 
     inp = [1, 2, 3]
     assert multi_thread(f, inp, progress=False) == [6, 7, 8]
+
+
+def test_fixed_kwargs_forwarded():
+    def f(x, y):
+        return _sleepy(x + y)
+
+    inp = [1, 2, 3]
+    typed_f = cast(Callable[[int], int], f)
+    assert multi_thread(typed_f, inp, progress=False, y=5) == [6, 7, 8]
 
 
 # ────────────────────────────────────────────────────────────
