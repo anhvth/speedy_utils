@@ -4,6 +4,6 @@
 set -e
 
 # Number of workers (default: auto-detect CPU count)
-WORKERS="${1:-auto}"
+WORKERS="${1:-16}"
 
 uv run pytest -n "$WORKERS" "${@:2}"
