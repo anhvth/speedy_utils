@@ -104,6 +104,7 @@ class LLM:
             cache=cache,
             api_key=self.api_key,
         )
+        primary_models_response: Any | None = None
 
         # Handle list of clients for load balancing
         if isinstance(raw_clients, list):
@@ -119,7 +120,7 @@ class LLM:
             self._clients = [raw_clients]
             # check connection of client
             try:
-                raw_clients.models.list()
+                primary_models_response = raw_clients.models.list()
                 self._alive_clients = [raw_clients]
             except Exception as e:
                 logger.error(
@@ -127,14 +128,16 @@ class LLM:
                 )
                 raise e
 
+        if primary_models_response is None:
+            primary_models_response = self._alive_clients[0].models.list()
+        primary_models = primary_models_response.data
+
         if verbose:
-            available_models = [
-                model.id for model in self._alive_clients[0].models.list().data
-            ]
+            available_models = [model.id for model in primary_models]
             logger.info(f"Available models: {available_models}")
 
         if not self.model_kwargs.get("model", ""):
-            self.model_kwargs["model"] = self._alive_clients[0].models.list().data[0].id
+            self.model_kwargs["model"] = primary_models[0].id
 
         self._multiple_clients = len(self._alive_clients) > 1
         self._client_balance_lock = threading.Lock()

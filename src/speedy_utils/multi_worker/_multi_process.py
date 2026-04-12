@@ -1,768 +1,222 @@
 """Multi-process dispatcher without Ray support.
 
-This module keeps the surviving `seq`, `mp`, and thread-backed execution paths
-while removing the Ray-specific backend and its plumbing.
+This module now keeps the public orchestration readable by delegating the real
+subsystems to private siblings:
+
+- spawn/importability support
+- progress/reporting helpers
+- backend execution loops
 """
 
 from __future__ import annotations
 
-import concurrent.futures
-import importlib
-import inspect
 import multiprocessing as mp
 import os
 import queue
 import sys
 import threading
-import traceback
 import warnings
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterable, Literal
+from typing import Any, Callable, Iterable, Literal, cast
 
 import psutil
 from loguru import logger
 from tqdm import tqdm
 
+from . import _mp_spawn as _spawn
+from ._mp_backends import (
+    MpWorkerContext,
+    _caller_info_from_stack,
+    build_backend_context,
+    bump_error_count,
+    chunk_indexed_items,
+    multiprocess_entrypoint,
+    run_seq_backend,
+    run_threadpool_backend,
+    terminate_processes,
+)
+from ._mp_progress import (
+    MpProgressState,
+    build_multiprocess_postfix,
+    build_progress_desc,
+    refresh_progress_bar,
+    set_progress_postfix,
+    start_mp_progress_monitor,
+)
+from ._mp_spawn import (
+    _serialize_exception_frames,
+    _SpawnFallbackRequired,
+    patched_spawn_environment,
+    prepare_spawn_callable,
+    validate_spawn_kwargs,
+)
 from .common import (
     ErrorHandlerType,
     ErrorStats,
     _build_cache_dir,
-    _call_with_log_control,
     _cleanup_log_gate,
     _display_formatted_error_and_exit,
-    _exit_on_worker_error,
-    _prune_dead_processes,
-    _ThreadLocalStream,
     _track_processes,
     create_log_gate_path,
     wrap_dump,
 )
 
 
-try:
-    from .thread import _prune_dead_threads, _track_executor_threads
-except ImportError:  # pragma: no cover - optional compatibility
-    _prune_dead_threads = None  # type: ignore[assignment]
-    _track_executor_threads = None  # type: ignore[assignment]
+BackendName = Literal["seq", "mp", "thread"]
 
+_deserialize_spawn_callable = _spawn._deserialize_spawn_callable
+_infer_importable_module = _spawn._infer_importable_module
+_serialize_spawn_callable = _spawn._serialize_spawn_callable
 
-def _chunk_indexed_items(
-    indexed_items: list[tuple[int, Any]],
-    num_procs: int,
-) -> list[list[tuple[int, Any]]]:
-    """Split indexed items into contiguous chunks for worker processes."""
-    if not indexed_items:
-        return []
-    proc_count = max(1, min(num_procs, len(indexed_items)))
-    chunk_size = max((len(indexed_items) + proc_count - 1) // proc_count, 1)
-    return [
-        indexed_items[start : start + chunk_size]
-        for start in range(0, len(indexed_items), chunk_size)
-    ]
 
+@dataclass(frozen=True)
+class NormalizedRequest:
+    items: list[Any]
+    backend: BackendName
+    num_procs: int | None
+    num_threads: int
+    workers: int | None
 
-def _resolve_attr_path(root: Any, attr_path: str) -> Any:
-    current = root
-    for part in attr_path.split("."):
-        current = getattr(current, part)
-    return current
 
+@dataclass(frozen=True)
+class PreparedRun:
+    func: Callable[[Any], Any]
+    cache_dir: Path | None
+    dump_in_thread: bool
+    max_error_files: int
+    backend_ctx: Any
 
-def _is_spawn_importable_callable(func: Callable[[Any], Any]) -> bool:
-    """Return True when `spawn` can re-import this callable by name."""
-    module_name = getattr(func, "__module__", None)
-    qualname = getattr(func, "__qualname__", None)
-    if not module_name or not qualname:
-        return False
-    if module_name == "__main__" or "<locals>" in qualname:
-        return False
 
-    try:
-        module = importlib.import_module(module_name)
-        resolved = _resolve_attr_path(module, qualname)
-    except (AttributeError, ImportError):
-        return False
-    return resolved is func
-
-
-_MISSING = object()
-
-
-class _SpawnFallbackRequired(RuntimeError):
-    """Internal signal that mp spawn payload is not serializable."""
-
-    def __init__(self, *, reason: str, exc: Exception) -> None:
-        super().__init__(f"{reason}: {type(exc).__name__}: {exc}")
-        self.reason = reason
-        self.exc = exc
-
-
-def _patch_main_spec_for_spawn() -> tuple[Any, Any]:
-    """Temporarily give ``__main__`` a real ``__spec__`` before spawning.
-
-    When multiprocessing uses the ``spawn`` start method, each child is
-    bootstrapped by calling ``prepare(data)`` which includes calling
-    ``init_main_from_path`` when ``__main__.__spec__`` is ``None`` (i.e. the
-    parent was started as ``python script.py``).  ``init_main_from_path``
-    re-executes the user's script in every child, which causes infinite
-    recursion when the script contains top-level ``multi_process`` calls
-    and also crashes if the script has assertions on the results.
-
-    By temporarily setting ``__main__.__spec__`` to our own module's spec
-    *before* calling ``proc.start()``, ``get_preparation_data()`` uses
-    ``init_main_from_name`` (safe package import) instead, completely skipping
-    ``init_main_from_path``.  We restore the original spec afterwards.
-
-    Returns ``(main_module, original_spec)`` for restoration via
-    :func:`_restore_main_spec_for_spawn`.
-    """
-    main = sys.modules.get("__main__")
-    if main is None:
-        return None, _MISSING
-    original_spec = main.__dict__.get("__spec__", _MISSING)
-    if original_spec is not _MISSING and original_spec is not None:
-        # Already has a real spec (e.g. running as ``python -m pkg``); no patch.
-        return None, _MISSING
-    # Use our own module's spec so children import-by-name instead.
-    our_mod = sys.modules.get(__name__)
-    our_spec = getattr(our_mod, "__spec__", None) if our_mod else None
-    if our_spec is None:
-        return None, _MISSING
-    # Suppress the RuntimeWarning that runpy emits when it re-runs a module
-    # that was already imported (harmless side-effect of _fixup_main_from_name).
-    import warnings
-
-    warnings.filterwarnings(
-        "ignore",
-        message=r".*found in sys\.modules after import.*",
-        category=RuntimeWarning,
-        module=r"runpy",
-    )
-    main.__spec__ = our_spec
-    return main, original_spec
-
-
-def _restore_main_spec_for_spawn(state: tuple[Any, Any]) -> None:
-    """Undo the temporary ``__spec__`` patch set by :func:`_patch_main_spec_for_spawn`."""
-    main, original_spec = state
-    if main is None:
-        return
-    if original_spec is _MISSING:
-        main.__dict__.pop("__spec__", None)
-    else:
-        main.__spec__ = original_spec
-
-
-def _infer_importable_module(func: Callable[[Any], Any]) -> tuple[str, str] | None:
-    """For a ``__main__`` function, discover its real importable module.
-
-    When a user runs ``python src/pkg/mod.py``, the function's
-    ``__module__`` is ``"__main__"``, but the file is actually part of an
-    installed package.  This helper walks ``sys.path`` to find the
-    matching dotted module name so the child process can re-import by
-    reference instead of relying on ``dill`` serialization (which breaks
-    with pydantic models under ``from __future__ import annotations``).
-    """
-    qualname = getattr(func, "__qualname__", None)
-    if not qualname or "<locals>" in qualname:
-        return None
-
-    try:
-        source_file = inspect.getfile(func)
-    except (TypeError, OSError):
-        return None
-
-    source_path = Path(source_file).resolve()
-
-    # sys.path[0] is the directory of the running script (or the CWD when
-    # invoked as ``python dir/``).  Importing a module found there would
-    # re-execute the user's script (since it's importable by its own
-    # basename).  We exclude that entry to avoid silent re-execution.
-    _main_module = sys.modules.get("__main__")
-    _main_file = getattr(_main_module, "__file__", None)
-    _script_dir: Path | None = None
-    if _main_file and getattr(_main_module, "__spec__", None) is None:
-        # Running as ``python script.py'' — sys.path[0] is the script dir.
-        _script_dir = Path(_main_file).resolve().parent
-
-    for sp in sorted(sys.path, key=len, reverse=True):
-        if not sp:
-            continue
-        sp_path = Path(sp).resolve()
-        if _script_dir is not None and sp_path == _script_dir:
-            continue  # Skip the script's own dir to prevent re-execution
-        try:
-            rel = source_path.relative_to(sp_path)
-        except ValueError:
-            continue
-
-        parts = list(rel.parts)
-        if parts[-1].endswith(".py"):
-            parts[-1] = parts[-1][:-3]
-        if parts[-1] == "__init__":
-            parts = parts[:-1]
-
-        module_name = ".".join(parts)
-        if not module_name or module_name == "__main__":
-            continue
-
-        try:
-            mod = importlib.import_module(module_name)
-            resolved = _resolve_attr_path(mod, qualname)
-        except (ImportError, AttributeError):
-            continue
-
-        # Accept if the code objects match (identity may differ because
-        # __main__ and the re-imported module are separate copies).
-        if resolved is func:
-            return (module_name, qualname)
-        resolved_code = getattr(resolved, "__code__", None)
-        func_code = getattr(func, "__code__", None)
-        if (
-            resolved_code is not None
-            and func_code is not None
-            and resolved_code == func_code
-        ):
-            return (module_name, qualname)
-
-    return None
-
-
-def _ensure_module_globals(module_name: str | None, script_path: str | None) -> None:
-    """Populate module globals by re-importing the source in the child process.
-
-    For ``__main__`` functions this re-runs the script via
-    :func:`runpy.run_path` with a non-``"__main__"`` run-name so that
-    ``if __name__ == "__main__":`` guards are respected.  User-defined
-    globals (imports, constants, objects) are copied into the child's
-    ``__main__`` namespace so that ``dill`` can resolve name references
-    on deserialization.
-    """
-    if module_name == "__main__" and script_path:
-        import runpy
-
-        mod_dict = runpy.run_path(script_path, run_name="__mp_child__")
-        _skip = {
-            "__builtins__",
-            "__name__",
-            "__file__",
-            "__doc__",
-            "__spec__",
-            "__loader__",
-            "__package__",
-            "__cached__",
-            "__annotations__",
-        }
-        target = sys.modules["__main__"].__dict__
-        for key, value in mod_dict.items():
-            if key not in _skip:
-                target[key] = value
-    elif module_name and module_name != "__main__":
-        importlib.import_module(module_name)
-
-
-def _serialize_spawn_callable(func: Callable[[Any], Any]) -> bytes:
-    """Serialize non-importable callables for the notebook fallback path.
-
-    Tries import-by-reference first (for __main__ functions whose source
-    file is actually an installed package).  Falls back to dill.
-    """
-    import pickle
-
-    # --- Fast path: the function lives in __main__ but is actually part
-    # of an importable package (e.g. ``python src/pkg/mod.py``).
-    # Store (module_name, qualname) so the child can just re-import.
-    importable = _infer_importable_module(func)
-    if importable is not None:
-        return pickle.dumps(
-            {
-                "_v": 1,
-                "import_ref": True,
-                "module_name": importable[0],
-                "qualname": importable[1],
-            }
-        )
-
-    try:
-        import dill
-    except ImportError as exc:  # pragma: no cover - dependency contract
-        raise RuntimeError(
-            "multi_process(..., backend='mp') needs 'dill' when the callable "
-            "is defined in __main__, locally, or otherwise cannot be imported "
-            "by child processes started with 'spawn'."
-        ) from exc
-
-    # Try full serialization first (handles closures, nested functions, etc.)
-    try:
-        func_bytes = dill.dumps(func, recurse=True)
-        return pickle.dumps({"_v": 1, "shallow": False, "func_bytes": func_bytes})
-    except (TypeError, pickle.PicklingError):
-        pass
-
-    # Full serialization failed — fall back to shallow mode.
-    # recurse=False stores global references by name only, avoiding
-    # serialization of the module dict (which may contain SSLContext etc).
-    func_bytes = dill.dumps(func, recurse=False)
-
-    module_name = getattr(func, "__module__", None)
-    script_path = None
-    if module_name == "__main__":
-        main_mod = sys.modules.get("__main__")
-        if main_mod and hasattr(main_mod, "__file__"):
-            script_path = main_mod.__file__
-
-    return pickle.dumps(
-        {
-            "_v": 1,
-            "shallow": True,
-            "func_bytes": func_bytes,
-            "module_name": module_name,
-            "script_path": script_path,
-        }
-    )
-
-
-def _deserialize_spawn_callable(payload: bytes) -> Callable[[Any], Any]:
-    """Restore a callable serialized for the notebook fallback path."""
-    import pickle
-
-    import dill
-
-    try:
-        data = pickle.loads(payload)
-    except Exception:
-        # Legacy format: raw dill bytes
-        return dill.loads(payload)
-
-    if not isinstance(data, dict) or data.get("_v") != 1:
-        return dill.loads(payload)
-
-    # --- Import-by-reference path (no dill needed) ---
-    if data.get("import_ref"):
-        mod = importlib.import_module(data["module_name"])
-        return _resolve_attr_path(mod, data["qualname"])
-
-    if data.get("shallow"):
-        _ensure_module_globals(data.get("module_name"), data.get("script_path"))
-
-    try:
-        return dill.loads(data["func_bytes"])
-    except RecursionError:
-        raise RuntimeError(
-            "dill deserialization hit infinite recursion (likely a pydantic "
-            "model with `from __future__ import annotations`). Run via "
-            "`python -m <module>` or use the tools/ wrapper so the worker "
-            "function is importable by reference."
-        ) from None
-
-
-def _serialize_exception_frames(exc: Exception) -> list[tuple[str, int, str, dict]]:
-    """Extract a picklable traceback payload for cross-process reporting."""
-    tb = exc.__traceback__
-    if tb is None:
-        return []
-    return [
-        (frame.filename, frame.lineno or 0, frame.name, {})
-        for frame in traceback.extract_tb(tb)
-    ]
-
-
-def _probe_spawn_picklable(obj: Any) -> None:
-    """Raise when an object cannot be pickled for multiprocessing spawn."""
-    from multiprocessing.reduction import ForkingPickler
-
-    ForkingPickler.dumps(obj)
-
-
-def _bump_error_count(error_stats: ErrorStats, err_inc: int) -> None:
-    if err_inc <= 0:
-        return
-    with error_stats._lock:  # type: ignore[attr-defined]
-        error_stats._error_count += err_inc  # type: ignore[attr-defined]
-
-
-def _terminate_processes(processes: list[mp.Process]) -> None:
-    """Best-effort shutdown for spawned worker processes."""
-    for proc in processes:
-        if proc.is_alive():
-            proc.terminate()
-    for proc in processes:
-        proc.join(timeout=1)
-    _prune_dead_processes()
-
-
-def _build_progress_desc(
+def _normalize_request(
     *,
-    desc: str | None,
-    backend: Literal["seq", "mp", "thread"],
-    num_procs: int | None = None,
-    num_threads: int | None = None,
-    workers: int | None = None,
-) -> str:
-    """Build a compact progress label with backend topology."""
-    base_desc = desc.strip() if desc and desc.strip() else "Multi-process"
-
-    if backend == "mp":
-        proc_count = max(1, num_procs or 1)
-        thread_count = max(1, num_threads or 1)
-        if thread_count > 1:
-            return f"{base_desc} [mp: {proc_count}p x {thread_count}t]"
-        return f"{base_desc} [mp: {proc_count}p]"
-
-    if backend == "thread":
-        thread_count = max(1, workers or num_threads or 1)
-        return f"{base_desc} [thread: {thread_count}t]"
-
-    return f"{base_desc} [seq]"
-
-
-def _set_progress_postfix(pbar: tqdm, postfix: dict[str, Any]) -> None:
-    """Update tqdm postfix without forcing an immediate redraw."""
-    try:
-        pbar.set_postfix(postfix, refresh=False)
-    except TypeError:
-        pbar.set_postfix(postfix)
-
-
-def _refresh_progress_bar(pbar: tqdm) -> None:
-    """Force a visible redraw when tqdm is available."""
-    refresh = getattr(pbar, "refresh", None)
-    if callable(refresh):
-        refresh()
-
-
-def _build_multiprocess_postfix(
-    *,
-    error_stats: ErrorStats,
-    processes: list[mp.Process],
-    total_processes: int | None = None,
-    started_tasks: int = 0,
-    active_tasks: int = 0,
-) -> dict[str, Any]:
-    """Return compact parent-owned status for the multiprocessing bar."""
-    postfix: dict[str, Any] = error_stats.get_postfix_dict()
-    expected_processes = (
-        total_processes if total_processes is not None else len(processes)
-    )
-    if expected_processes:
-        live_processes = sum(1 for proc in processes if proc.exitcode is None)
-        postfix["proc"] = f"{live_processes}/{expected_processes}"
-    postfix["start"] = started_tasks
-    postfix["active"] = active_tasks
-    return postfix
-
-
-def _start_mp_progress_monitor(
-    *,
-    pbar: tqdm,
-    pbar_lock: threading.Lock,
-    stop_event: threading.Event,
-    error_stats: ErrorStats,
-    processes: list[mp.Process],
-    processes_lock: threading.Lock,
-    total_processes: int,
-    progress_state: dict[str, int],
-    interval: float = 0.1,
-) -> threading.Thread:
-    """Keep the multiprocessing tqdm visible even while workers are warming up."""
-
-    def _monitor() -> None:
-        while not stop_event.wait(interval):
-            with pbar_lock:
-                with processes_lock:
-                    processes_snapshot = list(processes)
-                _set_progress_postfix(
-                    pbar,
-                    _build_multiprocess_postfix(
-                        error_stats=error_stats,
-                        processes=processes_snapshot,
-                        total_processes=total_processes,
-                        started_tasks=progress_state["started"],
-                        active_tasks=progress_state["active"],
-                    ),
-                )
-                _refresh_progress_bar(pbar)
-
-    thread = threading.Thread(
-        target=_monitor,
-        name="speedy-mp-progress",
-        daemon=True,
-    )
-    thread.start()
-    return thread
-
-
-def _run_seq_backend(
-    *,
-    f_wrapped: Callable[[Any], Any],
-    items: list[Any],
-    total: int,
-    desc: str,
-    progress: bool,
-    func_kwargs: dict[str, Any],
-    log_worker: Literal["zero", "first", "all"],
-    log_gate_path: Path | None,
-    error_handler: ErrorHandlerType,
-    error_stats: ErrorStats,
-    func_name: str,
-    update_pbar_postfix: Callable[[tqdm], None],
-) -> list[Any]:
-    """Run sequential execution in the current process."""
-    results: list[Any] = []
-    with tqdm(
-        total=total,
-        desc=desc,
-        disable=not progress,
-        file=sys.stdout,
-        dynamic_ncols=True,
-    ) as pbar:
-        for idx, item in enumerate(items):
-            try:
-                result = _call_with_log_control(
-                    f_wrapped,
-                    item,
-                    func_kwargs,
-                    log_worker,
-                    log_gate_path,
-                )
-                error_stats.record_success()
-                results.append(result)
-            except Exception as exc:
-                if error_handler == "raise":
-                    raise
-                error_stats.record_error(idx, exc, item, func_name)
-                results.append(None)
-            pbar.update(1)
-            update_pbar_postfix(pbar)
-    _cleanup_log_gate(log_gate_path)
-    return results
-
-
-def _run_threadpool_backend(
-    *,
-    backend_label: str,
-    f_wrapped: Callable[[Any], Any],
-    items: list[Any],
-    total: int,
+    items: Iterable[Any] | None,
+    inputs: Iterable[Any] | None,
     workers: int | None,
-    desc: str,
-    progress: bool,
-    func_kwargs: dict[str, Any],
-    log_worker: Literal["zero", "first", "all"],
-    log_gate_path: Path | None,
-    error_handler: ErrorHandlerType,
-    error_stats: ErrorStats,
-    func_name: str,
-    update_pbar_postfix: Callable[[tqdm], None],
-) -> list[Any]:
-    """Run the in-process thread pool backend."""
-    original_stdout = sys.stdout
-    original_stderr = sys.stderr
-    sys.stdout = _ThreadLocalStream(original_stdout)
-    sys.stderr = _ThreadLocalStream(original_stderr)
-
-    caller_frame = inspect.currentframe()
-    caller_info = None
-    if caller_frame and caller_frame.f_back and caller_frame.f_back.f_back:
-        outer = caller_frame.f_back.f_back
-        caller_info = {
-            "filename": outer.f_code.co_filename,
-            "lineno": outer.f_lineno,
-            "function": outer.f_code.co_name,
-        }
-
-    def worker_func(x: Any) -> Any:
-        return _call_with_log_control(
-            f_wrapped,
-            x,
-            func_kwargs,
-            log_worker,
-            log_gate_path,
-        )
-
-    try:
-        results: list[Any] = [None] * total
-        with tqdm(
-            total=total,
-            desc=desc,
-            disable=not progress,
-            file=sys.stdout,
-            dynamic_ncols=True,
-        ) as pbar:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-                if _track_executor_threads is not None:
-                    _track_executor_threads(executor)
-
-                future_to_idx = {
-                    executor.submit(worker_func, item): idx
-                    for idx, item in enumerate(items)
-                }
-
-                for future in concurrent.futures.as_completed(future_to_idx):
-                    idx = future_to_idx[future]
-                    try:
-                        result = future.result()
-                        error_stats.record_success()
-                        results[idx] = result
-                    except Exception as exc:
-                        if error_handler == "raise":
-                            for pending in future_to_idx:
-                                pending.cancel()
-                            _exit_on_worker_error(
-                                exc,
-                                pbar,
-                                caller_info,
-                                backend=backend_label,
-                            )
-                        error_stats.record_error(idx, exc, items[idx], func_name)
-                        results[idx] = None
-                    pbar.update(1)
-                    update_pbar_postfix(pbar)
-
-            if _prune_dead_threads is not None:
-                _prune_dead_threads()
-
-        _cleanup_log_gate(log_gate_path)
-        return results
-    finally:
-        sys.stdout = original_stdout
-        sys.stderr = original_stderr
-
-
-def _run_mp_chunk(
-    *,
-    chunk: list[tuple[int, Any]],
-    func: Callable[[Any], Any] | None,
-    serialized_func: bytes | None,
-    cache_dir: Path | None,
-    dump_in_thread: bool,
+    num_procs: int | None,
     num_threads: int,
-    func_kwargs: dict[str, Any],
-    log_worker: Literal["zero", "first", "all"],
-    log_gate_path: Path | None,
-    error_handler: ErrorHandlerType,
-    max_error_files: int,
-    func_name: str,
-    event_queue: mp.queues.Queue,
-) -> None:
-    """Execute one process chunk, optionally with a per-process thread pool."""
-    try:
-        if serialized_func is not None:
-            func = _deserialize_spawn_callable(serialized_func)
-        if func is None:
-            raise ValueError("func or serialized_func must be provided")
-    except Exception:
-        # Deserialization failed — still signal the parent so it doesn't
-        # wait forever for a process_done that would never arrive.
-        event_queue.put(("process_done", os.getpid()))
-        raise
+    backend: str | None,
+    stop_on_error: bool | None,
+) -> tuple[NormalizedRequest, ErrorHandlerType | None]:
+    """Normalize API aliases and compatibility shims near the boundary."""
+    compat_error_handler: ErrorHandlerType | None = None
 
-    f_wrapped = wrap_dump(func, cache_dir, dump_in_thread)
-    child_error_stats = (
-        ErrorStats(
-            func_name=func_name, max_error_files=max_error_files, write_logs=True
+    if stop_on_error is not None:
+        warnings.warn(
+            "stop_on_error is deprecated, use error_handler instead",
+            DeprecationWarning,
+            stacklevel=3,
         )
-        if error_handler == "log"
-        else None
+        compat_error_handler = "raise" if stop_on_error else "log"
+
+    if num_threads <= 0:
+        raise ValueError("num_threads must be a positive integer")
+
+    if workers is not None:
+        warnings.warn(
+            "'workers' is deprecated for multi_process; use 'num_procs' instead",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        if num_procs is None:
+            num_procs = workers
+
+    if items is None and inputs is not None:
+        items = inputs
+    if items is None:
+        raise ValueError("'items' or 'inputs' must be provided")
+
+    normalized_items = list(items)
+    normalized_backend = "mp" if backend is None else backend
+    if normalized_backend == "safe":
+        warnings.warn(
+            "'safe' backend is deprecated; use 'thread' instead",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        normalized_backend = "thread"
+
+    if normalized_backend not in {"seq", "mp", "thread"}:
+        raise ValueError(f"Unsupported backend: {normalized_backend!r}")
+
+    if num_procs is None and normalized_backend == "mp":
+        num_procs = os.cpu_count() or 1
+
+    typed_backend = cast(BackendName, normalized_backend)
+
+    return (
+        NormalizedRequest(
+            items=normalized_items,
+            backend=typed_backend,
+            num_procs=num_procs,
+            num_threads=num_threads,
+            workers=workers,
+        ),
+        compat_error_handler,
     )
-    child_error_count = 0
-
-    def process_one(payload: tuple[int, Any]) -> Any:
-        nonlocal child_error_count
-        idx, item = payload
-        event_queue.put(("started", 1))
-        try:
-            result = _call_with_log_control(
-                f_wrapped,
-                item,
-                func_kwargs,
-                log_worker,
-                log_gate_path,
-            )
-        except Exception as exc:
-            if child_error_stats is not None:
-                child_error_count += 1
-                if child_error_count <= max_error_files:
-                    log_path = child_error_stats._write_error_log(  # type: ignore[attr-defined]
-                        idx,
-                        exc,
-                        item,
-                        func_name,
-                    )
-                    if log_path is not None:
-                        event_queue.put(("error_log", log_path))
-            event_queue.put(("progress", 0, 1))
-            if error_handler == "raise":
-                event_queue.put(
-                    (
-                        "fatal",
-                        type(exc).__name__,
-                        str(exc),
-                        _serialize_exception_frames(exc),
-                    )
-                )
-                raise
-            return None
-
-        event_queue.put(("result", idx, result))
-        event_queue.put(("progress", 1, 0))
-        return result
-
-    try:
-        if num_threads <= 1:
-            for payload in chunk:
-                try:
-                    process_one(payload)
-                except Exception:
-                    if error_handler == "raise":
-                        return
-            return
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
-            futures = [executor.submit(process_one, payload) for payload in chunk]
-            for future in concurrent.futures.as_completed(futures):
-                try:
-                    future.result()
-                except Exception:
-                    if error_handler == "raise":
-                        for pending in futures:
-                            pending.cancel()
-                        return
-    finally:
-        event_queue.put(("process_done", os.getpid()))
 
 
-def _multiprocess_entrypoint(
-    chunk: list[tuple[int, Any]],
-    func: Callable[[Any], Any] | None,
-    serialized_func: bytes | None,
-    cache_dir: Path | None,
+def _prepare_run(
+    *,
+    func: Callable[[Any], Any],
+    request: NormalizedRequest,
+    lazy_output: bool,
+    progress: bool,
+    desc: str | None,
     dump_in_thread: bool,
-    num_threads: int,
-    func_kwargs: dict[str, Any],
     log_worker: Literal["zero", "first", "all"],
-    log_gate_path: Path | None,
     error_handler: ErrorHandlerType,
     max_error_files: int,
-    func_name: str,
-    event_queue: mp.queues.Queue,
-) -> None:
-    """Multiprocessing target wrapper."""
-    _run_mp_chunk(
-        chunk=chunk,
-        func=func,
-        serialized_func=serialized_func,
-        cache_dir=cache_dir,
-        dump_in_thread=dump_in_thread,
-        num_threads=num_threads,
+    func_kwargs: dict[str, Any],
+) -> PreparedRun:
+    """Create the shared backend context once after normalization."""
+    cache_dir = _build_cache_dir(func, request.items) if lazy_output else None
+    f_wrapped = wrap_dump(func, cache_dir, dump_in_thread)
+    log_gate_path = create_log_gate_path(log_worker)
+    func_name = getattr(func, "__name__", repr(func))
+    error_stats = ErrorStats(
+        func_name=func_name,
+        max_error_files=max_error_files,
+        write_logs=error_handler == "log",
+    )
+    backend_ctx = build_backend_context(
+        f_wrapped=f_wrapped,
+        items=request.items,
+        total=len(request.items),
+        desc=build_progress_desc(
+            desc=desc,
+            backend=request.backend,
+            num_procs=request.num_procs,
+            num_threads=request.num_threads,
+            workers=request.workers,
+        ),
+        progress=progress,
         func_kwargs=func_kwargs,
         log_worker=log_worker,
         log_gate_path=log_gate_path,
         error_handler=error_handler,
-        max_error_files=max_error_files,
+        error_stats=error_stats,
         func_name=func_name,
-        event_queue=event_queue,
+        tqdm_cls=tqdm,
     )
+    return PreparedRun(
+        func=func,
+        cache_dir=cache_dir,
+        dump_in_thread=dump_in_thread,
+        max_error_files=max_error_files,
+        backend_ctx=backend_ctx,
+    )
+
+
+def _thread_workers_for_request(request: NormalizedRequest) -> int:
+    workers = request.num_threads
+    if workers == 1 and request.workers is not None:
+        return request.workers
+    return workers
+
+
+def _update_error_postfix(pbar: tqdm, error_stats: ErrorStats) -> None:
+    set_progress_postfix(pbar, error_stats.get_postfix_dict())
 
 
 def _run_multiprocess_backend(
@@ -785,317 +239,201 @@ def _run_multiprocess_backend(
     max_error_files: int,
 ) -> list[Any]:
     """Run the multiprocessing backend with one parent-owned progress bar."""
-    caller_frame = inspect.currentframe()
-    caller_info = None
-    if caller_frame and caller_frame.f_back and caller_frame.f_back.f_back:
-        outer = caller_frame.f_back.f_back
-        caller_info = {
-            "filename": outer.f_code.co_filename,
-            "lineno": outer.f_lineno,
-            "function": outer.f_code.co_name,
-        }
-
-    indexed_items = list(enumerate(items))
-    chunks = _chunk_indexed_items(indexed_items, num_procs)
+    caller_info = _caller_info_from_stack(depth=2)
+    chunks = chunk_indexed_items(list(enumerate(items)), num_procs)
     if not chunks:
         _cleanup_log_gate(log_gate_path)
         return []
 
-    serialized_func = None
-    process_func: Callable[[Any], Any] | None = func
-    if not _is_spawn_importable_callable(func):
-        try:
-            serialized_func = _serialize_spawn_callable(func)
-        except Exception as exc:
-            raise _SpawnFallbackRequired(
-                reason="callable serialization failed",
-                exc=exc,
-            ) from exc
-        process_func = None
-    else:
-        try:
-            _probe_spawn_picklable(process_func)
-        except Exception as exc:
-            raise _SpawnFallbackRequired(
-                reason="callable is not spawn-picklable",
-                exc=exc,
-            ) from exc
-
-    try:
-        _probe_spawn_picklable(func_kwargs)
-    except Exception as exc:
-        raise _SpawnFallbackRequired(
-            reason="func kwargs are not spawn-picklable",
-            exc=exc,
-        ) from exc
-
-    # Prevent children from re-executing __main__ (the user's script) via
-    # init_main_from_path.  By temporarily giving __main__ a real __spec__,
-    # get_preparation_data() uses init_main_from_name (safe package import)
-    # instead.  The env-var guard is kept as an additional safety net.
-    _spec_patch_state = _patch_main_spec_for_spawn()
-    _prev_child_flag = os.environ.get("_SPEEDY_MP_CHILD")
-    os.environ["_SPEEDY_MP_CHILD"] = "1"
-    # Suppress the harmless RuntimeWarning that runpy emits in each child when
-    # _fixup_main_from_name re-runs a module that was already imported while
-    # unpickling the target function.
-    _speedy_warn_filter = "ignore::RuntimeWarning:runpy"
-    _prev_pywarn = os.environ.get("PYTHONWARNINGS", "")
-    if _speedy_warn_filter not in _prev_pywarn:
-        os.environ["PYTHONWARNINGS"] = f"{_prev_pywarn},{_speedy_warn_filter}".lstrip(
-            ","
-        )
+    process_func, serialized_func = prepare_spawn_callable(func)
+    validate_spawn_kwargs(func_kwargs)
 
     ctx = mp.get_context("spawn")
     event_queue = ctx.Queue()
     processes: list[mp.Process] = []
     total_processes = len(chunks)
+    worker_ctx = MpWorkerContext(
+        func=process_func,
+        serialized_func=serialized_func,
+        cache_dir=cache_dir,
+        dump_in_thread=dump_in_thread,
+        num_threads=num_threads,
+        func_kwargs=func_kwargs,
+        log_worker=log_worker,
+        log_gate_path=log_gate_path,
+        error_handler=error_handler,
+        max_error_files=max_error_files,
+        func_name=func_name,
+    )
 
     try:
-        results: list[Any] = [None] * total
-        done_processes = 0
-        progress_state = {"started": 0, "active": 0}
-        announced_error_log = False
+        with patched_spawn_environment():
+            results: list[Any] = [None] * total
+            done_processes = 0
+            announced_error_log = False
+            state = MpProgressState()
 
-        with tqdm(
-            total=total,
-            desc=desc,
-            disable=not progress,
-            file=sys.stdout,
-            dynamic_ncols=True,
-        ) as pbar:
-            pbar_lock = threading.Lock()
-            processes_lock = threading.Lock()
-            stop_event = threading.Event()
-            spawn_done = threading.Event()
-            monitor_thread = _start_mp_progress_monitor(
-                pbar=pbar,
-                pbar_lock=pbar_lock,
-                stop_event=stop_event,
-                error_stats=error_stats,
-                processes=processes,
-                processes_lock=processes_lock,
-                total_processes=total_processes,
-                progress_state=progress_state,
-            )
+            with tqdm(
+                total=total,
+                desc=desc,
+                disable=not progress,
+                file=sys.stdout,
+                dynamic_ncols=True,
+            ) as pbar:
+                pbar_lock = threading.Lock()
+                processes_lock = threading.Lock()
+                stop_event = threading.Event()
+                spawn_done = threading.Event()
 
-            def _spawn_processes() -> None:
-                try:
-                    for chunk in chunks:
-                        proc = ctx.Process(
-                            target=_multiprocess_entrypoint,
-                            args=(
-                                chunk,
-                                process_func,
-                                serialized_func,
-                                cache_dir,
-                                dump_in_thread,
-                                num_threads,
-                                func_kwargs,
-                                log_worker,
-                                log_gate_path,
-                                error_handler,
-                                max_error_files,
-                                func_name,
-                                event_queue,
-                            ),
-                        )
-                        proc.start()
-                        with processes_lock:
-                            processes.append(proc)  # type: ignore[arg-type]
-                            processes_snapshot = list(processes)
-                        with pbar_lock:
-                            _set_progress_postfix(
-                                pbar,
-                                _build_multiprocess_postfix(
-                                    error_stats=error_stats,
-                                    processes=processes_snapshot,
-                                    total_processes=total_processes,
-                                    started_tasks=progress_state["started"],
-                                    active_tasks=progress_state["active"],
-                                ),
-                            )
-                            _refresh_progress_bar(pbar)
-
-                    tracked: list[psutil.Process] = []
+                def _process_snapshot() -> list[mp.Process]:
                     with processes_lock:
-                        processes_snapshot = list(processes)
-                    for proc in processes_snapshot:
-                        if proc.pid is None:
-                            continue
-                        try:
-                            tracked.append(psutil.Process(proc.pid))
-                        except (psutil.NoSuchProcess, psutil.AccessDenied):
-                            continue
-                    _track_processes(tracked)
-                except Exception as exc:
-                    event_queue.put(
-                        (
-                            "spawn_error",
-                            type(exc).__name__,
-                            str(exc),
-                            _serialize_exception_frames(exc),
-                        )
+                        return list(processes)
+
+                def _sync_pbar() -> None:
+                    set_progress_postfix(
+                        pbar,
+                        build_multiprocess_postfix(
+                            error_stats=error_stats,
+                            processes=_process_snapshot(),
+                            state=state,
+                            total_processes=total_processes,
+                        ),
                     )
-                finally:
-                    spawn_done.set()
+                    refresh_progress_bar(pbar)
 
-            spawn_thread = threading.Thread(
-                target=_spawn_processes,
-                name="speedy-mp-spawn",
-                daemon=True,
-            )
-            with pbar_lock:
-                _set_progress_postfix(
-                    pbar,
-                    _build_multiprocess_postfix(
-                        error_stats=error_stats,
-                        processes=processes,
-                        total_processes=total_processes,
-                        started_tasks=progress_state["started"],
-                        active_tasks=progress_state["active"],
-                    ),
+                monitor_thread = start_mp_progress_monitor(
+                    pbar=pbar,
+                    pbar_lock=pbar_lock,
+                    stop_event=stop_event,
+                    error_stats=error_stats,
+                    processes=processes,
+                    processes_lock=processes_lock,
+                    total_processes=total_processes,
+                    state=state,
                 )
-                _refresh_progress_bar(pbar)
 
-            try:
-                spawn_thread.start()
-
-                while done_processes < total_processes:
+                def _spawn_processes() -> None:
                     try:
-                        msg = event_queue.get(timeout=0.1)
-                    except queue.Empty:
-                        with processes_lock:
-                            processes_snapshot = list(processes)
-                        if spawn_done.is_set() and all(
-                            proc.exitcode is not None for proc in processes_snapshot
-                        ):
-                            done_processes = total_processes
-                        continue
+                        for chunk in chunks:
+                            proc = ctx.Process(
+                                target=multiprocess_entrypoint,
+                                args=(chunk, worker_ctx, event_queue),
+                            )
+                            proc.start()
+                            with processes_lock:
+                                processes.append(proc)  # type: ignore[arg-type]
+                            with pbar_lock:
+                                _sync_pbar()
 
-                    tag = msg[0]
-                    if tag == "result":
-                        _, idx, result = msg
-                        results[idx] = result
-                        continue
-                    if tag == "started":
-                        _, started_inc = msg
-                        with pbar_lock:
-                            with processes_lock:
-                                processes_snapshot = list(processes)
-                            progress_state["started"] += started_inc
-                            progress_state["active"] += started_inc
-                            _set_progress_postfix(
-                                pbar,
-                                _build_multiprocess_postfix(
-                                    error_stats=error_stats,
-                                    processes=processes_snapshot,
-                                    total_processes=total_processes,
-                                    started_tasks=progress_state["started"],
-                                    active_tasks=progress_state["active"],
-                                ),
+                        tracked: list[psutil.Process] = []
+                        for proc in _process_snapshot():
+                            if proc.pid is None:
+                                continue
+                            try:
+                                tracked.append(psutil.Process(proc.pid))
+                            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                                continue
+                        _track_processes(tracked)
+                    except Exception as exc:
+                        event_queue.put(
+                            (
+                                "spawn_error",
+                                type(exc).__name__,
+                                str(exc),
+                                _serialize_exception_frames(exc),
                             )
-                            _refresh_progress_bar(pbar)
-                        continue
-                    if tag == "progress":
-                        _, ok_inc, err_inc = msg
-                        with pbar_lock:
-                            with processes_lock:
-                                processes_snapshot = list(processes)
-                            for _ in range(ok_inc):
-                                error_stats.record_success()
-                            _bump_error_count(error_stats, err_inc)
-                            progress_state["active"] = max(
-                                0,
-                                progress_state["active"] - (ok_inc + err_inc),
-                            )
-                            pbar.update(ok_inc + err_inc)
-                            _set_progress_postfix(
-                                pbar,
-                                _build_multiprocess_postfix(
-                                    error_stats=error_stats,
-                                    processes=processes_snapshot,
-                                    total_processes=total_processes,
-                                    started_tasks=progress_state["started"],
-                                    active_tasks=progress_state["active"],
-                                ),
-                            )
-                            _refresh_progress_bar(pbar)
-                        continue
-                    if tag == "process_done":
-                        done_processes += 1
-                        with pbar_lock:
-                            with processes_lock:
-                                processes_snapshot = list(processes)
-                            _set_progress_postfix(
-                                pbar,
-                                _build_multiprocess_postfix(
-                                    error_stats=error_stats,
-                                    processes=processes_snapshot,
-                                    total_processes=total_processes,
-                                    started_tasks=progress_state["started"],
-                                    active_tasks=progress_state["active"],
-                                ),
-                            )
-                            _refresh_progress_bar(pbar)
-                        continue
-                    if tag == "fatal":
-                        _, exc_type_name, exc_msg, frames = msg
-                        spawn_done.set()
-                        spawn_thread.join(timeout=1)
-                        _terminate_processes(processes)
-                        _display_formatted_error_and_exit(
-                            exc_type_name=exc_type_name,
-                            exc_msg=exc_msg,
-                            frames=frames,
-                            caller_info=caller_info,
-                            backend="mp",
-                            pbar=pbar,
                         )
-                    if tag == "spawn_error":
-                        _, exc_type_name, exc_msg, frames = msg
+                    finally:
                         spawn_done.set()
-                        spawn_thread.join(timeout=1)
-                        _terminate_processes(processes)
-                        _display_formatted_error_and_exit(
-                            exc_type_name=exc_type_name,
-                            exc_msg=exc_msg,
-                            frames=frames,
-                            caller_info=caller_info,
-                            backend="mp",
-                            pbar=pbar,
-                        )
-                    if tag == "error_log":
-                        _, log_path = msg
-                        if not announced_error_log:
-                            logger.opt(depth=1).warning("Error log: {}", log_path)
-                            announced_error_log = True
-                        continue
 
-                spawn_thread.join(timeout=1)
-                with processes_lock:
-                    processes_snapshot = list(processes)
-                for proc in processes_snapshot:
-                    proc.join()
-            finally:
-                stop_event.set()
-                monitor_thread.join(timeout=1)
+                spawn_thread = threading.Thread(
+                    target=_spawn_processes,
+                    name="speedy-mp-spawn",
+                    daemon=True,
+                )
 
-        _cleanup_log_gate(log_gate_path)
-        return results
+                with pbar_lock:
+                    _sync_pbar()
+
+                try:
+                    spawn_thread.start()
+
+                    while done_processes < total_processes:
+                        try:
+                            msg = event_queue.get(timeout=0.1)
+                        except queue.Empty:
+                            if spawn_done.is_set() and all(
+                                proc.exitcode is not None for proc in _process_snapshot()
+                            ):
+                                done_processes = total_processes
+                            continue
+
+                        tag = msg[0]
+                        if tag == "result":
+                            _, idx, result = msg
+                            results[idx] = result
+                            continue
+
+                        if tag == "started":
+                            _, started_inc = msg
+                            with pbar_lock:
+                                state.started += started_inc
+                                state.active += started_inc
+                                _sync_pbar()
+                            continue
+
+                        if tag == "progress":
+                            _, ok_inc, err_inc = msg
+                            with pbar_lock:
+                                for _ in range(ok_inc):
+                                    error_stats.record_success()
+                                bump_error_count(error_stats, err_inc)
+                                state.active = max(
+                                    0,
+                                    state.active - (ok_inc + err_inc),
+                                )
+                                pbar.update(ok_inc + err_inc)
+                                _sync_pbar()
+                            continue
+
+                        if tag == "process_done":
+                            done_processes += 1
+                            with pbar_lock:
+                                _sync_pbar()
+                            continue
+
+                        if tag in {"fatal", "spawn_error"}:
+                            _, exc_type_name, exc_msg, frames = msg
+                            spawn_done.set()
+                            spawn_thread.join(timeout=1)
+                            terminate_processes(processes)
+                            _display_formatted_error_and_exit(
+                                exc_type_name=exc_type_name,
+                                exc_msg=exc_msg,
+                                frames=frames,
+                                caller_info=caller_info,
+                                backend="mp",
+                                pbar=pbar,
+                            )
+
+                        if tag == "error_log":
+                            _, log_path = msg
+                            if not announced_error_log:
+                                logger.opt(depth=1).warning("Error log: {}", log_path)
+                                announced_error_log = True
+                            continue
+
+                    spawn_thread.join(timeout=1)
+                    for proc in _process_snapshot():
+                        proc.join()
+                finally:
+                    stop_event.set()
+                    monitor_thread.join(timeout=1)
+
+            return results
     finally:
         _cleanup_log_gate(log_gate_path)
-        _terminate_processes(processes)
-        # Restore env flags so subsequent calls are not affected.
-        if _prev_child_flag is None:
-            os.environ.pop("_SPEEDY_MP_CHILD", None)
-        else:
-            os.environ["_SPEEDY_MP_CHILD"] = _prev_child_flag
-        if _prev_pywarn:
-            os.environ["PYTHONWARNINGS"] = _prev_pywarn
-        else:
-            os.environ.pop("PYTHONWARNINGS", None)
-        _restore_main_spec_for_spawn(_spec_patch_state)
+        terminate_processes(processes)
 
 
 def multi_process(
@@ -1120,156 +458,82 @@ def multi_process(
     stop_on_error: bool | None = None,
     **func_kwargs: Any,
 ) -> list[Any]:
-    """Map `func` over `items` using the surviving non-Ray backends."""
-    # Guard: when multiprocessing 'spawn' re-executes __main__ in a child
-    # process, any top-level multi_process() call in the user's script will
-    # reach here.  Returning early prevents infinite spawn recursion.
+    """Map ``func`` over ``items`` using the surviving non-Ray backends."""
     if os.environ.get("_SPEEDY_MP_CHILD") == "1":
         return []
     del process_update_interval, batch, ordered
 
-    if stop_on_error is not None:
-        warnings.warn(
-            "stop_on_error is deprecated, use error_handler instead",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        error_handler = "raise" if stop_on_error else "log"
-
-    if num_threads <= 0:
-        raise ValueError("num_threads must be a positive integer")
-
-    if workers is not None:
-        warnings.warn(
-            "'workers' is deprecated for multi_process; use 'num_procs' instead",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        if num_procs is None:
-            num_procs = workers
-
-    if items is None and inputs is not None:
-        items = inputs
-    if items is None:
-        raise ValueError("'items' or 'inputs' must be provided")
-
-    items = list(items)
-    if not items:
-        return []
-
-    backend = "mp" if backend is None else backend
-    if backend == "safe":
-        warnings.warn(
-            "'safe' backend is deprecated; use 'thread' instead",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        backend = "thread"
-
-    if backend not in {"seq", "mp", "thread"}:
-        raise ValueError(f"Unsupported backend: {backend!r}")
-
-    if num_procs is None and backend == "mp":
-        num_procs = os.cpu_count() or 1
-
-    cache_dir = _build_cache_dir(func, items) if lazy_output else None
-    f_wrapped = wrap_dump(func, cache_dir, dump_in_thread)
-    log_gate_path = create_log_gate_path(log_worker)
-    total = len(items)
-    desc = _build_progress_desc(
-        desc=desc,
-        backend=backend,  # type: ignore[arg-type]
+    request, compat_error_handler = _normalize_request(
+        items=items,
+        inputs=inputs,
+        workers=workers,
         num_procs=num_procs,
         num_threads=num_threads,
-        workers=workers,
+        backend=backend,
+        stop_on_error=stop_on_error,
     )
+    if compat_error_handler is not None:
+        error_handler = compat_error_handler
 
-    func_name = getattr(func, "__name__", repr(func))
-    error_stats = ErrorStats(
-        func_name=func_name,
+    if not request.items:
+        return []
+
+    prepared = _prepare_run(
+        func=func,
+        request=request,
+        lazy_output=lazy_output,
+        progress=progress,
+        desc=desc,
+        dump_in_thread=dump_in_thread,
+        log_worker=log_worker,
+        error_handler=error_handler,
         max_error_files=max_error_files,
-        write_logs=error_handler == "log",
+        func_kwargs=func_kwargs,
     )
 
-    def _update_pbar_postfix(pbar: tqdm) -> None:
-        _set_progress_postfix(pbar, error_stats.get_postfix_dict())
+    def update_pbar_postfix(pbar: tqdm) -> None:
+        _update_error_postfix(pbar, prepared.backend_ctx.error_stats)
 
-    if backend == "seq":
-        return _run_seq_backend(
-            f_wrapped=f_wrapped,
-            items=items,
-            total=total,
-            desc=desc,
-            progress=progress,
-            func_kwargs=func_kwargs,
-            log_worker=log_worker,
-            log_gate_path=log_gate_path,
-            error_handler=error_handler,
-            error_stats=error_stats,
-            func_name=func_name,
-            update_pbar_postfix=_update_pbar_postfix,
+    if request.backend == "seq":
+        return run_seq_backend(
+            prepared.backend_ctx,
+            update_pbar_postfix=update_pbar_postfix,
         )
 
-    if backend == "thread":
-        safe_workers = num_threads
-        if safe_workers == 1 and workers is not None:
-            safe_workers = workers
-        return _run_threadpool_backend(
+    if request.backend == "thread":
+        return run_threadpool_backend(
+            prepared.backend_ctx,
             backend_label="thread",
-            f_wrapped=f_wrapped,
-            items=items,
-            total=total,
-            workers=safe_workers,
-            desc=desc,
-            progress=progress,
-            func_kwargs=func_kwargs,
-            log_worker=log_worker,
-            log_gate_path=log_gate_path,
-            error_handler=error_handler,
-            error_stats=error_stats,
-            func_name=func_name,
-            update_pbar_postfix=_update_pbar_postfix,
+            workers=_thread_workers_for_request(request),
+            update_pbar_postfix=update_pbar_postfix,
         )
 
-    if (num_procs or 1) <= 1:
-        # With a single process requested, avoid spawn entirely. This keeps
-        # behavior stable for non-picklable kwargs (e.g. SSLContext/OpenAI
-        # client internals) while still honoring num_threads fanout.
-        return _run_threadpool_backend(
+    if (request.num_procs or 1) <= 1:
+        return run_threadpool_backend(
+            prepared.backend_ctx,
             backend_label="thread",
-            f_wrapped=f_wrapped,
-            items=items,
-            total=total,
-            workers=num_threads,
-            desc=desc,
-            progress=progress,
-            func_kwargs=func_kwargs,
-            log_worker=log_worker,
-            log_gate_path=log_gate_path,
-            error_handler=error_handler,
-            error_stats=error_stats,
-            func_name=func_name,
-            update_pbar_postfix=_update_pbar_postfix,
+            workers=request.num_threads,
+            update_pbar_postfix=update_pbar_postfix,
         )
 
     try:
         return _run_multiprocess_backend(
-            func=func,
-            cache_dir=cache_dir,
-            dump_in_thread=dump_in_thread,
-            items=items,
-            total=total,
-            num_procs=num_procs or 1,
-            num_threads=num_threads,
-            desc=desc,
-            progress=progress,
-            func_kwargs=func_kwargs,
-            log_worker=log_worker,
-            log_gate_path=log_gate_path,
-            error_handler=error_handler,
-            error_stats=error_stats,
-            func_name=func_name,
-            max_error_files=max_error_files,
+            func=prepared.func,
+            cache_dir=prepared.cache_dir,
+            dump_in_thread=prepared.dump_in_thread,
+            items=prepared.backend_ctx.items,
+            total=prepared.backend_ctx.total,
+            num_procs=request.num_procs or 1,
+            num_threads=request.num_threads,
+            desc=prepared.backend_ctx.desc,
+            progress=prepared.backend_ctx.progress,
+            func_kwargs=prepared.backend_ctx.func_kwargs,
+            log_worker=prepared.backend_ctx.log_worker,
+            log_gate_path=prepared.backend_ctx.log_gate_path,
+            error_handler=prepared.backend_ctx.error_handler,
+            error_stats=prepared.backend_ctx.error_stats,
+            func_name=prepared.backend_ctx.func_name,
+            max_error_files=prepared.max_error_files,
         )
     except _SpawnFallbackRequired as exc:
         warnings.warn(
@@ -1280,21 +544,11 @@ def multi_process(
             RuntimeWarning,
             stacklevel=2,
         )
-        return _run_threadpool_backend(
+        return run_threadpool_backend(
+            prepared.backend_ctx,
             backend_label="thread",
-            f_wrapped=f_wrapped,
-            items=items,
-            total=total,
-            workers=num_threads,
-            desc=desc,
-            progress=progress,
-            func_kwargs=func_kwargs,
-            log_worker=log_worker,
-            log_gate_path=log_gate_path,
-            error_handler=error_handler,
-            error_stats=error_stats,
-            func_name=func_name,
-            update_pbar_postfix=_update_pbar_postfix,
+            workers=request.num_threads,
+            update_pbar_postfix=update_pbar_postfix,
         )
 
 
