@@ -443,7 +443,28 @@ def jdumps(obj, ensure_ascii=False, indent=2, **kwargs):
     return json.dumps(obj, ensure_ascii=ensure_ascii, indent=indent, **kwargs)
 
 
-load_jsonl = lambda path: list(fast_load_jsonl(path))
+def load_jsonl(path: str | os.PathLike | list) -> list:
+    """Load one or more JSONL files into a flat list.
+
+    Accepts a single path, a glob pattern (e.g. "data/*.jsonl"), or a list of paths/globs.
+    """
+    import glob as _glob
+
+    def _expand(p):
+        p = str(p)
+        matches = _glob.glob(p, recursive=True)
+        return sorted(matches) if matches else [p]
+
+    if isinstance(path, list):
+        paths = []
+        for p in path:
+            paths.extend(_expand(p))
+    else:
+        paths = _expand(str(path))
+
+    if len(paths) == 1:
+        return list(fast_load_jsonl(paths[0]))
+    return [item for p in paths for item in fast_load_jsonl(p)]
 
 __all__ = [
     'dump_json_or_pickle',
