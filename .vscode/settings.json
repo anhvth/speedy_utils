@@ -1,17 +1,6 @@
 {
-    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+    "python.defaultInterpreterPath": "/home/anhvth8/venvs/uv-base/bin/python",
     "python.terminal.activateEnvironment": true,
-    "python.analysis.extraPaths": [
-        "${workspaceFolder}/src"
-    ],
-    "python.analysis.exclude": [
-        "${workspaceFolder}/.venv/**",
-        // "${workspaceFolder}/src/vision_utils/**",
-        "**/node_modules",
-        "**/__pycache__",
-        "**/.*",
-        ".venv"
-    ],
     "files.exclude": {
         "**/.venv": true,
         "**/node_modules": true,
@@ -30,14 +19,9 @@
         "**/__pycache__/**": true,
         "**/.*": true
     },
-    "python.analysis.diagnosticSeverityOverrides": {
-        "reportAttributeAccessIssue": "none",
-        "reportInvalidTypeForm": "none",
-        "reportMissingImports": "none"
-    },
     "[python]": {
         "editor.formatOnSave": true,
-        "editor.defaultFormatter": "charliermarsh.ruff"
+        "editor.defaultFormatter": "ms-python.python"
     },
     "notebook.formatOnSave.enabled": true,
     "editor.codeActionsOnSave": {
