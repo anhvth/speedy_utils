@@ -1,10 +1,10 @@
 # Qwen3LLM Thinking Guide
 
-`Qwen3LLM` is the only model-specific thinking helper kept in this repository.
-It supports prefix continuation for Qwen3-style reasoning traces.
-It also includes a raw prefix-conditioned helper for custom staged tag flows.
+`Qwen3LLM` is the model-specific reasoning helper kept in this repository.
+It supports staged assistant-prefix continuation for Qwen3-style reasoning
+traces and custom tagged flows.
 
-## Usage
+## Basic Usage
 
 ```python
 from llm_utils import Qwen3LLM
@@ -16,7 +16,10 @@ message = llm.chat_completion(
     thinking_max_tokens=32,
     content_max_tokens=128,
 )
-print(message)
+
+print(message.content)
+print(getattr(message, "reasoning_content", None))
+print(getattr(message, "call_count", None))
 ```
 
 ## Custom Prefix Flows
@@ -49,25 +52,58 @@ final_state = llm.complete_until(
     stop="<|im_end|>",
     max_tokens=256,
 )
+
+print(final_state.generated_text)
+print(final_state.stop)
+print(final_state.call_count)
 ```
 
-## Behavior
+## Public Return Types
 
-- `chat_completion()` continues from a partial assistant prefix.
-- The default prefix starts a `<think>` block.
-- `thinking_max_tokens` caps the reasoning phase.
-- `content_max_tokens` caps the final answer phase.
-- `complete_until()` continues from a raw assistant prefix and stops on custom
-  tag boundaries.
-- The returned `assistant_prompt_prefix` includes the generated text and the
-  matched stop token when generation ends on a stop sequence.
+Current public behavior is:
 
-## Notes
+- `chat_completion()` returns an OpenAI-style `ChatCompletionMessage`
+- `complete_until()` returns a continuation-state object
+- `complete_reasoning()` returns a reasoning prefix state for `complete_content()`
+- `complete_content()` returns an OpenAI-style `ChatCompletionMessage`
 
-- Use `n=1`; prefix continuation is single-path only.
-- The returned object is an OpenAI `ChatCompletionMessage`.
-- The intermediate prefix state is internal; the returned value is an OpenAI
-  `ChatCompletionMessage`.
-- The returned message includes `call_count`, which is `1` when the model
-  finishes in one staged call and `2` when it needs a reasoning call plus a
-  follow-up content call.
+For `chat_completion()`, the returned message can include dynamic attributes such
+as:
+
+- `reasoning_content`
+- `usage`
+- `call_count`
+
+For `complete_until()`, the returned state includes:
+
+- `assistant_prompt_prefix`
+- `generated_text`
+- `stop`
+- `stop_reason`
+- `call_count`
+- `usage`
+
+## Behavior Notes
+
+- the default staged flow uses a `<think>...</think>` block
+- `thinking_max_tokens` caps the reasoning phase
+- `content_max_tokens` caps the visible answer phase
+- `complete_until()` continues from a raw assistant prefix and can include the
+  matched stop token in the stored prefix
+- prefix continuation is single-path only: use `n=1`
+
+## Tokenizer Behavior
+
+`Qwen3LLM` prefers tokenizer-backed prompt rendering when the Qwen tokenizer is
+available.
+
+If `transformers` is unavailable, the implementation falls back to text-based
+chat prompt rendering rather than failing the whole chat path.
+
+## When To Use Which Method
+
+- use `chat_completion()` for the normal Qwen3 reasoning + answer flow
+- use `complete_until()` for custom staged tags such as `<memory>` or
+  `<think_efficient>`
+- use `complete_reasoning()` and `complete_content()` when you want the built-in
+  think/content split but need to control the two phases separately

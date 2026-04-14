@@ -1,133 +1,138 @@
-# Quick Reference: generate() Method
+# Quick Reference: `LLM.generate()`
 
 ## Summary
 
-The `LLM.generate()` method provides a HuggingFace Transformers-style interface for prompt continuation via the completions API. For chat assistant-turn generation, use `LLM.chat_completion()`.
+`LLM.generate()` is the raw prompt-continuation API in `llm_utils`. It calls the
+OpenAI-compatible **completions** endpoint and returns a
+`CompletionChoice`-like object.
 
-## Basic Signature
+Use it when you already have a plain prompt string and want the backend to
+continue that prompt.
+
+## Current Signature
 
 ```python
 lm.generate(
-    input_context: str | list[int],
-    max_tokens=512,
-    temperature=1.0,
-    n=1,
-    **kwargs
-) -> dict | list[dict]
+    prompt: str,
+    *,
+    cache: bool | None = None,
+    enable_thinking: bool | None = None,
+    **runtime_kwargs,
+) -> CompletionChoice
 ```
 
-## Which method to use
+Important current constraints:
 
-- `generate()`: Continue a raw prompt through the completions API.
-- `chat_completion()`: Generate the next assistant turn from chat messages.
-- `pydantic_parse()`: Parse structured output from the chat completions API.
+- `prompt` must be a string.
+- `n=1` only. Multi-choice generation is rejected by the public API.
+- constructor defaults such as `model`, `max_tokens`, `temperature`, and `top_p`
+  are merged with `runtime_kwargs` at call time.
 
-`enable_thinking` is primarily a chat-path control. `generate()` forwards it only for backends that support the same flag on the completions endpoint.
+## Which Method To Use
 
-## Common Use Cases
+- `generate()`: continue a raw prompt through the completions API.
+- `chat_completion()`: generate the next assistant turn from chat messages.
+- `pydantic_parse()`: parse structured output from the chat completions API.
+- `llm(...)`: convenience wrapper for the chat path and structured-output path.
 
-### 1. Simple Prompt Continuation
+## Common Examples
+
+### Simple prompt continuation
+
 ```python
-result = lm.generate('Hello world', max_tokens=50)
-print(result['text'])
+from llm_utils import LLM
+
+lm = LLM(client=8000)
+result = lm.generate("Write a haiku about coding:", max_tokens=50)
+print(result.text)
 ```
 
-### 2. From Token IDs
-```python
-token_ids = lm.encode('Hello')
-result = lm.generate(token_ids, max_tokens=50, return_token_ids=True)
-```
+### Temperature and nucleus sampling
 
-### 3. Multiple Outputs
-```python
-results = lm.generate('Start:', max_tokens=30, n=5)  # 5 different completions
-```
-
-### 4. Temperature Control
-```python
-# Deterministic (low temp)
-result = lm.generate(prompt, temperature=0.1)
-
-# Creative (high temp)
-result = lm.generate(prompt, temperature=1.5)
-```
-
-### 5. Advanced Sampling
 ```python
 result = lm.generate(
-    prompt,
+    "The best way to learn programming is",
+    max_tokens=40,
     temperature=0.8,
-    top_k=50,
     top_p=0.95,
-    repetition_penalty=1.2,
 )
+print(result.text)
 ```
 
-### 6. Stop Sequences
+### Stop sequences
+
 ```python
 result = lm.generate(
-    'List:\n1.',
+    "Ingredients for cookies:\n-",
     max_tokens=200,
-    stop=['\n\n', 'End'],
+    stop=["\n\n", "Instructions:"],
 )
+print(result.text)
 ```
 
-### 7. Reproducible
+### Reproducible calls
+
 ```python
-result = lm.generate(prompt, seed=42)  # Same seed = same output
+result1 = lm.generate("Random number:", max_tokens=10, temperature=0.8, seed=42)
+result2 = lm.generate("Random number:", max_tokens=10, temperature=0.8, seed=42)
+print(result1.text == result2.text)
 ```
 
-## Parameter Guide
+### Backend-specific metadata
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `input_context` | str \| list[int] | required | Text or token IDs |
-| `max_tokens` | int | 512 | Max tokens to generate |
-| `temperature` | float | 1.0 | Randomness (0.0-2.0) |
-| `top_p` | float | 1.0 | Nucleus sampling |
-| `top_k` | int | -1 | Top-k sampling (-1=off) |
-| `n` | int | 1 | Number of completions |
-| `stop` | str \| list | None | Stop sequences |
-| `seed` | int | None | Random seed |
-| `repetition_penalty` | float | 1.0 | Repeat penalty (1.0=off) |
-| `return_token_ids` | bool | False | Include token IDs |
-| `return_text` | bool | True | Include text |
+Some backends return extra fields such as `token_ids`, `prompt_token_ids`, or
+`prompt_logprobs`. The current implementation preserves those when they are
+present on the provider response.
 
-## Return Format
-
-Single generation (n=1):
 ```python
-{
-    'text': 'generated text...',
-    'token_ids': [1, 2, 3, ...],  # if return_token_ids=True
-    'finish_reason': 'length',
-    '_raw_response': {...}
-}
+result = lm.generate("prompt", max_tokens=0, echo=True, logprobs=1, temperature=0)
+print(result.text)
+print(getattr(result, "prompt_logprobs", None))
+print(getattr(result, "token_ids", None))
 ```
 
-Multiple generations (n>1):
+## Common Runtime Kwargs
+
+`generate()` forwards provider kwargs to `client.completions.create(...)` after
+merging them with constructor defaults.
+
+Common examples:
+
+- `max_tokens`
+- `temperature`
+- `top_p`
+- `stop`
+- `seed`
+- `echo`
+- `logprobs`
+- `presence_penalty`
+- `frequency_penalty`
+
+Support for a given kwarg still depends on the backend you are calling.
+
+## Return Shape
+
+`generate()` returns a `CompletionChoice`-like object, not a dict.
+
+Typical fields:
+
+- `result.text`
+- `result.finish_reason`
+- `result.usage` when the backend provides usage data
+
+The call also records a simple conversation history internally so you can inspect
+it afterwards:
+
 ```python
-[
-    {'text': '...', 'finish_reason': '...'},
-    {'text': '...', 'finish_reason': '...'},
-    ...
-]
+lm.generate("Hello", max_tokens=5)
+print(lm.inspect_history())
 ```
 
-## Comparison to HuggingFace
+## Not Supported In The Current Public API
 
-| HuggingFace | llm_utils | Notes |
-|-------------|-----------|-------|
-| `model.generate(input_ids=...)` | `lm.generate(token_ids)` | Same concept |
-| `max_length` | `max_tokens` | Different naming |
-| `num_return_sequences` | `n` | Different naming |
-| `do_sample=True` | `temperature > 0` | Auto-enabled |
-| `num_beams` | N/A | Not supported |
+These older examples no longer match the code in this branch:
 
-## Tips
-
-1. **Token Counting**: Use `len(lm.encode(text))` to count tokens before generating
-2. **Reproducibility**: Set `seed` for deterministic output
-3. **Quality vs Speed**: Lower temperature for quality, higher for creativity
-4. **Stop Early**: Use `stop` sequences to control output format
-5. **Debug**: Check `result['_raw_response']` for full API response
+- token-id input to `generate()`
+- dict-style access like `result["text"]`
+- multi-output generation with `n > 1`
+- generic `lm.encode()` / `lm.decode()` methods on `LLM`
