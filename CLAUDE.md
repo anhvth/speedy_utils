@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance for working in this repository.
 
 ## Development Commands
 
@@ -17,23 +17,19 @@ uv sync
 # Run with verbose output
 ./tools/uv_test.sh -v
 
-# Check import time (must be < 0.4s)
-uv run python -c "import time; start=time.perf_counter(); import speedy_utils; print(f'{time.perf_counter()-start:.3f}s')"
+# Check import time for the exported packages
+uv run python scripts/debug_import_time.py speedy_utils llm_utils vision_utils \
+    --max-total-sec 0.4 --top 12 --min-sec 0.01 --no-stdlib
 
-# Detailed import analysis / import budget check
-uv run python scripts/debug_import_time.py speedy_utils --max-total-sec 0.4 --top 12 --min-sec 0.01 --no-stdlib
-
-# Check all public packages with the same helper used by pre-commit
-uv run python scripts/debug_import_time.py speedy_utils llm_utils vision_utils --max-total-sec 0.4 --top 12 --min-sec 0.01 --no-stdlib
-
-# Lint with ruff
+# Lint and format
 uv run ruff check .
-
-# Format with ruff
 uv run ruff format .
 
-# Bump version (runs tests first, then commits and pushes)
-./bumpversion.sh patch  # or minor, major
+# Pyright / Pylance parity check
+uv run python tools/check_syntax.py
+
+# Bump version (runs tests, then commits and pushes)
+./bumpversion.sh patch  # or minor / major
 
 # Deploy to PyPI (requires PYPI_API_TOKEN)
 ./scripts/deploy.sh
@@ -41,197 +37,165 @@ uv run ruff format .
 
 ## Performance Requirement: Import Time < 0.4s
 
-**CRITICAL:** All modules must import in under 0.4 seconds. This is enforced by a git pre-commit hook.
+The repository hook budget is `0.4s` for the exported packages checked by
+`.githooks/pre-commit`:
 
-When the import-time hook fails, rerun `scripts/debug_import_time.py` with the
-same package list and budget. The helper now prints both:
+- `speedy_utils`
+- `llm_utils`
+- `vision_utils`
 
-- top-level contributors by aggregated self time
-- slowest full import paths from `python -X importtime`
+Use the shared helper when import time regresses:
 
-Use that output to pinpoint which import chain needs to be moved behind a lazy
-import. Keep the helper's default package list and thresholds aligned with the
-packages this repo exports as the project evolves.
-
-### Lazy Import Strategy
-
-Import heavy modules inside functions, NOT at module level:
-
-```python
-# BAD - slow module-level import
-import torch
-def some_function():
-    return torch.tensor([1, 2, 3])
-
-# GOOD - lazy import
-def some_function():
-    import torch  # Only imports when called
-    return torch.tensor([1, 2, 3])
+```bash
+uv run python scripts/debug_import_time.py speedy_utils llm_utils vision_utils \
+    --max-total-sec 0.4 --top 12 --min-sec 0.01 --no-stdlib
 ```
 
-### Heavy Modules to Lazy-Load
+Current code structure keeps the budget by avoiding heavy external imports at
+module import time.
 
-| Module | Import Time | Strategy |
-|--------|-------------|----------|
-| `torch` | ~5s | Lazy import inside functions |
-| `matplotlib` | ~1.3s cumulative | Lazy via `__getattr__` in `__init__.py` |
-| `pandas` | ~1.9s cumulative | Lazy via `__getattr__` in `__init__.py` |
-| `IPython` | ~2.1s cumulative | Lazy via `__getattr__` in `__init__.py` |
+### What to keep lazy
 
-### Rule: Never top-level import heavy modules in `__init__.py`
+These imports are intentionally kept behind helpers or function scope because
+they are expensive enough to matter for import time:
 
-Only a short `__getattr__` block (keyed on module name) is allowed for heavy
-modules. All internal `speedy_utils.*` imports must remain direct top-level
-imports. External heavy modules (`pandas`, `matplotlib`, `IPython`, `torch`)
-must **never** appear as top-level imports in any `__init__.py`.
+- `torch`
+- `pandas`
+- `matplotlib`
+- `IPython`
+- tokenizer-loading code in `Qwen3LLM`
 
-```python
-# BAD — in __init__.py
-import pandas as pd          # adds ~1.3 s
+### How the current code does it
 
-# GOOD — in __init__.py
-# pd is declared in _HEAVY dict, resolved by __getattr__ on first access
+- `speedy_utils.__init__` imports lightweight internal modules directly.
+- heavy external helpers live in `speedy_utils.__imports`.
+- `llm_utils.__init__` exports selected public classes and helpers directly.
+- `vision_utils` keeps plotting and image backends lazy inside function bodies.
 
-# GOOD — inside a function anywhere in the package
-def load_dataframe(path):
-    import pandas as pd      # only pays cost when called
-    return pd.read_csv(path)
-```
+Do not add new top-level imports for heavy third-party libraries in public
+package `__init__.py` files unless you have rechecked import-time impact.
 
-### Rule: Heavy lazy names must NOT be in `__all__`
+### Hook vs test budget
 
-`from speedy_utils import *` resolves every name in `__all__`, which triggers
-`__getattr__` for each heavy name and defeats the lazy-load strategy.  Only
-include names that are directly importable at module load time in `__all__`.
-Heavy names (`np`, `pd`, `matplotlib`, `plt`, `get_ipython`, `HTML`, `display`,
-`BaseModel`) must be kept out of `__all__`; they remain accessible via explicit
-attribute access (`speedy_utils.pd`) or explicit import
-(`from speedy_utils import pd`).
+The pre-commit hook is stricter than the regression test:
+
+- `.githooks/pre-commit` enforces `0.4s`
+- `tests/test_import_time.py` currently guards `speedy_utils` at `1.0s`
+
+Treat the hook budget as the real policy.
 
 ## Architecture
 
 ### Package Structure
 
-Three main packages under `src/`:
+The wheel currently ships four packages from `src/`:
 
-- **`speedy_utils`**: Core utilities (caching, IO, parallel processing, timing)
-  - `common/`: Cache (`memoize`, `imemoize`), IO (`load_json_or_pickle`), logging, error handling
-  - `multi_worker/`: `multi_thread`, `multi_process`, dataset sharding helpers
-  - `__imports.py`: Lazy-loaded heavy dependencies (torch, pandas, matplotlib)
+- `speedy_utils`: caching, file I/O, formatting, timing, and parallel helpers
+- `llm_utils`: OpenAI-compatible LLM wrappers, memoized clients, chat-format helpers
+- `vision_utils`: image loading, notebook plotting, and mmap-backed image datasets
+- `datasets_utils`: dataset inspection helpers such as `viz_chat`
 
-- **`llm_utils`**: LLM integration layer
-  - `lm/llm.py`: Main `LLM` class with OpenAI-compatible client support, structured outputs, caching
-  - `lm/openai_memoize.py`: `MOpenAI` - memoized OpenAI client
-  - `chat_format/`: Transform between ChatML, ShareGPT, text formats
+### Important Modules
 
-- **`vision_utils`**: Image processing utilities
-  - `io_utils.py`: Image loading, video frame extraction
-  - `plot.py`: Matplotlib wrappers for visualization
+- `src/speedy_utils/common/utils_cache.py`
+  - `memoize`, `imemoize`, `identify`
+  - default disk cache root: `~/.cache/speedy_cache`
+- `src/speedy_utils/common/utils_io.py`
+  - `load_jsonl`, `fast_load_jsonl`, `load_json_or_pickle`, `load_by_ext`
+- `src/speedy_utils/multi_worker/thread.py`
+  - `multi_thread`
+- `src/speedy_utils/multi_worker/_multi_process.py`
+  - `multi_process`
+- `src/llm_utils/lm/llm.py`
+  - `LLM.chat_completion`, `LLM.generate`, `LLM.pydantic_parse`, `LLM.inspect_history`
+- `src/llm_utils/lm/llm_signature.py`
+  - `LLMSignature`
+- `src/llm_utils/lm/llm_qwen3.py`
+  - `Qwen3LLM`, `complete_until`, `complete_reasoning`, `complete_content`
+- `src/vision_utils/io_utils.py`
+  - `read_images`, `read_images_cpu`, `read_images_gpu`, `ImageMmap`, `ImageMmapDynamic`
+- `src/vision_utils/plot.py`
+  - `plot_images_notebook`
+- `src/datasets_utils/viz_chat.py`
+  - dataset and conversation inspection CLI
 
-### Key Patterns
+## Public API Notes
 
-**Lazy Exports via `__getattr__`**: Both `speedy_utils` and `llm_utils` use lazy attribute access to keep import time fast:
+### `speedy_utils`
 
-```python
-# In __init__.py
-_LAZY_ATTRS = {"LLM": ("llm_utils.lm", "LLM")}
+- `memoize` supports sync and async functions.
+- `load_json_or_pickle` is for `.json` and pickle-like files.
+- use `load_jsonl` or `fast_load_jsonl` for JSONL.
+- `multi_process(num_procs=None)` currently normalizes to `1`; it does not auto-pick a process count.
 
-def __getattr__(name):
-    module_name, attr_name = _LAZY_ATTRS[name]
-    module = importlib.import_module(module_name)
-    return getattr(module, attr_name)
-```
+### `llm_utils`
 
-**Memoization**: `@memoize` caches function results to disk; `@imemoize` caches in memory:
+- `LLM()` defaults to the chat path.
+- `LLM.generate()` uses the completions API and returns a `CompletionChoice`-like object.
+- `LLM.generate()` expects a string prompt and only supports `n=1`.
+- `LLM.pydantic_parse()` is the structured-output API.
+- `LLM(..., return_dict=True)` returns a normalized dict with `completion`, `message`, `messages`, and `parsed`.
+- `LLMSignature` defaults structured outputs to the signature's output model.
+- `Qwen3LLM.chat_completion()` returns an OpenAI-style `ChatCompletionMessage` with optional dynamic attrs such as `reasoning_content`, `usage`, and `call_count`.
+- `Qwen3LLM.complete_until()` returns a continuation-state object, not a `ChatCompletionMessage`.
 
-```python
-from speedy_utils import memoize, imemoize
+### `vision_utils`
 
-@memoize  # Persists to disk at ~/.cache/speedy_utils/
-def expensive_call(x):
-    return x ** 2
+- `read_images*()` returns `dict[path, ndarray | None]`.
+- `plot_images_notebook()` expects arrays/tensors or lists/tuples of arrays.
+- if you loaded images with `read_images*()`, pass `list(images.values())` to the plotter.
+- `ImageMmap` and `ImageMmapDynamic` take image-path sequences and build cache files as needed.
 
-@imemoize  # In-memory only
-def fast_cached_call(x):
-    return x * 2
-```
+## CLI Tools
 
-**Parallel Processing with Error Handling**:
+Registered console scripts in `pyproject.toml`:
 
-```python
-from speedy_utils import multi_thread, multi_process
-
-# Three error handling modes
-results = multi_thread(func, items, error_handler='raise')  # Stop on error (default)
-results = multi_thread(func, items, error_handler='ignore')  # Continue, return None for errors
-results = multi_thread(func, items, error_handler='log')    # Log errors, continue
-```
-
-### CLI Tools
-
-The package provides these CLI commands:
-
-- `mpython`: Run Python scripts across multiple tmux windows with GPU/CPU allocation
-- `kill-mpython`: Kill all mpython sessions
-- `sp_chat`: Interactive chat CLI
-- `spu-prefetch-large-model`: Prefetch models to disk cache
+- `mpython`
+- `kill-mpython`
+- `sp_chat`
+- `spu-prefetch-large-model`
+- `viz_chat`
+- `openapi_client_codegen`
 
 ## Code Style
 
-- Line length: 88 characters (Black/Ruff default)
-- Ruff handles linting and formatting (config in `ruff.toml` and `pyproject.toml`)
-- Ignore rules `E402`, `F401`, `F403` in `__init__.py` files for lazy import patterns
+- Line length: `88`
 - Quote style: double quotes
-- Avoid hacky workarounds like sys.path.insert
-- Follow `CODE_STYLE.md` for general style guidelines
+- Ruff is the formatter and linter
+- Avoid unnecessary wrappers and ceremony; see `CODING_STYLE.md`
+- Keep public docs/examples aligned with tests and current implementation, not with historical helper scripts
 
 ## Type Checking with Pyright
 
-**CRITICAL:** Before committing, always run `uv run python tools/check_syntax.py` to
-verify there are **zero** pyright errors.  This tool mirrors exactly what VS Code
-Pylance shows as red diagnostics.
+Use:
 
 ```bash
-# Full check (src/ + tests/, honours pyrightconfig.json)
 uv run python tools/check_syntax.py
-
-# Import-time budget check with root-cause breakdown
-uv run python scripts/debug_import_time.py speedy_utils llm_utils vision_utils --max-total-sec 0.4 --top 12 --min-sec 0.01 --no-stdlib
-
-# Check a single file
-uv run python tools/check_syntax.py --file src/llm_utils/lm/llm_qwen3.py
-
-# Machine-readable JSON output
-uv run python tools/check_syntax.py --json
 ```
+
+This mirrors what VS Code Pylance reports for the configured project files.
 
 ### pyright config (`pyrightconfig.json`)
 
-The config lives at the repo root.  Key rules that are **suppressed** (because
-they produce false positives in this codebase):
+Current notable suppressions:
 
 | Rule | Why suppressed |
-|------|---------------|
-| `reportMissingImports` | Optional GPU deps (`torch`, `nvidia.dali`) not installed everywhere |
-| `reportAttributeAccessIssue` | Dynamic attrs on OpenAI pydantic models (`choice.usage`, `message.call_count`) |
-| `reportUnsupportedDunderAll` | Lazy `__getattr__` exports listed in `__all__` |
+|------|----------------|
+| `reportMissingImports` | Optional GPU and backend dependencies are not always installed |
+| `reportAttributeAccessIssue` | OpenAI response models and runtime message objects gain dynamic attrs such as `usage`, `reasoning_content`, and `call_count` |
+| `reportUnsupportedDunderAll` | Some modules rely on broad export patterns that are noisy for pyright |
 
-### Common type-annotation patterns
+### Common annotation patterns in this repo
 
-- **Lazy-loaded `__all__` entries** — never trigger `__getattr__`; use `# type: ignore[override]`
-  only on the `__getitem__` override pattern in datasets.
-- **Dynamic pydantic attrs** — use `# type: ignore[attr-defined]` when setting attrs
-  not in the schema (e.g. `message.call_count = …`).
-- **Overload ordering** — put the `Awaitable[R]` overload **before** the generic `R`
-  overload; otherwise pyright reports `reportOverlappingOverload`.
-- **`tqdm` in type hints** — use string literal `"tqdm"` to avoid `reportInvalidTypeForm`.
-- **Future custom attrs** — `concurrent.futures.Future` doesn't declare custom attrs;
-  suppress with `reportAttributeAccessIssue: "none"` in config.
-
+- use string literal `"tqdm"` when needed in type hints
+- put `Awaitable[R]` overloads before generic `R` overloads
+- use `# type: ignore[attr-defined]` for dynamic OpenAI message attrs where necessary
+- keep dataset `__getitem__` overrides narrow and explicit
 
 ## Version Management
 
-Version is in `pyproject.toml`. Use `./bumpversion.sh` to bump version, which:
-1. Runs pytest (requires 90% pass rate)
-2. Bumps version using `uv version`
-3. Commits and pushes
+Version lives in `pyproject.toml`. `./bumpversion.sh` currently:
+
+1. runs tests
+2. bumps the package version
+3. commits and pushes
