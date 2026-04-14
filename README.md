@@ -4,73 +4,33 @@
 ![Python Versions](https://img.shields.io/pypi/pyversions/speedy-utils)
 ![License](https://img.shields.io/pypi/l/speedy-utils)
 
-**Speedy Utils** is a Python utility library designed to streamline common programming tasks such as caching, parallel processing, file I/O, and data manipulation. It provides a collection of decorators, functions, and classes to enhance productivity and performance in your Python projects.
-
-## 🚀 Recent Updates (January 27, 2026)
-
-**Enhanced Error Handling in Parallel Processing:**
-
-- Rich-formatted error tracebacks with code context and syntax highlighting
-- Three error handling modes: 'raise', 'ignore', and 'log'
-- Filtered tracebacks focusing on user code (hiding infrastructure)
-- Real-time progress reporting with error/success statistics
-- Automatic error logging to timestamped files
-- Caller frame information showing where parallel functions were invoked
-
-## Quick Start
-
-### Parallel Processing with Error Handling
-
-```python
-from speedy_utils import multi_thread, multi_process
-
-# Simple parallel processing
-results = multi_thread(lambda x: x * 2, [1, 2, 3, 4, 5])
-# Results: [2, 4, 6, 8, 10]
-
-# Robust processing with error handling
-def process_item(item):
-    if item == 3:
-        raise ValueError(f"Cannot process item {item}")
-    return item * 2
-
-# Continue processing despite errors
-results = multi_thread(process_item, [1, 2, 3, 4, 5], error_handler='log')
-# Results: [2, 4, None, 8, 10] - errors logged automatically
-```
+**Speedy Utils** is a Python utility library for caching, parallel processing, file I/O, LLM integration, and image processing. It is designed for fast imports (< 0.4 s) via lazy loading of heavy dependencies.
 
 ## Table of Contents
 
-- [🚀 Recent Updates](#-recent-updates-january-27-2026)
-- [Quick Start](#quick-start)
-- [Features](#features)
 - [Installation](#installation)
-- [Usage](#usage)
-  - [Parallel Processing](#parallel-processing)
-    - [Multi-threading](#multi-threading-with-enhanced-error-handling)
-    - [Multi-processing](#multi-processing-with-error-handling)
-    - [mpython](#mpython-cli-tool)
-  - [Enhanced Error Handling](#enhanced-error-handling)
-  - [Caching](#caching)
-  - [File I/O](#file-io)
-  - [Data Manipulation](#data-manipulation)
-  - [Utility Functions](#utility-functions)
-  - [LLM](#llm)
+- [Packages](#packages)
+- [Caching](#caching)
+- [Parallel Processing](#parallel-processing)
+  - [multi\_thread](#multi_thread)
+  - [multi\_process](#multi_process)
+  - [mpython CLI](#mpython-cli-tool)
+- [File I/O](#file-io)
+- [Data Utilities](#data-utilities)
+- [Print & Display](#print--display)
+- [Timing](#timing)
+- [LLM](#llm)
+  - [Basic completion](#basic-text-completion)
+  - [Structured output](#structured-output-with-pydantic)
+  - [Streaming](#streaming-responses)
+  - [Client configuration](#client-configuration)
+  - [Caching](#llm-caching)
+  - [Signatures (DSPy-style)](#signatures-dspy-style)
+  - [Qwen3LLM](#qwen3llm)
+- [Vision Utils](#vision-utils)
 - [Testing](#testing)
 
-## Features
-
-- **Caching Mechanisms**: Disk-based and in-memory caching to optimize function calls.
-- **Parallel Processing**: Multi-threading, multi-processing, and asynchronous multi-threading utilities with enhanced error handling.
-- **File I/O**: Simplified JSON, JSONL, and pickle file handling with support for various file extensions.
-- **Data Manipulation**: Utilities for flattening lists and dictionaries, converting data types, and more.
-- **Timing Utilities**: Tools to measure and log execution time of functions and processes.
-- **Pretty Printing**: Enhanced printing functions for structured data, including HTML tables for Jupyter notebooks.
-- **Enhanced Error Handling**: Rich error tracebacks with code context, configurable error handling modes ('raise', 'ignore', 'log'), and detailed progress reporting.
-
 ## Installation
-
-You can install **Speedy Utils** via [PyPI](https://pypi.org/project/speedy-utils/):
 
 ```bash
 pip install speedy-utils
@@ -78,7 +38,7 @@ pip install speedy-utils
 uv pip install speedy-utils
 ```
 
-Alternatively, install directly from the repository:
+Install from source:
 
 ```bash
 pip install git+https://github.com/anhvth/speedy
@@ -86,7 +46,7 @@ pip install git+https://github.com/anhvth/speedy
 uv pip install git+https://github.com/anhvth/speedy
 ```
 
-For local development:
+Local development:
 
 ```bash
 git clone https://github.com/anhvth/speedy
@@ -94,45 +54,56 @@ cd speedy
 uv sync
 ```
 
-## Updating from previous versions
-
-To update from previous versions or switch to v1.x, first uninstall any old
-packages, then install the latest version:
+Upgrading from an older split package:
 
 ```bash
 pip uninstall speedy_llm_utils speedy_utils
-pip install -e ./  # for local development
-# or
-pip install speedy-utils -U  # for PyPI upgrade
+pip install speedy-utils -U
 ```
 
-## Usage
+## Packages
 
-Below are examples demonstrating how to utilize various features of **Speedy Utils**.
+The repo ships three importable packages:
 
-### Caching
+| Package | Purpose |
+|---------|---------|
+| `speedy_utils` | Core: caching, IO, parallel processing, timing |
+| `llm_utils` | LLM integration with OpenAI-compatible backends |
+| `vision_utils` | Image loading and visualization |
 
-#### Memoize Decorator
+## Caching
 
-Cache the results of function calls to disk to avoid redundant computations.
+### `@memoize` — disk + memory cache
 
 ```python
 from speedy_utils import memoize
 
 @memoize
 def expensive_function(x):
-    # Simulate an expensive computation
-    import time
-    time.sleep(2)
+    import time; time.sleep(2)
     return x * x
 
-result = expensive_function(4)  # Takes ~2 seconds
-result = expensive_function(4)  # Retrieved from cache instantly
+expensive_function(4)  # ~2 s, result saved to ~/.cache/speedy_utils/
+expensive_function(4)  # instant, from cache
 ```
 
-#### In-Memory Memoization
+Options:
 
-Cache function results in memory for faster access within the same runtime.
+```python
+@memoize(
+    keys=["x"],          # which args contribute to the cache key
+    cache_dir="/tmp/my_cache",
+    cache_type="disk",   # "memory" | "disk" | "both" (default)
+    size=512,            # LRU size for the in-memory layer
+    verbose=True,
+)
+def fn(x, ignored_arg):
+    ...
+```
+
+Works with `async` functions too.
+
+### `@imemoize` — in-memory only
 
 ```python
 from speedy_utils import imemoize
@@ -141,369 +112,293 @@ from speedy_utils import imemoize
 def compute_sum(a, b):
     return a + b
 
-result = compute_sum(5, 7)  # Computed and cached
-result = compute_sum(5, 7)  # Retrieved from in-memory cache
+compute_sum(5, 7)  # computed
+compute_sum(5, 7)  # from in-memory cache
 ```
 
-### Parallel Processing
+The cache survives IPython `%load` re-executions (global persistent dict keyed on function source + args). Ideal for notebooks.
 
-#### Multi-threading with Enhanced Error Handling
+## Parallel Processing
 
-Execute functions concurrently using multiple threads with comprehensive error handling. The enhanced error handling provides three modes: 'raise' (default), 'ignore', and 'log'. When errors occur, you'll see rich-formatted tracebacks with code context and caller information.
+### `multi_thread`
 
 ```python
 from speedy_utils import multi_thread
 
-def process_item(item):
-    # Simulate processing that might fail
+results = multi_thread(lambda x: x * 2, [1, 2, 3, 4, 5])
+# [2, 4, 6, 8, 10]
+```
+
+Full signature:
+
+```python
+multi_thread(
+    func,
+    inputs,
+    *,
+    workers=cpu_count() * 2,  # thread count
+    batch=1,                  # items per invocation (1 = no batching)
+    ordered=True,             # preserve input ordering
+    progress=True,            # tqdm progress bar
+    progress_weight=None,     # callable(item) → logical units
+    prefetch_factor=4,        # in-flight work = workers * prefetch_factor
+    timeout=None,             # overall wall-clock timeout (seconds)
+    error_handler="raise",    # "raise" | "ignore" | "log"
+    max_error_files=100,      # max error log files (log mode)
+    store_output_pkl_file=None,  # persist results to this path
+    **fixed_kwargs,           # forwarded to every func call
+)
+```
+
+Error handling modes:
+
+```python
+def process(item):
     if item == 3:
-        raise ValueError(f"Invalid item: {item}")
+        raise ValueError("bad item")
     return item * 2
 
-items = [1, 2, 3, 4, 5]
+# Stop on first error (default)
+results = multi_thread(process, [1, 2, 3, 4, 5], error_handler="raise")
 
-# Default behavior: raise on first error with rich traceback
-try:
-    results = multi_thread(process_item, items, workers=3)
-except SystemExit:
-    print("Error occurred and was displayed with rich formatting")
+# Continue, return None for failed items
+results = multi_thread(process, [1, 2, 3, 4, 5], error_handler="ignore")
+# [2, 4, None, 8, 10]
 
-# Continue processing on errors, return None for failed items
-results = multi_thread(process_item, items, workers=3, error_handler='ignore')
-print(results)  # [2, 4, None, 8, 10]
-
-# Log errors to files and continue processing
-results = multi_thread(process_item, items, workers=3, error_handler='log', max_error_files=10)
-print(results)  # [2, 4, None, 8, 10] - errors logged to .cache/speedy_utils/error_logs/
+# Log errors to .cache/speedy_utils/error_logs/ and continue
+results = multi_thread(process, [1, 2, 3, 4, 5], error_handler="log")
+# [2, 4, None, 8, 10]
 ```
 
-#### Multi-processing with Error Handling
+Progress bars show live error/success counts:
 
-Process items across multiple processes with the same enhanced error handling capabilities.
+```
+Multi-thread [8/10] [00:02<00:00, 3.45it/s, success=8, errors=2]
+```
+
+### `multi_process`
 
 ```python
 from speedy_utils import multi_process
 
-def risky_computation(x):
-    """Computation that might fail for certain inputs."""
-    if x % 5 == 0:
-        raise RuntimeError(f"Cannot process multiples of 5: {x}")
-    return x ** 2
-
-data = list(range(12))
-
-# Process with error logging (continues on errors)
 results = multi_process(
-    risky_computation, 
-    data, 
-    backend='spawn',
-    error_handler='log',
-    max_error_files=5
-)
-print(results)  # [0, 1, 4, 9, 16, None, 36, 49, 64, 81, None, 121]
-```
-
-#### Multi-Worker Routing
-
-`multi_process` now routes work based on `num_procs` and `num_threads`.
-Use `backend='spawn'` by default; `backend='fork'` is available on POSIX when
-you need to inherit non-picklable state from the parent process.
-
-```python
-from speedy_utils import multi_process
-
-def process_data(item):
-    """Process a data item with potential I/O operations."""
-    # Simulate CPU work
-    result = item ** 2
-    # Simulate I/O (each thread can do I/O in parallel)
-    time.sleep(0.01)
-    return result
-
-data = list(range(100))
-
-# 4 processes, each with 4 threads = 16 concurrent workers
-results = multi_process(
-    process_data,
-    data,
-    num_procs=4,      # Number of processes
-    num_threads=4,    # Threads per process
-    backend='spawn',
+    func,
+    items,
+    num_procs=4,         # process count (None = auto)
+    num_threads=1,       # threads per process
+    backend="spawn",     # "spawn" | "fork" (POSIX only)
+    error_handler="log", # "raise" | "ignore" | "log"
+    max_error_files=100,
     progress=True,
+    desc=None,
+    dump_in_thread=True, # persist results in a background thread
+    log_worker="first",  # "zero" | "first" | "all"
 )
 ```
 
-**Backend Options:**
+Choosing `num_procs` vs `num_threads`:
 
-| Backend | Description | Use Case |
-|---------|-------------|----------|
-| `'spawn'` | Routes to sequential, thread, process, or hybrid execution | Default and portable across platforms |
-| `'fork'` | Uses the fork start method for process and hybrid execution | POSIX-only, useful for inherited state |
-
-**When to use `num_procs` vs `num_threads`:**
-
-- **CPU-bound tasks**: Use `num_procs` > 1, `num_threads` = 1 (processes bypass GIL)
-- **I/O-bound tasks**: Use `num_procs` = 1, `num_threads` > 1 (threads are lighter)
-- **Mixed workloads**: Use both (e.g., `num_procs=4, num_threads=4`)
+| Workload | Recommended |
+|----------|-------------|
+| CPU-bound | `num_procs > 1`, `num_threads=1` (bypasses GIL) |
+| I/O-bound | `num_procs=1`, `num_threads > 1` (lighter weight) |
+| Mixed | Use both, e.g. `num_procs=4, num_threads=4` |
 
 ```python
-# Example: Web scraping with multi-process + multi-thread
-def fetch_and_parse(url):
-    response = requests.get(url)  # I/O bound
-    return parse_content(response.text)  # CPU bound
-
-# 4 processes for parsing, 8 threads per process for fetching
+# Web scraping: 4 processes for parsing, 8 threads each for I/O
 results = multi_process(
     fetch_and_parse,
     urls,
     num_procs=4,
     num_threads=8,
-    backend='spawn',
-    error_handler='log',  # Continue on failed URLs
+    error_handler="log",
 )
 ```
 
-#### mpython (CLI Tool)
+### mpython CLI Tool
 
-`mpython` is a CLI tool for running Python scripts in multiple tmux windows with automatic GPU/CPU allocation for parallel processing.
-
-**Basic Usage:**
+Run a Python script across multiple tmux windows with automatic GPU/CPU allocation.
 
 ```bash
-# Run script.py with 16 parallel processes across GPUs 0-7
-mpython script.py
-
-# Run with 8 processes
-mpython -t 8 script.py
-
-# Run on specific GPUs only
-mpython --gpus 0,1,2 script.py
+mpython script.py          # 16 workers across all GPUs
+mpython -t 8 script.py    # 8 workers
+mpython --gpus 0,1 script.py  # restrict to GPUs 0 and 1
+kill-mpython               # kill all mpython sessions
 ```
 
-**Multi-Process Script Setup:**
-
-Your script must use `MP_ID` and `MP_TOTAL` environment variables for sharding:
+Your script uses `MP_ID` / `MP_TOTAL` environment variables to shard work:
 
 ```python
 import os
 
-MP_ID = int(os.getenv("MP_ID", "0"))
+MP_ID    = int(os.getenv("MP_ID", "0"))
 MP_TOTAL = int(os.getenv("MP_TOTAL", "1"))
 
-# Shard your data - each process gets its slice
-inputs = list(range(1000))
-my_inputs = inputs[MP_ID::MP_TOTAL]
+inputs   = list(range(1000))
+my_slice = inputs[MP_ID::MP_TOTAL]  # each worker gets its own slice
 
-for item in my_inputs:
+for item in my_slice:
     process(item)
 ```
 
-**Managing Sessions:**
+Sessions are named `mpython`, `mpython-1`, `mpython-2`, … Attach with `tmux attach -t mpython`.
 
-- Sessions are named incrementally: `mpython`, `mpython-1`, `mpython-2`, etc.
-- Kill all sessions: `kill-mpython`
-- Attach to session: `tmux attach -t mpython`
+## File I/O
 
-### Enhanced Error Handling
-
-**Speedy Utils** now provides comprehensive error handling for parallel processing with rich formatting and detailed diagnostics.
-
-#### Rich Error Tracebacks
-
-When errors occur, you'll see beautifully formatted tracebacks with:
-
-- **Code context**: Lines of code around the error location
-- **Caller information**: Shows where the parallel function was invoked
-- **Filtered frames**: Focuses on user code, hiding infrastructure details
-- **Color coding**: Easy-to-read formatting with syntax highlighting
-
-#### Error Handling Modes
-
-Choose how to handle errors in parallel processing:
-
-- **`'raise'` (default)**: Stop on first error with detailed traceback
-- **`'ignore'`**: Continue processing, return `None` for failed items  
-- **`'log'`**: Log errors to files and continue processing
-
-#### Error Logging
-
-When using `error_handler='log'`, errors are automatically saved to timestamped files in `.cache/speedy_utils/error_logs/` with full context and stack traces.
-
-#### Progress Reporting with Error Statistics
-
-Progress bars now show real-time error and success counts:
-
-```bash
-Multi-thread [8/10] [00:02<00:00, 3.45it/s, success=8, errors=2, pending=0]
-```
-
-This makes it easy to monitor processing health at a glance.
-
-#### Example: Robust Data Processing
+### Loading JSONL
 
 ```python
-from speedy_utils import multi_thread
+from speedy_utils import load_jsonl
 
-def process_data_record(record):
-    """Process a data record that might have issues."""
-    try:
-        # Your processing logic here
-        value = record['value'] / record['divisor']
-        return {'result': value, 'status': 'success'}
-    except KeyError as e:
-        raise ValueError(f"Missing required field in record: {e}")
-    except ZeroDivisionError:
-        raise ValueError("Division by zero in record")
+# Single file
+records = load_jsonl("data/file.jsonl")
 
-# Sample data with some problematic records
-data = [
-    {'value': 10, 'divisor': 2},     # OK
-    {'value': 15, 'divisor': 0},     # Will error
-    {'value': 20, 'divisor': 4},     # OK
-    {'value': 25},                   # Missing divisor - will error
-]
+# Glob pattern — all matches are concatenated into one list
+records = load_jsonl("data/*.jsonl")
 
-# Process with error logging - continues despite errors
-results = multi_thread(
-    process_data_record, 
-    data, 
-    workers=4,
-    error_handler='log',
-    max_error_files=10
-)
+# Recursive glob
+records = load_jsonl("data/**/*.jsonl")
 
-print("Results:", results)
-# Output: Results: [{'result': 5.0, 'status': 'success'}, None, {'result': 5.0, 'status': 'success'}, None]
-# Errors are logged to files for later analysis
+# List of paths / globs
+records = load_jsonl(["train/*.jsonl", "val/file.jsonl"])
 ```
 
-### File I/O
-
-#### Dumping Data
-
-Save data in JSON, JSONL, or pickle formats.
+For streaming (constant memory) or advanced options use `fast_load_jsonl` directly:
 
 ```python
-from speedy_utils import dump_json_or_pickle, dump_jsonl
+from speedy_utils.common.utils_io import fast_load_jsonl
+
+for record in fast_load_jsonl(
+    "data/large.jsonl.gz",  # auto-detects .gz / .bz2 / .xz / .zst
+    progress=True,
+    on_error="skip",        # "raise" | "warn" | "skip"
+    max_lines=1000,         # stop after N lines (sampling)
+    use_orjson=True,        # faster parsing if orjson is installed
+):
+    ...
+```
+
+### JSON / Pickle
+
+```python
+from speedy_utils import dump_json_or_pickle, load_json_or_pickle
 
 data = {"name": "Alice", "age": 30}
 
-# Save as JSON
-dump_json_or_pickle(data, "data.json")
+dump_json_or_pickle(data, "data.json")   # JSON
+dump_json_or_pickle(data, "data.pkl")   # pickle
 
-# Save as JSONL
-dump_jsonl([data, {"name": "Bob", "age": 25}], "data.jsonl")
-
-# Save as Pickle
-dump_json_or_pickle(data, "data.pkl")
-```
-
-#### Loading Data
-
-Load data based on file extensions.
-
-```python
-from speedy_utils import load_json_or_pickle, load_by_ext
-
-# Load JSON
 data = load_json_or_pickle("data.json")
-
-# Load JSONL
-data_list = load_json_or_pickle("data.jsonl")
-
-# Load Pickle
 data = load_json_or_pickle("data.pkl")
-
-# Load based on extension with parallel processing
-loaded_data = load_by_ext(["data.json", "data.pkl"])
+data = load_json_or_pickle("data.jsonl")  # returns list
 ```
 
-### Data Manipulation
-
-#### Flattening Lists and Dictionaries
+### JSONL writing
 
 ```python
-from speedy_utils import flatten_list, flatten_dict
+from speedy_utils import dump_jsonl
 
-nested_list = [[1, 2], [3, 4], [5]]
-flat_list = flatten_list(nested_list)
-print(flat_list)  # [1, 2, 3, 4, 5]
-
-nested_dict = {"a": {"b": 1, "c": 2}, "d": 3}
-flat_dict = flatten_dict(nested_dict)
-print(flat_dict)  # {'a.b': 1, 'a.c': 2, 'd': 3}
+dump_jsonl([{"a": 1}, {"a": 2}], "out.jsonl")
 ```
 
-#### Converting to Built-in Python Types
+### JSON helpers
 
 ```python
-from speedy_utils import convert_to_builtin_python
+from speedy_utils import jdumps, jloads
+
+s = jdumps({"key": "value"})   # json.dumps with indent=2, ensure_ascii=False
+
+# jloads uses json_repair — tolerates malformed JSON
+obj = jloads('{"key": "value",}')  # trailing comma fixed automatically
+```
+
+### Generic loader
+
+```python
+from speedy_utils import load_by_ext
+
+# Dispatches by extension: .csv/.tsv → pandas, .txt → lines, .json/.pkl/…
+data = load_by_ext("data.csv")
+data = load_by_ext(["part1.jsonl", "part2.jsonl"])  # concatenated
+data = load_by_ext("data.json", do_memoize=True)    # cached in memory
+```
+
+## Data Utilities
+
+```python
+from speedy_utils import flatten_list, flatten_dict, convert_to_builtin_python, dedup
+
+# Flatten a list of lists
+flatten_list([[1, 2], [3, 4], [5]])  # [1, 2, 3, 4, 5]
+
+# Flatten nested dict with dot-notation keys
+flatten_dict({"a": {"b": 1, "c": 2}, "d": 3})
+# {"a.b": 1, "a.c": 2, "d": 3}
+
+# Convert Pydantic models / numpy types to plain Python
 from pydantic import BaseModel
 
 class User(BaseModel):
     name: str
     age: int
 
-user = User(name="Charlie", age=28)
-builtin_user = convert_to_builtin_python(user)
-print(builtin_user)  # {'name': 'Charlie', 'age': 28}
+convert_to_builtin_python(User(name="Alice", age=30))
+# {"name": "Alice", "age": 30}
+
+# Deduplicate a list preserving order
+dedup([3, 1, 2, 1, 3])  # [3, 1, 2]
 ```
 
-### Utility Functions
-
-#### Pretty Printing
+## Print & Display
 
 ```python
 from speedy_utils import fprint, print_table
 
-data = {"name": "Dana", "age": 22, "city": "New York"}
+data = {"name": "Dana", "scores": [95, 87, 92], "city": "New York"}
 
-# Pretty print as table
+# Rich pretty-print (auto HTML in notebooks, grid in terminal)
 fprint(data)
+fprint(data, key_ignore=["scores"], grep="city")
 
-# Print as table using tabulate
-print_table(data)
+# Tabular display (HTML in notebooks, grid in terminal)
+print_table([{"a": 1, "b": 2}, {"a": 3, "b": 4}])
 ```
 
-#### Timing Utilities
+## Timing
 
 ```python
 from speedy_utils import timef, Clock
 
 @timef
 def slow_function():
-    import time
-    time.sleep(3)
-    return "Done"
+    import time; time.sleep(3)
 
-result = slow_function()  # Prints execution time
+slow_function()  # prints execution time
 
-# Using Clock
+# Checkpoint-based timer
 clock = Clock()
-# ... your code ...
-clock.log()
+do_step_one()
+clock.log_elapsed_time()  # logs time since last checkpoint
+do_step_two()
+clock.log_elapsed_time()
 ```
 
-### LLM
+## LLM
 
-The `LLM` class provides a unified interface for language model interactions with structured input/output handling. It supports text completion, structured outputs, caching, streaming, and OpenAI-compatible client integration.
+`llm_utils` provides a unified interface for OpenAI-compatible language model backends.
 
-#### Basic Text Completion
+### Basic Text Completion
 
 ```python
 from llm_utils import LLM
 
-llm = LLM(
-    instruction="You are a helpful assistant.",
-    model="gpt-4o-mini"
-)
+llm = LLM(model="gpt-4o-mini")
 
-# Simple text completion
-message = llm.chat_completion("What is Python?")
-print(message.content)  # The text response
+response = llm("What is Python?")
+print(response.content)
 ```
 
-#### Structured Output with Pydantic
+### Structured Output with Pydantic
 
 ```python
 from pydantic import BaseModel
@@ -513,147 +408,161 @@ class Sentiment(BaseModel):
     sentiment: str
     confidence: float
 
-llm = LLM(
-    instruction="Analyze the sentiment of the input.",
-    model="gpt-4o-mini"
-)
+llm = LLM(model="gpt-4o-mini")
 
-parsed: Sentiment = llm.pydantic_parse(
+result: Sentiment = llm.structured(
     "I love this product!",
     response_model=Sentiment,
 )
-print(f"Sentiment: {parsed.sentiment}, Confidence: {parsed.confidence}")
+print(result.sentiment, result.confidence)
 ```
 
-#### Streaming Responses
+### Streaming Responses
 
 ```python
 from llm_utils import LLM
 
 llm = LLM(model="gpt-4o-mini")
 
-# Stream text responses
-stream = llm("Tell me a story", stream=True)
-for chunk in stream:
+for chunk in llm("Tell me a story", stream=True):
     content = chunk.choices[0].delta.content
     if content:
         print(content, end="", flush=True)
 ```
 
-#### Client Configuration
-
-The `LLM` class accepts various client configurations:
+### Client Configuration
 
 ```python
 from llm_utils import LLM
 from openai import OpenAI
 
-# Using a custom OpenAI client
-custom_client = OpenAI(base_url="http://localhost:8000/v1", api_key="your-key")
-llm = LLM(client=custom_client, model="llama-2-7b")
+# Custom OpenAI-compatible client
+llm = LLM(client=OpenAI(base_url="http://localhost:8000/v1", api_key="sk-..."), model="llama-3")
 
-# Using a port number
-llm = LLM(client=8000, model="llama-2-7b")
+# Port shorthand — wraps OpenAI(base_url="http://localhost:<port>/v1")
+llm = LLM(client=8000, model="llama-3")
 
-# Using a base URL string
-llm = LLM(client="http://localhost:8000/v1", model="llama-2-7b")
+# URL shorthand
+llm = LLM(client="http://localhost:8000/v1", model="llama-3")
+
+# Load balancing across multiple clients
+llm = LLM(client=[8000, 8001, 8002], model="llama-3")
 ```
 
-#### Caching
-
-Enable response caching to avoid redundant API calls:
+### LLM Caching
 
 ```python
 from llm_utils import LLM
 
-# Enable caching (default: True)
-llm = LLM(model="gpt-4o-mini", cache=True)
+llm = LLM(model="gpt-4o-mini", cache=True)  # default: True
 
-# First call hits the API
-result1 = llm("What is 2+2?")
-
-# Second call returns cached result
-result2 = llm("What is 2+2?")  # Instant response from cache
-
-# Disable caching for a specific call
-result3 = llm("What is 2+2?", cache=False)
+result = llm("What is 2+2?")          # hits API
+result = llm("What is 2+2?")          # served from cache
+result = llm("What is 2+2?", cache=False)  # bypass cache for this call
 ```
 
-#### Reasoning Models
+### Signatures (DSPy-style)
 
-Handle reasoning models that provide thinking traces:
+`LLMSignature` provides a structured, declarative way to define LLM tasks:
 
 ```python
-from llm_utils import LLM
+from llm_utils import LLMSignature, Signature, Input, Output, InputField, OutputField
 
-# For models like DeepSeek-R1 that output reasoning
-llm = LLM(model="deepseek-reasoner")
+class SentimentSignature(Signature):
+    """Analyze sentiment of the given text."""
+    text: str = InputField(description="Text to analyze")
+    sentiment: str = OutputField(description="positive | negative | neutral")
+    confidence: float = OutputField(description="Confidence score 0–1")
 
-message = llm.chat_completion("Solve this math problem: 15 * 23")
-
-# Access the final answer
-answer = message.content
-
-# Access reasoning content when the response includes it
-reasoning = getattr(message, "reasoning_content", None)
+sig = LLMSignature(SentimentSignature, model="gpt-4o-mini")
+result = sig(text="I love this!")
+print(result.sentiment, result.confidence)
 ```
 
-For custom staged generation with explicit tags, `Qwen3LLM` also exposes
-`complete_until()`:
+### Qwen3LLM
+
+Extends `LLM` for Qwen3 models with staged generation and explicit thinking support:
 
 ```python
 from llm_utils import Qwen3LLM
 
-llm = Qwen3LLM(model="Qwen/Qwen3-0.6B")
+llm = Qwen3LLM(model="Qwen/Qwen3-0.6B", enable_thinking=True)
 
-memory_state = llm.complete_until(
+# Stage 1: generate memory
+mem = llm.complete_until(
     [{"role": "user", "content": "Solve this in stages"}],
     "<memory>",
     stop="</memory>",
     max_tokens=256,
 )
 
-think_state = llm.complete_until(
+# Stage 2: generate reasoning
+think = llm.complete_until(
     [{"role": "user", "content": "Solve this in stages"}],
-    memory_state.assistant_prompt_prefix + "\n<think_efficient>",
-    stop="</think_efficient>",
+    mem.assistant_prompt_prefix + "\n<think>",
+    stop="</think>",
     max_tokens=512,
 )
 
-final_state = llm.complete_until(
+# Stage 3: final answer
+final = llm.complete_until(
     [{"role": "user", "content": "Solve this in stages"}],
-    think_state.assistant_prompt_prefix,
+    think.assistant_prompt_prefix,
     stop="<|im_end|>",
     max_tokens=512,
 )
+
+print(final.content)
 ```
 
-#### Conversation History
-
-Inspect previous conversations:
+## Vision Utils
 
 ```python
-from llm_utils import LLM
+from vision_utils import read_images, read_images_cpu, read_images_gpu, plot_images_notebook
 
-llm = LLM(model="gpt-4o-mini")
+paths = ["img1.jpg", "img2.png"]
 
-# Make some calls
-llm("Hello")
-llm("How are you?")
+# Auto-select CPU or GPU loader
+images = read_images(paths)
 
-# Inspect the last conversation
-history = llm.inspect_history(idx=-1)
-print(history)
+# Explicit CPU loader (Pillow)
+images = read_images_cpu(paths)
 
-# Get last 3 messages from the conversation
-history = llm.inspect_history(idx=-1, k_last_messages=3)
+# GPU loader (NVIDIA DALI — requires dali installed)
+images = read_images_gpu(paths)
+
+# Display in a Jupyter notebook
+plot_images_notebook(images)
+```
+
+Memory-mapped image datasets for large collections:
+
+```python
+from vision_utils import ImageMmap, ImageMmapDynamic
+
+dataset = ImageMmap("dataset.mmap")
+img = dataset[0]  # zero-copy read
 ```
 
 ## Testing
 
-The test suite uses `pytest`:
-
 ```bash
-uv sync
-uv run pytest
+# Run all tests with 32 workers
+./tools/uv_test.sh -n 32
+
+# Single test file
+./tools/uv_test.sh tests/test_thread.py
+
+# Verbose
+./tools/uv_test.sh -v
+
+# Check import time (must be < 0.4 s)
+uv run python -c "import time; s=time.perf_counter(); import speedy_utils; print(f'{time.perf_counter()-s:.3f}s')"
+
+# Detailed import budget analysis
+uv run python scripts/debug_import_time.py speedy_utils llm_utils vision_utils \
+    --max-total-sec 0.4 --top 12 --min-sec 0.01 --no-stdlib
+
+# Type checking (zero pyright errors required before commit)
+uv run python tools/check_syntax.py
 ```
