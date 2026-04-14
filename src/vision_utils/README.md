@@ -1,202 +1,122 @@
 # Vision Utils
 
-Utility functions for computer vision tasks, particularly for visualizing images in Jupyter notebooks.
+`vision_utils` provides image loading, notebook plotting, and mmap-backed image
+datasets.
 
-## Features
+## Public Exports
 
-### `plot_images_notebook(images, ...)`
+- `read_images`
+- `read_images_cpu`
+- `read_images_gpu`
+- `plot_images_notebook`
+- `ImageMmap`
+- `ImageMmapDynamic`
 
-Plot a batch of images in a notebook with automatic format detection, smart grid layout, and size optimization to prevent notebook breaking.
+## Image Loading
 
-**Supported Input Formats:**
-- **Numpy arrays:**
-  - Batch: `(B, H, W, C)` or `(B, C, H, W)`
-  - Single: `(H, W, C)`, `(C, H, W)`, or `(H, W)` for grayscale
-- **PyTorch tensors:**
-  - Batch: `(B, H, W, C)` or `(B, C, H, W)`
-  - Single: `(H, W, C)`, `(C, H, W)`, or `(H, W)` for grayscale
-- **List of images:**
-  - Mixed formats (numpy arrays and/or torch tensors)
-
-**Parameters:**
-- `images`: Images to plot (see supported formats above)
-- `nrows`: Number of rows in grid (default: None, auto-calculated using sqrt)
-- `ncols`: Number of columns in grid (default: None, auto-calculated using sqrt)
-- `figsize`: Figure size `(width, height)` in inches (default: auto-calculated based on grid size and image count)
-- `titles`: Optional list of titles for each image
-- `cmap`: Colormap for grayscale images (default: 'gray')
-- `dpi`: Dots per inch for the figure (default: 72)
-- `max_figure_width`: Maximum figure width in inches (default: 15.0)
-- `max_figure_height`: Maximum figure height in inches (default: 20.0)
-
-**Smart Features:**
-- **Auto Grid Layout**: When both `nrows` and `ncols` are None, uses sqrt to create roughly square grid
-- **Adaptive Cell Sizing**: Automatically reduces cell size for larger image counts to prevent notebook breaking
-- **Size Constraints**: Respects max width/height limits to ensure plots render properly in notebooks
-- **Aspect Ratio Aware**: Calculates figure size based on actual image aspect ratios
-
-## Installation
-
-The vision_utils module is part of speedy_utils. Install with:
-
-```bash
-pip install -e .
-```
-
-For PyTorch support:
-```bash
-pip install torch
-```
-
-For plotting (required):
-```bash
-pip install matplotlib
-```
-
-## Usage Examples
-
-### Auto Grid Layout (Recommended)
+All three image-loading helpers return a dict mapping each input path to a NumPy
+array or `None` on failure.
 
 ```python
-import numpy as np
-from vision_utils import plot_images_notebook
+from vision_utils import read_images, read_images_cpu, read_images_gpu
 
-# Auto grid - creates 3x3 grid for 9 images
-images = np.random.rand(9, 64, 64, 3)
-plot_images_notebook(images)
+paths = ["img1.jpg", "img2.png"]
 
-# Auto grid - creates 3x3 grid for 8 images (1 empty cell)
-images = np.random.rand(8, 64, 64, 3)
-plot_images_notebook(images)
+auto_images = read_images(paths)
+cpu_images = read_images_cpu(paths)
+gpu_images = read_images_gpu(paths)
+
+print(auto_images[paths[0]].shape)
 ```
 
-### Manual Grid Layout
+### `read_images_cpu()`
+
+- backend: Pillow
+- return shape: RGB arrays in `(H, W, C)` format
+- optional resize via `hw=(height, width)`
+
+### `read_images_gpu()`
+
+- backend: NVIDIA DALI
+- return shape: RGB arrays in `(H, W, C)` format
+- optional validation and resize
+- returns the same dict[path, ndarray | None] structure as the CPU path
+
+### `read_images()`
+
+- tries GPU loading first
+- falls back to CPU loading on failure
+- keeps the same return type as the explicit CPU/GPU loaders
+
+## Notebook Plotting
+
+`plot_images_notebook()` plots arrays or tensors directly.
+
+Supported input shapes:
+
+- single image: `(H, W)`, `(H, W, C)`, `(C, H, W)`
+- batches: `(B, H, W, C)`, `(B, C, H, W)`
+- lists or tuples of arrays / tensors
+
+If you loaded images with `read_images*()`, pass `list(images.values())`.
 
 ```python
-import numpy as np
-from vision_utils import plot_images_notebook
+from vision_utils import plot_images_notebook, read_images
 
-# Specify exact grid dimensions
-images = np.random.rand(8, 64, 64, 3)
-plot_images_notebook(images, nrows=2, ncols=4)
+paths = ["img1.jpg", "img2.png"]
+images = read_images(paths)
+
+plot_images_notebook(list(images.values()))
 ```
 
-### Basic Usage
+Current plotting defaults and behavior:
+
+- automatic grid sizing when `nrows` and `ncols` are omitted
+- automatic normalization for channel-first vs channel-last arrays
+- default `dpi=300`
+- adaptive figure sizing capped by `max_figure_width` and `max_figure_height`
+
+## Mmap-Backed Datasets
+
+### `ImageMmap`
+
+`ImageMmap` builds or reuses a fixed-shape mmap cache from a sequence of image
+paths.
 
 ```python
-import numpy as np
-from vision_utils import plot_images_notebook
+from vision_utils import ImageMmap
 
-# Batch of images - auto grid layout
-images = np.random.rand(8, 64, 64, 3)
-plot_images_notebook(images)
+paths = ["img1.jpg", "img2.jpg"]
+dataset = ImageMmap(paths, size=(224, 224))
+img = dataset[0]
 ```
 
-### Many Images (Adaptive Sizing)
-```
+Important current behavior:
 
-### Many Images (Adaptive Sizing)
+- first positional argument is a sequence of image paths
+- cache files are created automatically when needed
+- optional `mmap_path` lets you control the cache location
+
+### `ImageMmapDynamic`
+
+`ImageMmapDynamic` stores variable-shaped images in a flat mmap file plus a
+metadata file.
 
 ```python
-import numpy as np
-from vision_utils import plot_images_notebook
+from vision_utils import ImageMmapDynamic
 
-# Automatically uses smaller cells for many images
-images = np.random.rand(25, 64, 64, 3)
-plot_images_notebook(images)  # Creates 5x5 grid with optimized cell size
+paths = ["img1.jpg", "img2.jpg"]
+dataset = ImageMmapDynamic(paths)
+img = dataset[0]
 ```
 
-### PyTorch Tensors
+Use it when you want to preserve original image sizes instead of resizing to a
+fixed shape.
 
-```python
-import torch
-from vision_utils import plot_images_notebook
+## Practical Notes
 
-# PyTorch tensor in (B, C, H, W) format
-images = torch.rand(8, 3, 64, 64)
-plot_images_notebook(images)
-```
-
-### Mixed Formats
-
-```python
-import numpy as np
-from vision_utils import plot_images_notebook
-
-# List of images with different formats
-images = [
-    np.random.rand(64, 64, 3),  # (H, W, C)
-    np.random.rand(3, 64, 64),  # (C, H, W)
-    np.random.rand(64, 64),     # Grayscale
-]
-
-plot_images_notebook(images, titles=titles)
-```
-
-### Single Image
-
-```python
-import numpy as np
-from vision_utils import plot_images_notebook
-
-# Single image
-image = np.random.rand(128, 128, 3)
-plot_images_notebook(image)
-```
-
-### Custom Figure Size and Colormap
-
-```python
-import numpy as np
-from vision_utils import plot_images_notebook
-
-# Grayscale images with custom settings
-images = np.random.rand(4, 64, 64)
-plot_images_notebook(
-    images,
-    nrows=2,
-    ncols=2,
-    figsize=(8, 8),
-    cmap='viridis',
-    dpi=100
-)
-```
-
-## Smart Grid Layout
-
-When `nrows` and `ncols` are both `None` (default), the function automatically calculates the optimal grid layout:
-
-1. Uses `sqrt(n_images)` to determine a roughly square grid
-2. For 9 images → 3x3 grid
-3. For 8 images → 3x3 grid (with 1 empty cell)
-4. For 16 images → 4x4 grid
-5. For 25 images → 5x5 grid
-
-This ensures balanced layouts without manual calculation.
-
-## Adaptive Cell Sizing
-
-The function automatically adjusts cell sizes based on the number of images to prevent notebook breaking:
-
-- **1-4 images**: 4.0 inches per cell
-- **5-9 images**: 3.0 inches per cell
-- **10-16 images**: 2.5 inches per cell
-- **17+ images**: 2.0 inches per cell
-
-Additionally, it respects `max_figure_width` (default: 15") and `max_figure_height` (default: 20") constraints to ensure plots render properly in notebooks.
-
-## Format Detection
-
-The function automatically detects and converts between different image formats:
-
-1. **Channel Detection:** Identifies if channels are in the first (`C, H, W`) or last (`H, W, C`) dimension
-2. **Batch Detection:** Handles both batched and single images
-3. **Type Conversion:** Automatically converts PyTorch tensors to numpy arrays
-4. **Value Normalization:** Handles both `[0, 1]` and `[0, 255]` value ranges
-
-## Notes
-
-- The function assumes that if the first dimension is 1 or 3 and is smaller than the other dimensions, it represents channels (`C, H, W` format)
-- Images with values in `[0, 1]` are displayed directly
-- Images with values > 1 are assumed to be in `[0, 255]` range and normalized to `[0, 1]`
-- Grayscale images can be 2D `(H, W)` or 3D `(H, W, 1)`
+- `plot_images_notebook()` expects arrays/tensors, not the dict returned by
+  `read_images()`
+- `read_images*()` returns `None` for failed paths instead of raising by default
+- `ImageMmap` and `ImageMmapDynamic` build cache files under `.cache/` by
+  default when you do not pass an explicit `mmap_path`
