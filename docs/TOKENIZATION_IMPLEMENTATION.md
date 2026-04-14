@@ -1,104 +1,76 @@
-# Tokenization Feature Implementation Summary
+# Current Tokenizer-Related Implementation Summary
 
-## What Was Added
+## Public Surface
 
-Added tokenization support (encode/decode methods) to the LLM class for converting between text and token IDs.
+There is no public `TokenizationMixin` in the current source tree, and the
+current `LLM` class does not expose generic `encode()` or `decode()` methods.
 
-## Changes Made
+The current public LLM API is centered on:
 
-### 1. New Mixin: `TokenizationMixin`
-**File:** `src/llm_utils/lm/mixins.py`
+- `LLM.chat_completion()`
+- `LLM.generate()`
+- `LLM.pydantic_parse()`
+- `Qwen3LLM.chat_completion()`
+- `Qwen3LLM.complete_until()`
+- `Qwen3LLM.complete_reasoning()`
+- `Qwen3LLM.complete_content()`
 
-Added a new mixin class with two methods:
-- `encode(text, add_special_tokens=True, return_token_strs=False)` - Convert text to token IDs
-- `decode(token_ids)` - Convert token IDs back to text
+## `LLM.generate()`
 
-### 2. Updated LLM Class
-**File:** `src/llm_utils/lm/llm.py`
+`LLM.generate()` is the raw prompt-continuation method.
 
-- Added `TokenizationMixin` to the LLM class inheritance
-- Imported the new mixin
+Current behavior:
 
-### 3. Updated Exports
-**File:** `src/llm_utils/lm/__init__.py`
+- input: `prompt: str`
+- output: `CompletionChoice`-like object
+- public API constraint: `n=1`
 
-- Added `TokenizationMixin` to imports and `__all__`
+It is not a token-id generation API in this branch.
 
-### 4. Documentation
-**File:** `docs/TOKENIZATION.md`
+## Internal Tokenizer Use In `Qwen3LLM`
 
-- Comprehensive documentation with API reference
-- Usage examples for common scenarios
-- Implementation details
+Tokenizer loading currently lives in `src/llm_utils/lm/llm_qwen3.py`.
 
-### 5. Example Script
-**File:** `examples/tokenization_example.py`
+The important internal flow is:
 
-- Practical examples demonstrating all features
-- Shows token counting, manipulation, debugging
+1. `_get_tokenizer()` lazily loads the Qwen tokenizer.
+2. `_build_completion_prompt()` calls `tokenizer.apply_chat_template(...)` when
+   the tokenizer is available.
+3. if tokenizer loading fails, the code falls back to text rendering via the
+   chat-format helpers.
 
-### 6. Tests
-**File:** `tests/test_tokenization.py`
+This means tokenizer support still matters to `Qwen3LLM`, but it is an internal
+prompt-rendering detail rather than a generic tokenization API for all models.
 
-- Unit tests for encode/decode functionality
-- Tests for special tokens handling
-- Manual test runner included
+## Qwen3 Prefix Helpers
 
-## API Endpoints Used
+The current staged Qwen3 helpers are:
 
-Based on the provided OpenAPI specification, the implementation uses:
+- `chat_completion(...)` -> returns a `ChatCompletionMessage`
+- `complete_until(...)` -> returns a continuation-state object
+- `complete_reasoning(...)` -> returns a reasoning prefix state
+- `complete_content(...)` -> returns a `ChatCompletionMessage`
 
-1. **POST /tokenize** - Tokenizes text input
-   - Accepts: `TokenizeCompletionRequest` with `prompt`, `add_special_tokens`, `return_token_strs`
-   - Returns: `tokens` (list of ints) and optionally `token_strs`
+These helpers are the current supported way to work with Qwen3-style reasoning
+prefixes.
 
-2. **POST /detokenize** - Converts token IDs back to text
-   - Accepts: `DetokenizeRequest` with `tokens` (list of ints)
-   - Returns: `prompt` (string)
+## Documentation Implication
 
-## Usage
+Docs in this repository should **not** promise any of the following unless the
+runtime code is reintroduced:
 
-```python
-from llm_utils.lm import LLM
+- `lm.encode(...)`
+- `lm.decode(...)`
+- token-id input to `LLM.generate(...)`
+- a public tokenization mixin
+- examples built around `/tokenize` and `/detokenize` endpoints
 
-# Initialize
-lm = LLM(base_url='http://localhost:8000/v1')
+## If Tokenization Is Reintroduced Later
 
-# Encode
-token_ids = lm.encode('Hello, world!')
+Any reintroduction should come with all of the following at once:
 
-# Decode
-text = lm.decode(token_ids)
-
-# With token strings for debugging
-token_ids, token_strs = lm.encode('Hello', return_token_strs=True)
-```
-
-## Testing
-
-Run tests with:
-```bash
-# Using pytest
-pytest tests/test_tokenization.py
-
-# Manual test
-python tests/test_tokenization.py
-```
-
-Run example:
-```bash
-python examples/tokenization_example.py
-```
-
-## Requirements
-
-- OpenAI-compatible server running with tokenization endpoints
-- `requests` library (already a dependency)
-
-## Benefits
-
-1. **Token Counting**: Check token count before API calls to manage context windows
-2. **Token-Level Manipulation**: Combine/split text at token boundaries
-3. **Debugging**: Inspect exact tokenization with `return_token_strs=True`
-4. **Consistency**: Use same tokenizer as the model server
-5. **No Local Tokenizer**: No need to install transformers or download tokenizer locally
+- real source files implementing the public methods
+- export updates in `llm_utils`
+- tests covering public behavior
+- examples that exercise the real API
+- updated docs replacing this historical note
