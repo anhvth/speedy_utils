@@ -4,31 +4,21 @@
 ![Python Versions](https://img.shields.io/pypi/pyversions/speedy-utils)
 ![License](https://img.shields.io/pypi/l/speedy-utils)
 
-**Speedy Utils** is a Python utility library for caching, parallel processing, file I/O, LLM integration, and image processing. It is designed for fast imports (< 0.4 s) via lazy loading of heavy dependencies.
+**Speedy Utils** is a Python utility library for caching, parallel processing,
+file I/O, LLM integration, dataset inspection, and image processing. The repo
+ships multiple importable packages and keeps import time under the repository's
+`0.4s` hook budget by keeping heavy external dependencies lazy.
 
 ## Table of Contents
 
 - [Installation](#installation)
 - [Packages](#packages)
-- [Caching](#caching)
-- [Parallel Processing](#parallel-processing)
-  - [multi\_thread](#multi_thread)
-  - [multi\_process](#multi_process)
-  - [mpython CLI](#mpython-cli-tool)
-- [File I/O](#file-io)
-- [Data Utilities](#data-utilities)
-- [Print & Display](#print--display)
-- [Timing](#timing)
+- [Core Utilities](#core-utilities)
+- [CLI Tools](#cli-tools)
 - [LLM](#llm)
-  - [Basic completion](#basic-text-completion)
-  - [Structured output](#structured-output-with-pydantic)
-  - [Streaming](#streaming-responses)
-  - [Client configuration](#client-configuration)
-  - [Caching](#llm-caching)
-  - [Signatures (DSPy-style)](#signatures-dspy-style)
-  - [Qwen3LLM](#qwen3llm)
+- [Dataset Tools](#dataset-tools)
 - [Vision Utils](#vision-utils)
-- [Testing](#testing)
+- [Testing and Checks](#testing-and-checks)
 
 ## Installation
 
@@ -41,84 +31,73 @@ uv pip install speedy-utils
 Install from source:
 
 ```bash
-pip install git+https://github.com/anhvth/speedy
+pip install git+https://github.com/anhvth/speedy_utils
 # or
-uv pip install git+https://github.com/anhvth/speedy
+uv pip install git+https://github.com/anhvth/speedy_utils
 ```
 
 Local development:
 
 ```bash
-git clone https://github.com/anhvth/speedy
-cd speedy
+git clone https://github.com/anhvth/speedy_utils
+cd speedy_utils
 uv sync
 ```
 
-Upgrading from an older split package:
+Upgrading from older split packages:
 
 ```bash
 pip uninstall speedy_llm_utils speedy_utils
-pip install speedy-utils -U
+pip install -U speedy-utils
 ```
 
 ## Packages
 
-The repo ships three importable packages:
+The wheel currently installs four packages from `src/`:
 
 | Package | Purpose |
 |---------|---------|
-| `speedy_utils` | Core: caching, IO, parallel processing, timing |
-| `llm_utils` | LLM integration with OpenAI-compatible backends |
-| `vision_utils` | Image loading and visualization |
+| `speedy_utils` | Core utilities: caching, I/O, formatting, parallelism, timing |
+| `llm_utils` | OpenAI-compatible LLM wrappers and chat-format helpers |
+| `vision_utils` | Image loading, plotting, and mmap-backed image datasets |
+| `datasets_utils` | Dataset inspection helpers, including the `viz_chat` CLI |
 
-## Caching
+## Core Utilities
 
-### `@memoize` — disk + memory cache
+### `memoize` and `imemoize`
 
 ```python
-from speedy_utils import memoize
+from speedy_utils import memoize, imemoize
 
 @memoize
 def expensive_function(x):
-    import time; time.sleep(2)
+    import time
+
+    time.sleep(2)
     return x * x
 
-expensive_function(4)  # ~2 s, result saved to ~/.cache/speedy_utils/
-expensive_function(4)  # instant, from cache
+
+@imemoize
+def fast_function(x):
+    return x + 1
 ```
 
-Options:
+`memoize` uses memory, disk, or both. The default disk cache root is
+`~/.cache/speedy_cache`.
 
 ```python
 @memoize(
-    keys=["x"],          # which args contribute to the cache key
+    keys=["x"],
     cache_dir="/tmp/my_cache",
-    cache_type="disk",   # "memory" | "disk" | "both" (default)
-    size=512,            # LRU size for the in-memory layer
+    cache_type="both",   # "memory" | "disk" | "both"
+    size=512,
     verbose=True,
 )
 def fn(x, ignored_arg):
     ...
 ```
 
-Works with `async` functions too.
-
-### `@imemoize` — in-memory only
-
-```python
-from speedy_utils import imemoize
-
-@imemoize
-def compute_sum(a, b):
-    return a + b
-
-compute_sum(5, 7)  # computed
-compute_sum(5, 7)  # from in-memory cache
-```
-
-The cache survives IPython `%load` re-executions (global persistent dict keyed on function source + args). Ideal for notebooks.
-
-## Parallel Processing
+Both decorators support sync and async functions.
 
 ### `multi_thread`
 
@@ -126,31 +105,31 @@ The cache survives IPython `%load` re-executions (global persistent dict keyed o
 from speedy_utils import multi_thread
 
 results = multi_thread(lambda x: x * 2, [1, 2, 3, 4, 5])
-# [2, 4, 6, 8, 10]
 ```
 
-Full signature:
+Important public options:
 
 ```python
 multi_thread(
     func,
     inputs,
-    *,
-    workers=cpu_count() * 2,  # thread count
-    batch=1,                  # items per invocation (1 = no batching)
-    ordered=True,             # preserve input ordering
-    progress=True,            # tqdm progress bar
-    progress_weight=None,     # callable(item) → logical units
-    prefetch_factor=4,        # in-flight work = workers * prefetch_factor
-    timeout=None,             # overall wall-clock timeout (seconds)
-    error_handler="raise",    # "raise" | "ignore" | "log"
-    max_error_files=100,      # max error log files (log mode)
-    store_output_pkl_file=None,  # persist results to this path
-    **fixed_kwargs,           # forwarded to every func call
+    workers=None,
+    batch=1,
+    ordered=True,
+    progress=True,
+    progress_update=10,
+    progress_total=None,
+    progress_weight=None,
+    prefetch_factor=4,
+    timeout=None,
+    error_handler="raise",   # "raise" | "ignore" | "log"
+    max_error_files=100,
+    store_output_pkl_file=None,
+    **fixed_kwargs,
 )
 ```
 
-Error handling modes:
+Error handling:
 
 ```python
 def process(item):
@@ -158,23 +137,14 @@ def process(item):
         raise ValueError("bad item")
     return item * 2
 
-# Stop on first error (default)
-results = multi_thread(process, [1, 2, 3, 4, 5], error_handler="raise")
 
-# Continue, return None for failed items
-results = multi_thread(process, [1, 2, 3, 4, 5], error_handler="ignore")
-# [2, 4, None, 8, 10]
-
-# Log errors to .cache/speedy_utils/error_logs/ and continue
-results = multi_thread(process, [1, 2, 3, 4, 5], error_handler="log")
-# [2, 4, None, 8, 10]
+multi_thread(process, [1, 2, 3], error_handler="raise")
+multi_thread(process, [1, 2, 3], error_handler="ignore")
+multi_thread(process, [1, 2, 3], error_handler="log")
 ```
 
-Progress bars show live error/success counts:
-
-```
-Multi-thread [8/10] [00:02<00:00, 3.45it/s, success=8, errors=2]
-```
+`error_handler="log"` writes rich error reports under
+`.cache/speedy_utils/error_logs/`.
 
 ### `multi_process`
 
@@ -184,240 +154,209 @@ from speedy_utils import multi_process
 results = multi_process(
     func,
     items,
-    num_procs=4,         # process count (None = auto)
-    num_threads=1,       # threads per process
-    backend="spawn",     # "spawn" | "fork" (POSIX only)
-    error_handler="log", # "raise" | "ignore" | "log"
-    max_error_files=100,
-    progress=True,
-    desc=None,
-    dump_in_thread=True, # persist results in a background thread
-    log_worker="first",  # "zero" | "first" | "all"
-)
-```
-
-Choosing `num_procs` vs `num_threads`:
-
-| Workload | Recommended |
-|----------|-------------|
-| CPU-bound | `num_procs > 1`, `num_threads=1` (bypasses GIL) |
-| I/O-bound | `num_procs=1`, `num_threads > 1` (lighter weight) |
-| Mixed | Use both, e.g. `num_procs=4, num_threads=4` |
-
-```python
-# Web scraping: 4 processes for parsing, 8 threads each for I/O
-results = multi_process(
-    fetch_and_parse,
-    urls,
     num_procs=4,
-    num_threads=8,
-    error_handler="log",
+    num_threads=1,
+    backend="spawn",      # "spawn" | "fork"
+    error_handler="log",  # "raise" | "ignore" | "log"
+    progress=True,
+    dump_in_thread=True,
+    log_worker="first",   # "zero" | "first" | "all"
 )
 ```
 
-### mpython CLI Tool
+Current behavior worth knowing:
 
-Run a Python script across multiple tmux windows with automatic GPU/CPU allocation.
+- `num_procs=None` normalizes to `1`, not automatic process-count detection.
+- `num_procs <= 1` and `num_threads <= 1` uses a local sequential backend.
+- `num_procs <= 1` and `num_threads > 1` uses the in-process thread backend.
 
-```bash
-mpython script.py          # 16 workers across all GPUs
-mpython -t 8 script.py    # 8 workers
-mpython --gpus 0,1 script.py  # restrict to GPUs 0 and 1
-kill-mpython               # kill all mpython sessions
-```
+### File I/O
 
-Your script uses `MP_ID` / `MP_TOTAL` environment variables to shard work:
+Use `load_jsonl()` for JSONL and `load_json_or_pickle()` for `.json` and pickle.
 
 ```python
-import os
+from speedy_utils import (
+    dump_json_or_pickle,
+    dump_jsonl,
+    jdumps,
+    jloads,
+    load_by_ext,
+    load_json_or_pickle,
+    load_jsonl,
+)
 
-MP_ID    = int(os.getenv("MP_ID", "0"))
-MP_TOTAL = int(os.getenv("MP_TOTAL", "1"))
-
-inputs   = list(range(1000))
-my_slice = inputs[MP_ID::MP_TOTAL]  # each worker gets its own slice
-
-for item in my_slice:
-    process(item)
-```
-
-Sessions are named `mpython`, `mpython-1`, `mpython-2`, … Attach with `tmux attach -t mpython`.
-
-## File I/O
-
-### Loading JSONL
-
-```python
-from speedy_utils import load_jsonl
-
-# Single file
 records = load_jsonl("data/file.jsonl")
-
-# Glob pattern — all matches are concatenated into one list
-records = load_jsonl("data/*.jsonl")
-
-# Recursive glob
 records = load_jsonl("data/**/*.jsonl")
-
-# List of paths / globs
 records = load_jsonl(["train/*.jsonl", "val/file.jsonl"])
+
+data = load_json_or_pickle("data.json")
+data = load_json_or_pickle("data.pkl")
+
+dump_json_or_pickle({"name": "Alice"}, "out.json")
+dump_jsonl([{"a": 1}, {"a": 2}], "out.jsonl")
+
+obj = jloads('{"key": "value",}')
+text = jdumps(obj)
+
+data = load_by_ext("data.csv")
+data = load_by_ext(["part1.jsonl", "part2.jsonl"])
 ```
 
-For streaming (constant memory) or advanced options use `fast_load_jsonl` directly:
+For streaming or compressed JSONL, use `fast_load_jsonl` directly:
 
 ```python
 from speedy_utils.common.utils_io import fast_load_jsonl
 
 for record in fast_load_jsonl(
-    "data/large.jsonl.gz",  # auto-detects .gz / .bz2 / .xz / .zst
+    "data/large.jsonl.gz",
     progress=True,
-    on_error="skip",        # "raise" | "warn" | "skip"
-    max_lines=1000,         # stop after N lines (sampling)
-    use_orjson=True,        # faster parsing if orjson is installed
+    on_error="skip",
+    max_lines=1000,
+    use_orjson=True,
 ):
     ...
 ```
 
-### JSON / Pickle
+### Data, Printing, and Timing Helpers
 
 ```python
-from speedy_utils import dump_json_or_pickle, load_json_or_pickle
+from speedy_utils import (
+    Clock,
+    convert_to_builtin_python,
+    dedup,
+    flatten_dict,
+    flatten_list,
+    fprint,
+    print_table,
+    timef,
+)
 
-data = {"name": "Alice", "age": 30}
+flatten_list([[1, 2], [3, 4]])
+flatten_dict({"a": {"b": 1}, "c": 2})
+dedup([3, 1, 2, 1, 3])
 
-dump_json_or_pickle(data, "data.json")   # JSON
-dump_json_or_pickle(data, "data.pkl")   # pickle
-
-data = load_json_or_pickle("data.json")
-data = load_json_or_pickle("data.pkl")
-data = load_json_or_pickle("data.jsonl")  # returns list
-```
-
-### JSONL writing
-
-```python
-from speedy_utils import dump_jsonl
-
-dump_jsonl([{"a": 1}, {"a": 2}], "out.jsonl")
-```
-
-### JSON helpers
-
-```python
-from speedy_utils import jdumps, jloads
-
-s = jdumps({"key": "value"})   # json.dumps with indent=2, ensure_ascii=False
-
-# jloads uses json_repair — tolerates malformed JSON
-obj = jloads('{"key": "value",}')  # trailing comma fixed automatically
-```
-
-### Generic loader
-
-```python
-from speedy_utils import load_by_ext
-
-# Dispatches by extension: .csv/.tsv → pandas, .txt → lines, .json/.pkl/…
-data = load_by_ext("data.csv")
-data = load_by_ext(["part1.jsonl", "part2.jsonl"])  # concatenated
-data = load_by_ext("data.json", do_memoize=True)    # cached in memory
-```
-
-## Data Utilities
-
-```python
-from speedy_utils import flatten_list, flatten_dict, convert_to_builtin_python, dedup
-
-# Flatten a list of lists
-flatten_list([[1, 2], [3, 4], [5]])  # [1, 2, 3, 4, 5]
-
-# Flatten nested dict with dot-notation keys
-flatten_dict({"a": {"b": 1, "c": 2}, "d": 3})
-# {"a.b": 1, "a.c": 2, "d": 3}
-
-# Convert Pydantic models / numpy types to plain Python
-from pydantic import BaseModel
-
-class User(BaseModel):
-    name: str
-    age: int
-
-convert_to_builtin_python(User(name="Alice", age=30))
-# {"name": "Alice", "age": 30}
-
-# Deduplicate a list preserving order
-dedup([3, 1, 2, 1, 3])  # [3, 1, 2]
-```
-
-## Print & Display
-
-```python
-from speedy_utils import fprint, print_table
-
-data = {"name": "Dana", "scores": [95, 87, 92], "city": "New York"}
-
-# Rich pretty-print (auto HTML in notebooks, grid in terminal)
-fprint(data)
-fprint(data, key_ignore=["scores"], grep="city")
-
-# Tabular display (HTML in notebooks, grid in terminal)
+fprint({"name": "Dana", "scores": [95, 87, 92]})
 print_table([{"a": 1, "b": 2}, {"a": 3, "b": 4}])
-```
-
-## Timing
-
-```python
-from speedy_utils import timef, Clock
 
 @timef
 def slow_function():
-    import time; time.sleep(3)
+    ...
 
-slow_function()  # prints execution time
-
-# Checkpoint-based timer
 clock = Clock()
-do_step_one()
-clock.log_elapsed_time()  # logs time since last checkpoint
-do_step_two()
-clock.log_elapsed_time()
+```
+
+## CLI Tools
+
+The installed console scripts are:
+
+| CLI | Purpose |
+|-----|---------|
+| `mpython` | Launch sharded Python runs across tmux windows |
+| `kill-mpython` | Kill `mpython` tmux sessions |
+| `sp_chat` | Launch a Chainlit chat UI for an OpenAI-compatible backend |
+| `spu-prefetch-large-model` | Read large model files into the OS page cache |
+| `viz_chat` | Inspect chat datasets from JSON, JSONL, folders, or HF saves |
+| `openapi_client_codegen` | Generate a sync client from an OpenAPI JSON spec |
+
+Examples:
+
+```bash
+mpython -t 8 script.py
+kill-mpython
+
+sp_chat client=8000
+sp_chat client=http://10.0.0.3:8000/v1 port=5010 model=Qwen/Qwen2.5-7B-Instruct
+
+spu-prefetch-large-model /path/to/model -j 8
+
+viz_chat data/my_dataset.jsonl
+viz_chat data/hf_dataset/ --count 5
+viz_chat data/tokenized_dataset/ --tokenizer Qwen/Qwen3-8B
+
+openapi_client_codegen openapi.json -o generated_client.py
 ```
 
 ## LLM
 
-`llm_utils` provides a unified interface for OpenAI-compatible language model backends.
+`llm_utils` wraps OpenAI-compatible chat and completion APIs.
 
-### Basic Text Completion
+### `LLM` main entry points
+
+```python
+from llm_utils import LLM
+
+llm = LLM(client=8000)
+```
+
+The three main sync entry points are:
+
+- `chat_completion(...)` for chat responses.
+- `generate(...)` for raw prompt continuation through the completions API.
+- `pydantic_parse(...)` for structured outputs.
+
+The convenience `llm(...)` wrapper routes like this:
+
+- `llm("prompt")` -> `chat_completion(...)`
+- `llm("prompt", response_model=MyModel)` -> `pydantic_parse(...)`
+- `llm("prompt", return_dict=True)` -> normalized dict with raw artifacts
+
+### Basic chat completion
 
 ```python
 from llm_utils import LLM
 
 llm = LLM(model="gpt-4o-mini")
-
-response = llm("What is Python?")
-print(response.content)
+message = llm("What is Python?")
+print(message.content)
 ```
 
-### Structured Output with Pydantic
+Equivalent explicit call:
+
+```python
+message = llm.chat_completion(
+    [
+        {"role": "system", "content": "Be concise."},
+        {"role": "user", "content": "What is Python?"},
+    ]
+)
+```
+
+### Structured output with Pydantic
 
 ```python
 from pydantic import BaseModel
 from llm_utils import LLM
+
 
 class Sentiment(BaseModel):
     sentiment: str
     confidence: float
 
-llm = LLM(model="gpt-4o-mini")
 
-result: Sentiment = llm.structured(
-    "I love this product!",
+llm = LLM(model="gpt-4o-mini")
+result = llm.pydantic_parse(
+    "Return JSON for the sentiment of: I love this product!",
     response_model=Sentiment,
 )
 print(result.sentiment, result.confidence)
 ```
 
-### Streaming Responses
+### Normalized dict output
+
+```python
+result = llm(
+    "Return JSON for the sentiment of: I love this product!",
+    response_model=Sentiment,
+    return_dict=True,
+)
+
+print(result.keys())
+# dict_keys(["completion", "message", "messages", "parsed"])
+```
+
+### Streaming chat responses
+
+Streaming is only supported for text completions, not Pydantic parsing.
 
 ```python
 from llm_utils import LLM
@@ -430,124 +369,223 @@ for chunk in llm("Tell me a story", stream=True):
         print(content, end="", flush=True)
 ```
 
-### Client Configuration
+### Raw prompt continuation with `generate()`
+
+`generate()` uses the completions API and returns an OpenAI
+`CompletionChoice`-like object.
+
+```python
+choice = llm.generate(
+    "Write a haiku about coding:",
+    max_tokens=50,
+    temperature=0.8,
+)
+
+print(choice.text)
+print(choice.finish_reason)
+print(choice.usage.total_tokens)
+```
+
+Current public behavior:
+
+- `generate()` expects `prompt` to be a string.
+- `n=1` only; multi-choice generation is rejected.
+- backend-specific metadata such as `token_ids` or `prompt_logprobs` is kept
+  when the backend returns it.
+
+### Client configuration
 
 ```python
 from llm_utils import LLM
 from openai import OpenAI
 
-# Custom OpenAI-compatible client
-llm = LLM(client=OpenAI(base_url="http://localhost:8000/v1", api_key="sk-..."), model="llama-3")
+llm = LLM(
+    client=OpenAI(base_url="http://localhost:8000/v1", api_key="sk-..."),
+    model="llama-3",
+)
 
-# Port shorthand — wraps OpenAI(base_url="http://localhost:<port>/v1")
 llm = LLM(client=8000, model="llama-3")
-
-# URL shorthand
 llm = LLM(client="http://localhost:8000/v1", model="llama-3")
-
-# Load balancing across multiple clients
 llm = LLM(client=[8000, 8001, 8002], model="llama-3")
 ```
 
-### LLM Caching
+### Caching and history inspection
 
 ```python
-from llm_utils import LLM
+llm = LLM(model="gpt-4o-mini", cache=True)
 
-llm = LLM(model="gpt-4o-mini", cache=True)  # default: True
+message = llm("What is 2+2?")
+again = llm("What is 2+2?")
+fresh = llm("What is 2+2?", cache=False)
 
-result = llm("What is 2+2?")          # hits API
-result = llm("What is 2+2?")          # served from cache
-result = llm("What is 2+2?", cache=False)  # bypass cache for this call
+history = llm.inspect_history()
 ```
 
-### Signatures (DSPy-style)
+`inspect_history()` returns the recent conversation that was recorded for the
+last response.
 
-`LLMSignature` provides a structured, declarative way to define LLM tasks:
+### `LLMSignature`
+
+`LLMSignature` binds a `Signature` class to default structured output.
 
 ```python
-from llm_utils import LLMSignature, Signature, Input, Output, InputField, OutputField
+from llm_utils import Input, LLMSignature, Output, Signature
+
 
 class SentimentSignature(Signature):
-    """Analyze sentiment of the given text."""
-    text: str = InputField(description="Text to analyze")
-    sentiment: str = OutputField(description="positive | negative | neutral")
-    confidence: float = OutputField(description="Confidence score 0–1")
+    text: str = Input("Text to analyze")
+    sentiment: str = Output("positive | negative | neutral")
+    confidence: float = Output("Confidence score")
 
-sig = LLMSignature(SentimentSignature, model="gpt-4o-mini")
-result = sig(text="I love this!")
+
+sig = LLMSignature(signature=SentimentSignature, model="gpt-4o-mini")
+result = sig("Analyze: I love this!")
 print(result.sentiment, result.confidence)
 ```
 
-### Qwen3LLM
+### `Qwen3LLM`
 
-Extends `LLM` for Qwen3 models with staged generation and explicit thinking support:
+`Qwen3LLM` adds staged prefix continuation for Qwen3-style reasoning flows.
+
+Standard chat path:
 
 ```python
 from llm_utils import Qwen3LLM
 
-llm = Qwen3LLM(model="Qwen/Qwen3-0.6B", enable_thinking=True)
+llm = Qwen3LLM(client=8000)
+message = llm.chat_completion(
+    [{"role": "user", "content": "Solve x^2 + 2x + 1 = 0"}],
+    thinking_max_tokens=32,
+    content_max_tokens=128,
+)
 
-# Stage 1: generate memory
-mem = llm.complete_until(
-    [{"role": "user", "content": "Solve this in stages"}],
+print(message.content)
+print(getattr(message, "reasoning_content", None))
+print(getattr(message, "call_count", None))
+```
+
+Custom staged prefix flow:
+
+```python
+memory_state = llm.complete_until(
+    [{"role": "user", "content": "Plan the answer in stages"}],
     "<memory>",
     stop="</memory>",
+    max_tokens=128,
+)
+
+think_state = llm.complete_until(
+    [{"role": "user", "content": "Plan the answer in stages"}],
+    memory_state.assistant_prompt_prefix + "\n<think_efficient>",
+    stop="</think_efficient>",
     max_tokens=256,
 )
 
-# Stage 2: generate reasoning
-think = llm.complete_until(
-    [{"role": "user", "content": "Solve this in stages"}],
-    mem.assistant_prompt_prefix + "\n<think>",
-    stop="</think>",
-    max_tokens=512,
-)
-
-# Stage 3: final answer
-final = llm.complete_until(
-    [{"role": "user", "content": "Solve this in stages"}],
-    think.assistant_prompt_prefix,
+final_state = llm.complete_until(
+    [{"role": "user", "content": "Plan the answer in stages"}],
+    think_state.assistant_prompt_prefix,
     stop="<|im_end|>",
-    max_tokens=512,
+    max_tokens=256,
 )
 
-print(final.content)
+print(final_state.generated_text)
+print(final_state.assistant_prompt_prefix)
+print(final_state.call_count)
+```
+
+`complete_until()` returns a continuation state object, not a
+`ChatCompletionMessage`.
+
+## Dataset Tools
+
+`datasets_utils.viz_chat` is a lightweight dataset inspector for conversation
+data.
+
+Supported inputs:
+
+- HuggingFace datasets saved with `save_to_disk()`
+- JSONL files
+- JSON files containing one object or a list of objects
+- Folders of JSON files
+- tokenized datasets when `--tokenizer` is provided
+
+Examples:
+
+```bash
+viz_chat data/my_dataset
+viz_chat data/conversations.jsonl
+viz_chat data/sharegpt.jsonl --format sharegpt
+viz_chat data/tokenized_dataset/ --tokenizer Qwen/Qwen3-8B
+viz_chat data/with_tools.jsonl --show-tools
 ```
 
 ## Vision Utils
 
+`vision_utils` exports:
+
+- `read_images`
+- `read_images_cpu`
+- `read_images_gpu`
+- `plot_images_notebook`
+- `ImageMmap`
+- `ImageMmapDynamic`
+
+### Image loading
+
+The image loaders return a dict mapping each input path to a NumPy array or
+`None` on failure.
+
 ```python
-from vision_utils import read_images, read_images_cpu, read_images_gpu, plot_images_notebook
+from vision_utils import read_images, read_images_cpu, read_images_gpu
 
 paths = ["img1.jpg", "img2.png"]
 
-# Auto-select CPU or GPU loader
 images = read_images(paths)
+cpu_images = read_images_cpu(paths)
+gpu_images = read_images_gpu(paths)
 
-# Explicit CPU loader (Pillow)
-images = read_images_cpu(paths)
-
-# GPU loader (NVIDIA DALI — requires dali installed)
-images = read_images_gpu(paths)
-
-# Display in a Jupyter notebook
-plot_images_notebook(images)
+first_image = images[paths[0]]
 ```
 
-Memory-mapped image datasets for large collections:
+### Notebook plotting
+
+`plot_images_notebook()` accepts NumPy arrays, PyTorch tensors, lists, or tuples
+of image arrays. If you loaded images with `read_images*`, pass the values.
+
+```python
+from vision_utils import plot_images_notebook, read_images
+
+paths = ["img1.jpg", "img2.png"]
+images = read_images(paths)
+
+plot_images_notebook(list(images.values()))
+```
+
+The current defaults include `dpi=300`, automatic grid sizing, and automatic
+format normalization for `(H, W)`, `(H, W, C)`, `(C, H, W)`, `(B, H, W, C)`,
+and `(B, C, H, W)` inputs.
+
+### Mmap-backed datasets
+
+Both mmap dataset classes take image paths, not a prebuilt mmap filename as the
+only positional argument.
 
 ```python
 from vision_utils import ImageMmap, ImageMmapDynamic
 
-dataset = ImageMmap("dataset.mmap")
-img = dataset[0]  # zero-copy read
+paths = ["img1.jpg", "img2.jpg"]
+
+fixed = ImageMmap(paths, size=(224, 224))
+dynamic = ImageMmapDynamic(paths)
+
+img = fixed[0]
+img2 = dynamic[0]
 ```
 
-## Testing
+## Testing and Checks
 
 ```bash
-# Run all tests with 32 workers
+# Run all tests with xdist workers
 ./tools/uv_test.sh -n 32
 
 # Single test file
@@ -556,13 +594,14 @@ img = dataset[0]  # zero-copy read
 # Verbose
 ./tools/uv_test.sh -v
 
-# Check import time (must be < 0.4 s)
-uv run python -c "import time; s=time.perf_counter(); import speedy_utils; print(f'{time.perf_counter()-s:.3f}s')"
-
-# Detailed import budget analysis
+# Check import-time budget
 uv run python scripts/debug_import_time.py speedy_utils llm_utils vision_utils \
     --max-total-sec 0.4 --top 12 --min-sec 0.01 --no-stdlib
 
-# Type checking (zero pyright errors required before commit)
+# Type checking
 uv run python tools/check_syntax.py
+
+# Ruff
+uv run ruff check .
+uv run ruff format .
 ```
