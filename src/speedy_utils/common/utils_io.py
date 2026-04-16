@@ -97,7 +97,7 @@ def load_json_or_pickle(fname: str, counter=0) -> Any:
                 # Keep message concise and actionable
                 print(
                     f"[load_json_or_pickle] EOFError reading cache file='{fname}' (attempt={counter}). "
-                    f"Assuming partial write/corruption; deleted file and will regenerate on next access."
+                    f"Assuming partial write/corruption; deleting file and will raise."
                 )
                 os.remove(fname)
                 raise
@@ -129,7 +129,7 @@ def fast_load_jsonl(
     skip_empty: bool = True,
     max_lines: int | None = None,
     use_multiworker: bool = True,
-    multiworker_threshold: int = 1000000,
+    multiworker_threshold: int = int(os.environ.get("SPEEDY_MULTIWORKER_THRESHOLD", "1000000")),
     workers: int | None = None,
 ) -> Iterable[Any]:
     """
