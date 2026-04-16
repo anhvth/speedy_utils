@@ -118,7 +118,7 @@ class TestQwen3LLM(unittest.TestCase):
         self.assertIsInstance(result, ChatCompletionMessage)
         self.assertEqual(result.role, "assistant")
         self.assertEqual(result.content, "final answer")
-        self.assertEqual(result.reasoning_content, "seedreasoning step")
+        self.assertEqual(result.reasoning, "seedreasoning step")
         self.assertEqual(result.call_count, 1)
         self.assertIs(result.usage, completion_choice.usage)
 
@@ -193,6 +193,28 @@ class TestQwen3LLM(unittest.TestCase):
         self.assertEqual(dumped["role"], "assistant")
 
     @patch("llm_utils.lm.llm.get_base_client")
+    def test_qwen3_call_result_uses_canonical_reasoning_field(self, mock_get_client):
+        mock_get_client.return_value = self._make_mock_client()
+        llm = Qwen3LLM()
+
+        reasoning_state = Qwen3LLM._build_prefix_state(
+            "<think>\nchain of thought</think>hello",
+            stop_reason="stop",
+            call_count=1,
+        )
+        with patch.object(llm, "complete_reasoning", return_value=reasoning_state):
+            result = llm.chat_completion(
+                "prompt",
+                thinking_max_tokens=32,
+                content_max_tokens=64,
+            )
+
+        dumped = result.model_dump()
+        self.assertIn("reasoning", dumped)
+        self.assertNotIn("reasoning_content", dumped)
+        self.assertEqual(dumped["reasoning"], "chain of thought")
+
+    @patch("llm_utils.lm.llm.get_base_client")
     def test_chat_completion_records_structured_history(self, mock_get_client):
         mock_get_client.return_value = self._make_mock_client()
         llm = Qwen3LLM()
@@ -232,7 +254,7 @@ class TestQwen3LLM(unittest.TestCase):
             )
 
         self.assertEqual(result.content, "final answer")
-        self.assertEqual(result.reasoning_content, "reasoning step")
+        self.assertEqual(result.reasoning, "reasoning step")
         self.assertEqual(result.call_count, 1)
         self.assertIs(result.usage, usage)
         self.assertEqual(
@@ -242,7 +264,7 @@ class TestQwen3LLM(unittest.TestCase):
                 {
                     "role": "assistant",
                     "content": "final answer",
-                    "reasoning_content": "reasoning step",
+                    "reasoning": "reasoning step",
                 },
             ],
         )
@@ -412,7 +434,7 @@ class TestQwen3LLM(unittest.TestCase):
         self.assertEqual(reasoning_state.call_count, 1)
         self.assertIs(reasoning_state.usage, reasoning_choice.usage)
         self.assertEqual(result.content, "final answer")
-        self.assertEqual(result.reasoning_content, "seedstill thinking")
+        self.assertEqual(result.reasoning, "seedstill thinking")
         self.assertEqual(result.call_count, 2)
         self.assertIs(result.usage, content_choice.usage)
         self.assertEqual(result.usage.completion_tokens, 4)
@@ -538,7 +560,7 @@ class TestQwen3LLM(unittest.TestCase):
             result = llm.chat_completion("prompt")
 
         self.assertEqual(result.content, "final answer")
-        self.assertEqual(result.reasoning_content, "reasoning step")
+        self.assertEqual(result.reasoning, "reasoning step")
         self.assertEqual(result.call_count, 2)
         self.assertIs(result.usage, content_choice.usage)
         self.assertEqual(result.usage.completion_tokens, 4)

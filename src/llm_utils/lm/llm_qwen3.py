@@ -720,7 +720,7 @@ class Qwen3LLM(LLM):
 
         extra: dict[str, Any] = {}
         if reasoning:
-            extra["reasoning_content"] = reasoning
+            extra["reasoning"] = reasoning
         if usage is not None:
             extra["usage"] = usage
         if call_count is not None:
