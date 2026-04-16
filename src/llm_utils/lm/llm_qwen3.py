@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import os
 import threading
-from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from httpx import Timeout
 from loguru import logger
@@ -36,24 +35,26 @@ _TRANSFORMERS_IMPORT_ERROR_MESSAGE = (
 )
 
 
-class _PrefixCompletionState(NamedTuple):
+class _PrefixCompletionState(BaseModel):
     assistant_prompt_prefix: str
-    reasoning: str | None
-    content: str | None
-    think_done: bool
-    stop_reason: str | None
-    call_count: int
-    usage: Any | None
+    reasoning: str | None = None
+    content: str | None = None
+    think_done: bool = False
+    stop_reason: str | None = None
+    call_count: int = 0
+    usage: Any | None = None
 
 
-@dataclass(frozen=True)
-class _CustomPrefixCompletionState:
-    assistant_prompt_prefix: str
-    generated_text: str
-    stop: str | None
-    stop_reason: str | None
-    call_count: int
-    usage: Any | None
+_PrefixCompletionState.model_rebuild()
+
+
+class _CustomPrefixCompletionState(BaseModel):
+    assistant_prompt_prefix: str = ""
+    generated_text: str = ""
+    stop: str | None = None
+    stop_reason: str | None = None
+    call_count: int = 0
+    usage: Any | None = None
     client_idx: int | None = None
 
     def inject(self, text: str) -> "_CustomPrefixCompletionState":
@@ -62,13 +63,17 @@ class _CustomPrefixCompletionState:
             raise TypeError("text must be a string")
         if not text:
             return self
-        return replace(
-            self,
-            assistant_prompt_prefix=f"{self.assistant_prompt_prefix}{text}",
-            generated_text=f"{self.generated_text}{text}",
-            stop=None,
-            stop_reason=None,
+        return self.model_copy(
+            update={
+                "assistant_prompt_prefix": f"{self.assistant_prompt_prefix}{text}",
+                "generated_text": f"{self.generated_text}{text}",
+                "stop": None,
+                "stop_reason": None,
+            }
         )
+
+
+_CustomPrefixCompletionState.model_rebuild()
 
 
 def split_assistant_parts(text: str) -> tuple[str | None, str | None, bool]:
@@ -76,10 +81,10 @@ def split_assistant_parts(text: str) -> tuple[str | None, str | None, bool]:
     if not isinstance(text, str):
         raise TypeError("text must be a string")
 
-    if not text.startswith(ASSISTANT_PREFIX):
-        text = f"{ASSISTANT_PREFIX}{text}"
-
-    body = text[len(ASSISTANT_PREFIX) :].lstrip()
+    body = text
+    if body.startswith(ASSISTANT_PREFIX):
+        body = body[len(ASSISTANT_PREFIX) :]
+    body = body.lstrip()
 
     reasoning: str | None = None
     content: str | None = None
@@ -118,12 +123,9 @@ def build_assistant_prefix(
     content_text = "" if content is None else str(content)
 
     if think_done:
-        return (
-            f"{ASSISTANT_PREFIX}\n{THINK_START}\n"
-            f"{reasoning_text}\n{THINK_END}{content_text}"
-        )
+        return f"{THINK_START}\n{reasoning_text}\n{THINK_END}{content_text}"
 
-    return f"{ASSISTANT_PREFIX}\n{THINK_START}\n{reasoning_text}"
+    return f"{THINK_START}\n{reasoning_text}"
 
 
 def is_content_done(content: str | None, stop_reason: str | None) -> bool:
@@ -133,9 +135,21 @@ def is_content_done(content: str | None, stop_reason: str | None) -> bool:
 
 def strip_assistant_end(text: str) -> str:
     """Remove the assistant end token when the backend appends it."""
-    if text.endswith(ASSISTANT_END):
-        return text[: -len(ASSISTANT_END)]
+    stripped_text = text.rstrip()
+    if stripped_text.endswith(ASSISTANT_END):
+        return stripped_text[: -len(ASSISTANT_END)].rstrip()
     return text
+
+
+def add_assistant_prefix(text: str) -> str:
+    """Add the assistant turn marker when building a raw prompt."""
+    if not isinstance(text, str):
+        raise TypeError("text must be a string")
+    if text.startswith(ASSISTANT_PREFIX):
+        return text
+    if text.startswith("\n"):
+        return f"{ASSISTANT_PREFIX}{text}"
+    return f"{ASSISTANT_PREFIX}\n{text}"
 
 
 def _load_auto_tokenizer():
@@ -321,10 +335,8 @@ class Qwen3LLM(LLM):
         if not isinstance(assistant_prompt_prefix, str):
             raise TypeError("assistant_prompt_prefix must be a string")
         if assistant_prompt_prefix.startswith(ASSISTANT_PREFIX):
-            return assistant_prompt_prefix
-        if assistant_prompt_prefix.startswith("\n"):
-            return f"{ASSISTANT_PREFIX}{assistant_prompt_prefix}"
-        return f"{ASSISTANT_PREFIX}\n{assistant_prompt_prefix}"
+            assistant_prompt_prefix = assistant_prompt_prefix[len(ASSISTANT_PREFIX) :]
+        return strip_assistant_end(assistant_prompt_prefix).lstrip()
 
     @staticmethod
     def _normalize_stop_sequences(stop: str | list[str] | tuple[str, ...]) -> list[str]:
@@ -426,7 +438,7 @@ class Qwen3LLM(LLM):
             )
         else:
             raise ValueError(f"Unsupported prefix_mode: {prefix_mode}")
-        prompt_to_continue = prompt + assistant_prompt_prefix
+        prompt_to_continue = prompt + add_assistant_prefix(assistant_prompt_prefix)
 
         cache = call_kwargs.pop("cache", None)
         call_kwargs.pop("extra_body", None)
@@ -556,7 +568,9 @@ class Qwen3LLM(LLM):
         )
         usage = getattr(choice, "usage", None)
         return _CustomPrefixCompletionState(
-            assistant_prompt_prefix=normalized_prefix + generated_text,
+            assistant_prompt_prefix=strip_assistant_end(
+                normalized_prefix + generated_text
+            ),
             generated_text=generated_text,
             stop=matched_stop,
             stop_reason=choice.finish_reason,
@@ -581,7 +595,7 @@ class Qwen3LLM(LLM):
             )
         )
         if state.think_done:
-            return state._replace(stop_reason=None)
+            return state.model_copy(update={"stop_reason": None})
 
         custom_state = self.complete_until(
             messages,
@@ -636,8 +650,8 @@ class Qwen3LLM(LLM):
             reasoning=state.reasoning,
             content=state.content or "",
             usage=state.usage,
+            call_count=completion_state.call_count + 1,
         )
-        message.call_count = completion_state.call_count + 1
         return message
 
     def _build_openai_message(
@@ -645,15 +659,27 @@ class Qwen3LLM(LLM):
         content: str,
         reasoning: str | None,
         usage: Any | None = None,
+        call_count: int | None = None,
     ) -> "ChatCompletionMessage":
         from openai.types.chat import ChatCompletionMessage
 
-        message = ChatCompletionMessage(role="assistant", content=content)
+        # Pydantic v2 lazily builds serializers via MockValSer placeholders.
+        # When `usage` is used as a pydantic extra field inside
+        # ChatCompletionMessage, the outer serializer requires usage's class
+        # serializer to already be a real SchemaSerializer.  Calling
+        # model_rebuild() forces that serializer to be built now, so
+        # model_dump() on the returned message works correctly.
+        if usage is not None and hasattr(usage, "model_rebuild"):
+            type(usage).model_rebuild()
+
+        extra: dict[str, Any] = {}
         if reasoning:
-            message.reasoning_content = reasoning  # type: ignore[attr-defined]
+            extra["reasoning_content"] = reasoning
         if usage is not None:
-            message.usage = usage  # type: ignore[attr-defined]
-        return message
+            extra["usage"] = usage
+        if call_count is not None:
+            extra["call_count"] = call_count
+        return ChatCompletionMessage(role="assistant", content=content, **extra)
 
     def complete_reasoning(
         self,
@@ -764,8 +790,8 @@ class Qwen3LLM(LLM):
                 reasoning=reasoning_state.reasoning,
                 content=reasoning_state.content or "",
                 usage=reasoning_state.usage,
+                call_count=reasoning_state.call_count,
             )
-            message.call_count = reasoning_state.call_count
             return message
 
         return self._complete_content(

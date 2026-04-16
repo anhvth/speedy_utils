@@ -1,9 +1,12 @@
 """Unit tests for Qwen3LLM."""
 
 import unittest
+import uuid
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import httpx
+import pytest
 from openai.types.chat import ChatCompletionMessage
 from openai.types.completion_choice import CompletionChoice
 from openai.types.completion_usage import CompletionUsage
@@ -11,8 +14,8 @@ from openai.types.completion_usage import CompletionUsage
 import llm_utils
 from llm_utils import Qwen3LLM
 from llm_utils.lm.llm import LLM
+from llm_utils.lm.openai_memoize import MOpenAI
 from llm_utils.lm.llm_qwen3 import (
-    ASSISTANT_PREFIX,
     DEFAULT_CONTENT_MAX_TOKENS,
     DEFAULT_THINKING_MAX_TOKENS,
     THINK_END,
@@ -119,6 +122,76 @@ class TestQwen3LLM(unittest.TestCase):
         self.assertEqual(result.call_count, 1)
         self.assertIs(result.usage, completion_choice.usage)
 
+    def test_call_result_model_dump_raises_with_mocked_mopenai_client(self):
+        counts = {"models": 0, "completions": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "GET" and request.url.path.endswith("/models"):
+                counts["models"] += 1
+                return httpx.Response(
+                    200,
+                    json={
+                        "object": "list",
+                        "data": [
+                            {
+                                "id": "test-model",
+                                "object": "model",
+                                "created": 0,
+                                "owned_by": "openai",
+                            }
+                        ],
+                    },
+                )
+
+            if request.method == "POST" and request.url.path.endswith("/completions"):
+                counts["completions"] += 1
+                return httpx.Response(
+                    200,
+                    json={
+                        "id": "cmpl-123",
+                        "object": "text_completion",
+                        "created": 1710000000,
+                        "model": "test-model",
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "index": 0,
+                                "logprobs": None,
+                                "text": "reasoning step</think> final answer",
+                            }
+                        ],
+                        "usage": {
+                            "completion_tokens": 7,
+                            "prompt_tokens": 11,
+                            "total_tokens": 18,
+                        },
+                    },
+                )
+
+            raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+        http_client = httpx.Client(transport=httpx.MockTransport(handler))
+        client = MOpenAI(
+            api_key="dummy-key",
+            base_url="http://test/v1",
+            http_client=http_client,
+            cache=True,
+        )
+
+        try:
+            with patch("llm_utils.lm.llm.get_base_client", return_value=client):
+                llm = Qwen3LLM(model="test-model")
+                result = llm(f"hi-{uuid.uuid4().hex}")
+        finally:
+            client.close()
+
+        self.assertEqual(counts["models"], 1)
+        self.assertEqual(counts["completions"], 1)
+        # model_dump() must work — Qwen3LLM must not break pydantic serialization
+        dumped = result.model_dump()
+        self.assertIsInstance(dumped, dict)
+        self.assertEqual(dumped["role"], "assistant")
+
     @patch("llm_utils.lm.llm.get_base_client")
     def test_chat_completion_records_structured_history(self, mock_get_client):
         mock_get_client.return_value = self._make_mock_client()
@@ -199,7 +272,7 @@ class TestQwen3LLM(unittest.TestCase):
         self.assertEqual(result.content, "final answer")
         self.assertEqual(
             mock_generate_with_prefix_step.call_args.args[1],
-            "<|im_start|>assistant\n<think>\n",
+            "<think>\n",
         )
 
     @patch("llm_utils.lm.llm.get_base_client")
@@ -207,9 +280,7 @@ class TestQwen3LLM(unittest.TestCase):
         mock_get_client.return_value = self._make_mock_client()
         llm = Qwen3LLM()
         completion_state = _CustomPrefixCompletionState(
-            assistant_prompt_prefix=(
-                f"{ASSISTANT_PREFIX}\n<think>\nseedreasoning step</think> final answer"
-            ),
+            assistant_prompt_prefix="<think>\nseedreasoning step</think> final answer",
             generated_text="reasoning step</think> final answer",
             stop=THINK_END,
             stop_reason="stop",
@@ -258,7 +329,7 @@ class TestQwen3LLM(unittest.TestCase):
 
         self.assertEqual(
             state.assistant_prompt_prefix,
-            f"{ASSISTANT_PREFIX}\n{THINK_START}\n\n{THINK_END}",
+            f"{THINK_START}\n\n{THINK_END}",
         )
         self.assertEqual(state.reasoning, "")
         self.assertEqual(state.content, "")
@@ -275,7 +346,7 @@ class TestQwen3LLM(unittest.TestCase):
         mock_get_client.return_value = self._make_mock_client()
         llm = Qwen3LLM()
         completion_state = _CustomPrefixCompletionState(
-            assistant_prompt_prefix=f"{ASSISTANT_PREFIX}\n<think>\nseedstill thinking",
+            assistant_prompt_prefix="<think>\nseedstill thinking",
             generated_text="still thinking",
             stop=None,
             stop_reason="length",
@@ -296,7 +367,7 @@ class TestQwen3LLM(unittest.TestCase):
 
         self.assertEqual(
             state.assistant_prompt_prefix,
-            f"{ASSISTANT_PREFIX}\n<think>\nseedstill thinking\n</think>",
+            "<think>\nseedstill thinking\n</think>",
         )
         self.assertEqual(state.reasoning, "seedstill thinking")
         self.assertEqual(state.content, "")
@@ -385,7 +456,7 @@ class TestQwen3LLM(unittest.TestCase):
         self.assertEqual(mock_generate_with_prefix_step.call_count, 1)
         self.assertEqual(
             mock_generate_with_prefix_step.call_args.args[1],
-            f"{ASSISTANT_PREFIX}\n{THINK_START}\n\n{THINK_END}",
+            f"{THINK_START}\n\n{THINK_END}",
         )
 
     @patch("llm_utils.lm.llm.get_base_client")
@@ -410,7 +481,7 @@ class TestQwen3LLM(unittest.TestCase):
         self.assertEqual(mock_generate_with_prefix_step.call_count, 1)
         self.assertEqual(
             mock_generate_with_prefix_step.call_args.args[1],
-            f"{ASSISTANT_PREFIX}\n{THINK_START}\n\n{THINK_END}",
+            f"{THINK_START}\n\n{THINK_END}",
         )
 
     @patch("llm_utils.lm.llm.get_base_client")
@@ -437,7 +508,7 @@ class TestQwen3LLM(unittest.TestCase):
         self.assertEqual(mock_generate_with_prefix_step.call_count, 1)
         self.assertEqual(
             mock_generate_with_prefix_step.call_args.args[1],
-            f"{ASSISTANT_PREFIX}\n{THINK_START}\n\n{THINK_END}",
+            f"{THINK_START}\n\n{THINK_END}",
         )
 
     @patch("llm_utils.lm.llm.get_base_client")
@@ -540,7 +611,7 @@ class TestQwen3LLM(unittest.TestCase):
         self.assertEqual(result.generated_text, "memory text</memory>")
         self.assertEqual(
             result.assistant_prompt_prefix,
-            f"{ASSISTANT_PREFIX}\n<memory>memory text</memory>",
+            "<memory>memory text</memory>",
         )
         self.assertEqual(result.stop, "</memory>")
         self.assertEqual(result.stop_reason, "stop")
@@ -549,7 +620,7 @@ class TestQwen3LLM(unittest.TestCase):
         self.assertIsNone(result.client_idx)
         self.assertEqual(
             mock_generate_with_prefix_step.call_args.args[1],
-            f"{ASSISTANT_PREFIX}\n<memory>",
+            "<memory>",
         )
         self.assertEqual(
             mock_generate_with_prefix_step.call_args.kwargs["stop"],
@@ -579,19 +650,86 @@ class TestQwen3LLM(unittest.TestCase):
         ):
             result = llm.complete_until(
                 "prompt",
-                f"{ASSISTANT_PREFIX}\n<memory>m</memory>\n<think_efficient>",
+                "<memory>m</memory>\n<think_efficient>",
                 stop="</think_efficient>",
                 max_tokens=32,
             )
 
         self.assertEqual(
             result.assistant_prompt_prefix,
-            (
-                f"{ASSISTANT_PREFIX}\n<memory>m</memory>\n"
-                "<think_efficient>\nfinal answer</think_efficient>"
-            ),
+            "<memory>m</memory>\n<think_efficient>\nfinal answer</think_efficient>",
         )
         self.assertEqual(result.stop, "</think_efficient>")
+
+    @patch("llm_utils.lm.llm.get_base_client")
+    def test_complete_until_strips_trailing_assistant_end_token(self, mock_get_client):
+        mock_get_client.return_value = self._make_mock_client()
+        llm = Qwen3LLM()
+        completion_choice = self._make_completion_choice(
+            "\n\n\nHello! 👋\n\nHow can I help you today?<|im_end|>",
+            finish_reason="stop",
+            completion_tokens=8,
+            prompt_tokens=10,
+            total_tokens=18,
+        )
+
+        with patch.object(
+            llm,
+            "_generate_with_prefix_step",
+            return_value=completion_choice,
+        ):
+            result = llm.complete_until(
+                "prompt",
+                "<memory>",
+                stop="</memory>",
+                max_tokens=32,
+                include_stop_in_prefix=False,
+            )
+
+        self.assertEqual(
+            result.generated_text,
+            "\n\n\nHello! 👋\n\nHow can I help you today?",
+        )
+        self.assertEqual(
+            result.assistant_prompt_prefix,
+            "<memory>\n\n\nHello! 👋\n\nHow can I help you today?",
+        )
+
+    @patch("llm_utils.lm.llm.get_base_client")
+    def test_complete_until_strips_trailing_assistant_end_from_input_state(
+        self, mock_get_client
+    ):
+        mock_get_client.return_value = self._make_mock_client()
+        llm = Qwen3LLM()
+        completion_choice = self._make_completion_choice(
+            "continued",
+            finish_reason="stop",
+            completion_tokens=4,
+            prompt_tokens=10,
+            total_tokens=14,
+        )
+
+        with patch.object(
+            llm,
+            "_generate_with_prefix_step",
+            return_value=completion_choice,
+        ) as mock_generate_with_prefix_step:
+            result = llm.complete_until(
+                "prompt",
+                "<memory>seed</memory><|im_end|>",
+                stop="</memory>",
+                max_tokens=32,
+                include_stop_in_prefix=False,
+            )
+
+        self.assertEqual(
+            mock_generate_with_prefix_step.call_args.args[1],
+            "<memory>seed</memory>",
+        )
+        self.assertEqual(
+            result.assistant_prompt_prefix,
+            "<memory>seed</memory>continued",
+        )
 
     @patch("llm_utils.lm.llm.get_base_client")
     def test_complete_until_uses_constructor_generation_defaults(self, mock_get_client):
@@ -676,7 +814,7 @@ class TestQwen3LLM(unittest.TestCase):
     def test_complete_until_state_inject_appends_prefix_text(self, mock_get_client):
         mock_get_client.return_value = self._make_mock_client()
         state = _CustomPrefixCompletionState(
-            assistant_prompt_prefix=f"{ASSISTANT_PREFIX}\n<memory>m</memory>",
+            assistant_prompt_prefix="<memory>m</memory>",
             generated_text="m</memory>",
             stop="</memory>",
             stop_reason="stop",
@@ -689,7 +827,7 @@ class TestQwen3LLM(unittest.TestCase):
 
         self.assertEqual(
             injected.assistant_prompt_prefix,
-            f"{ASSISTANT_PREFIX}\n<memory>m</memory>\n<think_efficient>\n",
+            "<memory>m</memory>\n<think_efficient>\n",
         )
         self.assertEqual(injected.generated_text, "m</memory>\n<think_efficient>\n")
         self.assertEqual(injected.call_count, 1)
@@ -736,10 +874,7 @@ class TestQwen3LLM(unittest.TestCase):
         self.assertEqual(state.call_count, 2)
         self.assertEqual(
             state.assistant_prompt_prefix,
-            (
-                f"{ASSISTANT_PREFIX}\n<memory>memory</memory>\n"
-                "<think_efficient>\nthought</think_efficient>"
-            ),
+            "<memory>memory</memory>\n<think_efficient>\nthought</think_efficient>",
         )
 
     @patch("llm_utils.lm.llm.get_base_client")
@@ -749,7 +884,7 @@ class TestQwen3LLM(unittest.TestCase):
         llm = Qwen3LLM(client=["http://a/v1"])
 
         state = _CustomPrefixCompletionState(
-            assistant_prompt_prefix=f"{ASSISTANT_PREFIX}\n<memory>m</memory>",
+            assistant_prompt_prefix="<memory>m</memory>",
             generated_text="m</memory>",
             stop="</memory>",
             stop_reason="stop",
