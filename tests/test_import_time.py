@@ -37,7 +37,7 @@ print(f"IMPORT_TIME:{elapsed}")
     else:
         pytest.fail(f"Could not parse import time from output: {result.stdout}\nstderr: {result.stderr}")
 
-    # Assert import time is under 1 second
+    # Assert import time is under 1 second (subprocess variance; hook uses 0.4s)
     max_time = 1.0
     assert import_time < max_time, (
         f"Import time ({import_time:.3f}s) exceeds maximum allowed ({max_time}s). "
@@ -72,7 +72,7 @@ print(f"IMPORT_TIME:{elapsed}")
     else:
         pytest.fail(f"Could not parse import time from output: {result.stdout}\nstderr: {result.stderr}")
 
-    # Assert import time is under 1 second
+    # Assert import time is under 1 second (subprocess variance; hook uses 0.4s)
     max_time = 1.0
     assert import_time < max_time, (
         f"Import time ({import_time:.3f}s) exceeds maximum allowed ({max_time}s). "

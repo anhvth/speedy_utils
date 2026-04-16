@@ -121,17 +121,17 @@ target-version = "py310"
 unsafe-fixes = true # allow deletions Ruff marks unsafe
 [tool.ruff.lint]
 ignore = [
-    "E401", # multiple imports on one line
-    "E402", # module level import not at top of file
-    "E501", # line too long
-    "F401", # unused import
-    "F403", # wildcard import
-    "F405", # name may be undefined, from wildcard import
-    "F841", # local variable assigned but never used
-    "E722", # do not use bare except
-    "E731", # do not assign a lambda expression, use a def
-    "E741", # ambiguous variable name
-    "E902", # io error
+    "E401",  # code style preference: from x import a, b is readable at 88 cols
+    "E402",  # intentional lazy imports (e.g. __imports__.py, llm.py circular)
+    "E501",  # line too long — handled by formatter
+    "F401",  # many typing imports are used via TYPE_CHECKING; clean up separately
+    "F403",  # no wildcard imports found
+    "F405",  # no undefined-name-from-wildcard found
+    "F841",  # no unused local variables found
+    "E722",  # bare except may be intentional for broad exception handling
+    "E731",  # no lambda assignments found
+    "E741",  # no ambiguous variable names found
+    "E902",  # IO errors are runtime concerns, not linting concerns
 ]
 unfixable = ["E401", "E402", "E501", "F401", "F403"]
 extend-select = ["F", "Q"] # keep all pyflakes rules and enable quote rules
