@@ -605,3 +605,13 @@ uv run python tools/check_syntax.py
 uv run ruff check .
 uv run ruff format .
 ```
+
+### TDD and Regression Testing
+
+- Every bug fix should include a regression test that reproduces the bug first.
+- Keep regression tests deterministic (no flaky time/random/network behavior).
+- Test through public APIs and assert specific outcomes.
+- Keep one behavior per test so failures are easy to diagnose.
+- Prefer fast, isolated tests that are run frequently.
+
+See the full playbook in [`docs/TDD.md`](docs/TDD.md).

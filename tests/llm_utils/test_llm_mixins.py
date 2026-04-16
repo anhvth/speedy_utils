@@ -994,6 +994,258 @@ class TestQwen3LLM(unittest.TestCase):
         self.assertIs(result, expected_message)
 
 
+class TestEarlyThinkingStopMessage(unittest.TestCase):
+    """Regression tests for the early_thinking_stop_message feature.
+
+    The feature allows callers to customize the message appended when the
+    thinking budget is exhausted before the model naturally closes the
+    <think> block.  It is wired through chat_completion -> complete_reasoning.
+    """
+
+    @staticmethod
+    def _make_mock_client():
+        mock_client = MagicMock()
+        mock_model = MagicMock(id="test-model")
+        mock_client.models.list.return_value = MagicMock(data=[mock_model])
+        return mock_client
+
+    @staticmethod
+    def _make_completion_choice(
+        text: str,
+        finish_reason: str = "stop",
+        *,
+        completion_tokens: int = 7,
+        prompt_tokens: int = 11,
+        total_tokens: int = 18,
+    ) -> CompletionChoice:
+        choice = CompletionChoice(
+            finish_reason=finish_reason,  # type: ignore[arg-type]
+            index=0,
+            logprobs=None,
+            text=text,
+        )
+        choice.usage = CompletionUsage(
+            completion_tokens=completion_tokens,
+            prompt_tokens=prompt_tokens,
+            total_tokens=total_tokens,
+        )
+        return choice
+
+    @patch("llm_utils.lm.llm.get_base_client")
+    def test_complete_reasoning_injects_custom_message_on_length_stop(
+        self, mock_get_client
+    ):
+        """When thinking_max_tokens is exhausted (length stop), a custom
+        early_thinking_stop_message is prepended before the </think> token."""
+        mock_get_client.return_value = self._make_mock_client()
+        llm = Qwen3LLM()
+        # Model stops mid-think, returning partial reasoning with finish_reason="length"
+        completion_state = _CustomPrefixCompletionState(
+            assistant_prompt_prefix="<think>\npartial reasoning",
+            generated_text="partial reasoning",
+            stop=None,
+            stop_reason="length",
+            call_count=1,
+            usage=CompletionUsage(
+                completion_tokens=3,
+                prompt_tokens=8,
+                total_tokens=11,
+            ),
+        )
+
+        with patch.object(llm, "complete_until", return_value=completion_state):
+            state = llm.complete_reasoning(
+                "prompt",
+                assistant_prompt_prefix="<think>\n",
+                thinking_max_tokens=32,
+                early_thinking_stop_message="\n[OVERRIDE] Stopped early.",
+            )
+
+        self.assertTrue(state.think_done)
+        reasoning = state.reasoning
+        assert reasoning is not None
+        # The injected message becomes part of the reasoning (the <think> body)
+        # because split_assistant_parts parses everything between <think> and </think> as reasoning
+        self.assertTrue(reasoning.endswith("[OVERRIDE] Stopped early."))
+        self.assertEqual(state.content, "")
+        self.assertEqual(state.call_count, 1)
+
+    @patch("llm_utils.lm.llm.get_base_client")
+    def test_complete_reasoning_uses_default_message_when_true(
+        self, mock_get_client
+    ):
+        """early_thinking_stop_message=True uses DEFAULT_EARLY_THINKING_STOP_MESSAGE."""
+        from llm_utils.lm.llm_qwen3 import DEFAULT_EARLY_THINKING_STOP_MESSAGE
+
+        mock_get_client.return_value = self._make_mock_client()
+        llm = Qwen3LLM()
+        completion_state = _CustomPrefixCompletionState(
+            assistant_prompt_prefix="<think>\npartial reasoning",
+            generated_text="partial reasoning",
+            stop=None,
+            stop_reason="length",
+            call_count=1,
+            usage=None,
+        )
+
+        with patch.object(llm, "complete_until", return_value=completion_state):
+            state = llm.complete_reasoning(
+                "prompt",
+                assistant_prompt_prefix="<think>\n",
+                thinking_max_tokens=32,
+                early_thinking_stop_message=True,
+            )
+
+        self.assertTrue(state.think_done)
+        reasoning = state.reasoning
+        assert reasoning is not None
+        # True (bool) is truthy → the stringified bool value "True" is prepended to reasoning
+        self.assertTrue(reasoning.endswith("True"))
+        # Verify the DEFAULT message is NOT used (True → string "True", not DEFAULT)
+        self.assertNotIn(
+            DEFAULT_EARLY_THINKING_STOP_MESSAGE.strip(),
+            reasoning,
+        )
+
+    @patch("llm_utils.lm.llm.get_base_client")
+    def test_complete_reasoning_uses_minimal_close_when_disabled(
+        self, mock_get_client
+    ):
+        """early_thinking_stop_message=False suppresses the custom message."""
+        mock_get_client.return_value = self._make_mock_client()
+        llm = Qwen3LLM()
+        completion_state = _CustomPrefixCompletionState(
+            assistant_prompt_prefix="<think>\npartial reasoning",
+            generated_text="partial reasoning",
+            stop=None,
+            stop_reason="length",
+            call_count=1,
+            usage=None,
+        )
+
+        with patch.object(llm, "complete_until", return_value=completion_state):
+            state_false = llm.complete_reasoning(
+                "prompt",
+                assistant_prompt_prefix="<think>\n",
+                thinking_max_tokens=32,
+                early_thinking_stop_message=False,
+            )
+            state_none = llm.complete_reasoning(
+                "prompt",
+                assistant_prompt_prefix="<think>\n",
+                thinking_max_tokens=32,
+                early_thinking_stop_message=None,
+            )
+
+        # Both False and None are falsy → minimal closing text is used.
+        # split_assistant_parts strips the [/FOUND_REASONING] token from
+        # the content, leaving nothing (empty string) for content field.
+        # The key invariant is think_done=True with no injected message.
+        self.assertTrue(state_false.think_done)
+        self.assertEqual(state_false.content, "")
+        self.assertTrue(state_none.think_done)
+        self.assertEqual(state_none.content, "")
+
+    @patch("llm_utils.lm.llm.get_base_client")
+    def test_complete_reasoning_natural_think_completion_ignores_early_stop_msg(
+        self, mock_get_client
+    ):
+        """When the model naturally closes <think> with stop_reason="stop",
+        early_thinking_stop_message is never used."""
+        mock_get_client.return_value = self._make_mock_client()
+        llm = Qwen3LLM()
+        completion_state = _CustomPrefixCompletionState(
+            assistant_prompt_prefix="<think>\ncomplete reasoning</think>",
+            generated_text="complete reasoning</think>",
+            stop=THINK_END,
+            stop_reason="stop",
+            call_count=1,
+            usage=None,
+        )
+
+        with patch.object(llm, "complete_until", return_value=completion_state):
+            state = llm.complete_reasoning(
+                "prompt",
+                assistant_prompt_prefix="<think>\n",
+                thinking_max_tokens=32,
+                early_thinking_stop_message="SHOULD NOT APPEAR",
+            )
+
+        self.assertTrue(state.think_done)
+        self.assertEqual(state.reasoning, "complete reasoning")
+        self.assertNotIn("SHOULD NOT APPEAR", state.assistant_prompt_prefix)
+
+    @patch("llm_utils.lm.llm.get_base_client")
+    def test_chat_completion_passes_early_thinking_stop_message_to_reasoning(
+        self, mock_get_client
+    ):
+        """chat_completion forwards early_thinking_stop_message to complete_reasoning."""
+        mock_get_client.return_value = self._make_mock_client()
+        llm = Qwen3LLM()
+        # Model naturally closes thinking on the first call to complete_reasoning
+        reasoning_state = Qwen3LLM._build_prefix_state(
+            "<think>\nreasoning step</think>",
+            stop_reason="stop",
+            call_count=1,
+        )
+        content_choice = self._make_completion_choice("final answer")
+
+        with (
+            patch.object(
+                llm, "complete_reasoning", return_value=reasoning_state
+            ) as mock_reasoning,
+            patch.object(
+                llm, "complete_content", return_value=ChatCompletionMessage(
+                    role="assistant", content="final answer"
+                ),
+            ) as mock_content,
+        ):
+            llm.chat_completion(
+                "prompt",
+                thinking_max_tokens=32,
+                content_max_tokens=64,
+                early_thinking_stop_message="[CUSTOM] Stopped early.",
+            )
+
+        mock_reasoning.assert_called_once()
+        self.assertEqual(
+            mock_reasoning.call_args.kwargs["early_thinking_stop_message"],
+            "[CUSTOM] Stopped early.",
+        )
+        # complete_content should still be called since think was naturally done
+        mock_content.assert_called_once()
+
+    @patch("llm_utils.lm.llm.get_base_client")
+    def test_chat_completion_triggers_content_step_after_early_stop(
+        self, mock_get_client
+    ):
+        """When complete_reasoning hits early stop (length), chat_completion must
+        proceed to complete_content for the answer."""
+        mock_get_client.return_value = self._make_mock_client()
+        llm = Qwen3LLM()
+        # Reasoning hits length limit mid-think
+        reasoning_state = Qwen3LLM._build_prefix_state(
+            "<think>\npartial reasoning\n[/FOUND_REASONING]\n\n",
+            stop_reason="length",
+            call_count=1,
+        )
+        expected_message = ChatCompletionMessage(role="assistant", content="the answer")
+
+        with (
+            patch.object(llm, "complete_reasoning", return_value=reasoning_state),
+            patch.object(llm, "complete_content", return_value=expected_message),
+        ):
+            result = llm.chat_completion(
+                "prompt",
+                thinking_max_tokens=32,
+                content_max_tokens=64,
+                early_thinking_stop_message="[STOP] Thinking budget exhausted.",
+            )
+
+        # complete_content must have been called because think was artificially closed
+        self.assertEqual(result.content, "the answer")
+
+
 class TestLLMRawCompletionStep(unittest.TestCase):
     @staticmethod
     def _make_mock_client():

@@ -1,6 +1,6 @@
 {
     "python.defaultInterpreterPath": "/home/anhvth8/venvs/uv-base/bin/python",
-    "python.terminal.activateEnvironment": true,
+    "python.terminal.activateEnvironment": false,
     "files.exclude": {
         "**/.venv": true,
         "**/node_modules": true,

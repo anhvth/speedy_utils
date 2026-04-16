@@ -35,6 +35,25 @@ uv run python tools/check_syntax.py
 ./scripts/deploy.sh
 ```
 
+## TDD and Regression Test Policy
+
+Use Red -> Green -> Refactor for bug fixes:
+
+1. write a failing regression test that reproduces the shipped bug
+2. confirm it fails for the right reason
+3. implement the minimal fix
+4. refactor with tests still green
+
+Regression tests in this repo should be:
+
+- deterministic (no flaky random/time/network behavior)
+- focused on public APIs and observable outputs
+- scoped to one failure reason per test
+- named after the behavior/bug, not generic labels
+- fast and isolated so they run in normal dev loops
+
+See `docs/TDD.md` for the full checklist and examples.
+
 ## Performance Requirement: Import Time < 0.4s
 
 The repository hook budget is `0.4s` for the exported packages checked by
