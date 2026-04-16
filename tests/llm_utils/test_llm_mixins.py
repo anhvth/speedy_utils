@@ -955,6 +955,44 @@ class TestQwen3LLM(unittest.TestCase):
 
         self.assertEqual(history, ["shown"])
 
+    @patch("llm_utils.lm.llm.get_base_client")
+    def test_chat_completion_takes_two_step_path_when_only_thinking_max_tokens_given(
+        self, mock_get_client
+    ):
+        """When thinking_max_tokens is given but content_max_tokens is omitted,
+        the two-step reasoning path must be taken and the given thinking_max_tokens honored."""
+        mock_get_client.return_value = self._make_mock_client()
+        llm = Qwen3LLM()
+        reasoning_state = Qwen3LLM._build_prefix_state(
+            "<think>\nsome reasoning</think>",
+            stop_reason="stop",
+            call_count=1,
+        )
+        expected_message = ChatCompletionMessage(role="assistant", content="the answer")
+        fallback_state = _CustomPrefixCompletionState(
+            assistant_prompt_prefix="<think>\nfallback</think> done",
+            generated_text="fallback</think> done",
+            stop=None,
+            stop_reason="stop",
+            call_count=1,
+            usage=None,
+        )
+
+        with (
+            patch.object(
+                llm, "complete_reasoning", return_value=reasoning_state
+            ) as mock_reasoning,
+            patch.object(llm, "complete_content", return_value=expected_message),
+            # Guard the fallback single-step path so the test fails at the
+            # assertion level, not inside the plumbing.
+            patch.object(llm, "complete_until", return_value=fallback_state),
+        ):
+            result = llm.chat_completion("hi", thinking_max_tokens=2)
+
+        mock_reasoning.assert_called_once()
+        self.assertEqual(mock_reasoning.call_args.kwargs["thinking_max_tokens"], 2)
+        self.assertIs(result, expected_message)
+
 
 class TestLLMRawCompletionStep(unittest.TestCase):
     @staticmethod

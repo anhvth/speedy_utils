@@ -25,6 +25,7 @@ THINK_END = "</think>"
 ASSISTANT_END = "<|im_end|>"
 DEFAULT_THINKING_MAX_TOKENS = 8192
 DEFAULT_CONTENT_MAX_TOKENS = 4096
+DEFAULT_EARLY_THINKING_STOP_MESSAGE = "\n\n[SYSTEM] Thinking budget exhausted. Stopping now.\n\n"
 TRANSFORMERS_NO_ADVISORY_WARNINGS_ENV = "TRANSFORMERS_NO_ADVISORY_WARNINGS"
 _TOKENIZER_CACHE_ROOT = Path("/tmp/tokenizers")
 _AUTO_TOKENIZER_CLS = None
@@ -604,13 +605,18 @@ class Qwen3LLM(LLM):
 
     def complete_reasoning(
         self,
-        messages: Messages,
+        messages: str | Messages,
         assistant_prompt_prefix: str,
         *,
-        thinking_max_tokens: int,
+        thinking_max_tokens: int | None = None,
         early_thinking_stop_message: str | None = None,
         **runtime_kwargs,
     ) -> _PrefixCompletionState:
+        resolved_thinking_max_tokens = (
+            thinking_max_tokens
+            if thinking_max_tokens is not None
+            else self.default_thinking_max_tokens
+        )
         enable_thinking = runtime_kwargs.get("enable_thinking")
         state = self._build_prefix_state(
             self._normalize_assistant_prefix(
@@ -625,18 +631,19 @@ class Qwen3LLM(LLM):
             messages,
             state.assistant_prompt_prefix,
             stop=THINK_END,
-            max_tokens=thinking_max_tokens,
+            max_tokens=resolved_thinking_max_tokens,
             **runtime_kwargs,
         )
         state = self._custom_state_to_prefix_state(custom_state)
 
         if not state.think_done:
-            end = (
-                early_thinking_stop_message
-                or f"\n\n[SYSTEM] Thinking budget exhausted (max: {thinking_max_tokens} tokens). Stopping now.\n\n"
+            close_text = (
+                f"{early_thinking_stop_message}\n{THINK_END}\n\n"
+                if early_thinking_stop_message
+                else f"\n{THINK_END}\n\n"
             )
             state = self._build_prefix_state(
-                state.assistant_prompt_prefix + f"{end}</think>\n\n",
+                state.assistant_prompt_prefix + close_text,
                 stop_reason=state.stop_reason,
                 call_count=state.call_count,
                 usage=state.usage,
@@ -646,12 +653,21 @@ class Qwen3LLM(LLM):
 
     def complete_content(
         self,
-        messages: Messages,
-        completion_state: _PrefixCompletionState,
+        messages: str | Messages,
+        completion_state: str | _PrefixCompletionState,
         *,
-        content_max_tokens: int,
+        content_max_tokens: int | None = None,
         **runtime_kwargs,
     ) -> "ChatCompletionMessage":
+        if isinstance(messages, str):
+            messages = self._prepare_input(messages)
+        if isinstance(completion_state, str):
+            completion_state = self._build_prefix_state(completion_state)
+        resolved_content_max_tokens = (
+            content_max_tokens
+            if content_max_tokens is not None
+            else self.default_content_max_tokens
+        )
         enable_thinking = runtime_kwargs.get("enable_thinking")
         completion_state = self._build_prefix_state(
             self._normalize_assistant_prefix(
@@ -665,7 +681,7 @@ class Qwen3LLM(LLM):
         choice = self._generate_with_prefix_step(
             messages,
             completion_state.assistant_prompt_prefix,
-            max_tokens=content_max_tokens,
+            max_tokens=resolved_content_max_tokens,
             **runtime_kwargs,
         )
 
@@ -718,7 +734,7 @@ class Qwen3LLM(LLM):
         thinking_max_tokens: int | None = None,
         content_max_tokens: int | None = None,
         max_tokens: int | None = None,
-        early_thinking_stop_message: str | None = None,
+        early_thinking_stop_message: str | None | bool = None,
         **runtime_kwargs,
     ) -> "ChatCompletionMessage":
         """
@@ -737,12 +753,24 @@ class Qwen3LLM(LLM):
         )
 
         messages = self._prepare_input(input_data)
-        if thinking_max_tokens and content_max_tokens:
+        effective_enable_thinking = self._resolve_enable_thinking(
+            runtime_kwargs.get("enable_thinking")
+        )
+        if effective_enable_thinking:
+            resolved_thinking_max_tokens = (
+                thinking_max_tokens
+                if thinking_max_tokens is not None
+                else self.default_thinking_max_tokens
+            )
+            resolved_content_max_tokens = (
+                content_max_tokens
+                if content_max_tokens is not None
+                else self.default_content_max_tokens
+            )
             reasoning_state = self.complete_reasoning(
                 messages,
                 assistant_prompt_prefix,
-                thinking_max_tokens=thinking_max_tokens
-                or self.default_thinking_max_tokens,
+                thinking_max_tokens=resolved_thinking_max_tokens,
                 early_thinking_stop_message=early_thinking_stop_message,
                 **runtime_kwargs,
             )
@@ -761,15 +789,18 @@ class Qwen3LLM(LLM):
             return self.complete_content(
                 messages,
                 reasoning_state,
-                content_max_tokens=content_max_tokens
-                or self.default_content_max_tokens,
+                content_max_tokens=resolved_content_max_tokens,
                 **runtime_kwargs,
             )
 
-        # just complet until im_end
+        # Single-step path when enable_thinking=False.
+        normalized_prefix = self._normalize_assistant_prefix(
+            assistant_prompt_prefix,
+            enable_thinking=False,
+        )
         custom_state = self.complete_until(
             messages,
-            assistant_prompt_prefix,
+            normalized_prefix,
             stop=ASSISTANT_END,
             max_tokens=max_tokens,
             include_stop_in_prefix=False,
