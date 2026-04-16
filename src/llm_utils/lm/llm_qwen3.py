@@ -58,15 +58,21 @@ class _CustomPrefixCompletionState(BaseModel):
     client_idx: int | None = None
 
     def inject(self, text: str) -> "_CustomPrefixCompletionState":
-        """Return a new continuation state with extra raw prefix text appended."""
+        """Return a new continuation state with extra assistant-body text appended."""
         if not isinstance(text, str):
             raise TypeError("text must be a string")
         if not text:
             return self
+        # Only strip wrapper tokens, preserve the rest verbatim
+        body = text
+        if body.startswith(ASSISTANT_PREFIX):
+            body = body[len(ASSISTANT_PREFIX) :]
+        if body.endswith(ASSISTANT_END):
+            body = body[: -len(ASSISTANT_END)]
         return self.model_copy(
             update={
-                "assistant_prompt_prefix": f"{self.assistant_prompt_prefix}{text}",
-                "generated_text": f"{self.generated_text}{text}",
+                "assistant_prompt_prefix": f"{self.assistant_prompt_prefix}{body}",
+                "generated_text": f"{self.generated_text}{body}",
                 "stop": None,
                 "stop_reason": None,
             }
@@ -74,6 +80,39 @@ class _CustomPrefixCompletionState(BaseModel):
 
 
 _CustomPrefixCompletionState.model_rebuild()
+
+
+def _sanitize_assistant_body(text: str) -> str:
+    """Remove only explicit assistant wrapper tokens from assistant-body text."""
+    if not isinstance(text, str):
+        raise TypeError("text must be a string")
+    body = text
+    if body.startswith(ASSISTANT_PREFIX):
+        body = body[len(ASSISTANT_PREFIX) :]
+    if body.endswith(ASSISTANT_END):
+        body = body[: -len(ASSISTANT_END)]
+    return body
+
+
+def _merge_generated_with_stop(
+    generated_text: str,
+    *,
+    stop_reason: str | None,
+    stop_sequences: list[str],
+    include_stop: bool,
+) -> tuple[str, str | None]:
+    """Merge generated output with stop-token handling, return (text, matched_stop)."""
+    matched_stop = None
+    if stop_reason == "stop" and stop_sequences:
+        matched_stop = stop_sequences[0] if len(stop_sequences) == 1 else None
+        if (
+            matched_stop
+            and include_stop
+            and matched_stop not in generated_text
+            and matched_stop != ASSISTANT_END
+        ):
+            generated_text = f"{generated_text}{matched_stop}"
+    return generated_text, matched_stop
 
 
 def split_assistant_parts(text: str) -> tuple[str | None, str | None, bool]:
@@ -134,22 +173,22 @@ def is_content_done(content: str | None, stop_reason: str | None) -> bool:
 
 
 def strip_assistant_end(text: str) -> str:
-    """Remove the assistant end token when the backend appends it."""
+    """Remove the assistant end token when the backend appends it (legacy helper)."""
     stripped_text = text.rstrip()
     if stripped_text.endswith(ASSISTANT_END):
         return stripped_text[: -len(ASSISTANT_END)].rstrip()
     return text
 
 
-def add_assistant_prefix(text: str) -> str:
-    """Add the assistant turn marker when building a raw prompt."""
-    if not isinstance(text, str):
-        raise TypeError("text must be a string")
-    if text.startswith(ASSISTANT_PREFIX):
-        return text
-    if text.startswith("\n"):
-        return f"{ASSISTANT_PREFIX}{text}"
-    return f"{ASSISTANT_PREFIX}\n{text}"
+def _add_assistant_wrapper(body: str) -> str:
+    """Wrap assistant-body text with the assistant turn marker for the actual prompt."""
+    if not isinstance(body, str):
+        raise TypeError("body must be a string")
+    if body.startswith(ASSISTANT_PREFIX):
+        return body
+    if body.startswith("\n"):
+        return f"{ASSISTANT_PREFIX}{body}"
+    return f"{ASSISTANT_PREFIX}\n{body}"
 
 
 def _load_auto_tokenizer():
@@ -332,11 +371,8 @@ class Qwen3LLM(LLM):
 
     @staticmethod
     def _normalize_raw_assistant_prefix(assistant_prompt_prefix: str) -> str:
-        if not isinstance(assistant_prompt_prefix, str):
-            raise TypeError("assistant_prompt_prefix must be a string")
-        if assistant_prompt_prefix.startswith(ASSISTANT_PREFIX):
-            assistant_prompt_prefix = assistant_prompt_prefix[len(ASSISTANT_PREFIX) :]
-        return strip_assistant_end(assistant_prompt_prefix).lstrip()
+        """Strip ASSISTANT_PREFIX and ASSISTANT_END wrappers, returning assistant-body text."""
+        return _sanitize_assistant_body(assistant_prompt_prefix)
 
     @staticmethod
     def _normalize_stop_sequences(stop: str | list[str] | tuple[str, ...]) -> list[str]:
@@ -414,9 +450,8 @@ class Qwen3LLM(LLM):
     def _generate_with_prefix_step(
         self,
         messages: Messages,
-        assistant_prompt_prefix: str,
+        assistant_body: str,
         *,
-        prefix_mode: str = "think",
         client_idx: int | None = None,
         return_client_idx: bool = False,
         **runtime_kwargs,
@@ -426,19 +461,8 @@ class Qwen3LLM(LLM):
 
         prompt = self._build_completion_prompt(messages)
         call_kwargs = dict(runtime_kwargs)
-        enable_thinking = call_kwargs.pop("enable_thinking", None)
-        if prefix_mode == "think":
-            assistant_prompt_prefix = self._normalize_assistant_prefix(
-                assistant_prompt_prefix,
-                enable_thinking=enable_thinking,
-            )
-        elif prefix_mode == "raw":
-            assistant_prompt_prefix = self._normalize_raw_assistant_prefix(
-                assistant_prompt_prefix
-            )
-        else:
-            raise ValueError(f"Unsupported prefix_mode: {prefix_mode}")
-        prompt_to_continue = prompt + add_assistant_prefix(assistant_prompt_prefix)
+        call_kwargs.pop("enable_thinking", None)
+        prompt_to_continue = prompt + _add_assistant_wrapper(assistant_body)
 
         cache = call_kwargs.pop("cache", None)
         call_kwargs.pop("extra_body", None)
@@ -467,8 +491,9 @@ class Qwen3LLM(LLM):
                 f"INPUT:\n```{prompt_to_continue}```\n----\nOUTPUT:\n```{result}```\n{'-' * 40}",
             )
 
+        output_text = _sanitize_assistant_body(str(choice.text or ""))
         state = self._build_prefix_state(
-            assistant_prompt_prefix + strip_assistant_end(str(choice.text or "")),
+            assistant_body + output_text,
             stop_reason=choice.finish_reason,
         )
         choice_messages = cast(
@@ -543,11 +568,10 @@ class Qwen3LLM(LLM):
         prior_prefix, client_idx, prior_call_count = self._resolve_custom_prefix_state(
             assistant_prompt_prefix
         )
-        normalized_prefix = self._normalize_raw_assistant_prefix(prior_prefix)
+        assistant_body = self._normalize_raw_assistant_prefix(prior_prefix)
         generation_result = self._generate_with_prefix_step(
             messages,
-            normalized_prefix,
-            prefix_mode="raw",
+            assistant_body,
             client_idx=client_idx,
             return_client_idx=True,
             max_tokens=max_tokens,
@@ -559,8 +583,9 @@ class Qwen3LLM(LLM):
         else:
             choice = generation_result
             resolved_client_idx = client_idx
-        generated_text = strip_assistant_end(str(choice.text or ""))
-        generated_text, matched_stop = self._append_stop_text(
+        raw_text = str(choice.text or "")
+        generated_text = _sanitize_assistant_body(raw_text)
+        generated_text, matched_stop = _merge_generated_with_stop(
             generated_text,
             stop_reason=choice.finish_reason,
             stop_sequences=stop_sequences,
@@ -568,9 +593,7 @@ class Qwen3LLM(LLM):
         )
         usage = getattr(choice, "usage", None)
         return _CustomPrefixCompletionState(
-            assistant_prompt_prefix=strip_assistant_end(
-                normalized_prefix + generated_text
-            ),
+            assistant_prompt_prefix=assistant_body + generated_text,
             generated_text=generated_text,
             stop=matched_stop,
             stop_reason=choice.finish_reason,
@@ -641,9 +664,9 @@ class Qwen3LLM(LLM):
             **runtime_kwargs,
         )
 
+        output_text = _sanitize_assistant_body(str(choice.text or ""))
         state = self._build_prefix_state(
-            completion_state.assistant_prompt_prefix
-            + strip_assistant_end(str(choice.text or "")),
+            completion_state.assistant_prompt_prefix + output_text,
             usage=getattr(choice, "usage", None),
         )
         message = self._build_openai_message(

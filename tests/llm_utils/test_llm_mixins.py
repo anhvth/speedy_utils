@@ -608,6 +608,7 @@ class TestQwen3LLM(unittest.TestCase):
                 max_tokens=32,
             )
 
+        # Stop token </memory> is included in generated_text (not ASSISTANT_END)
         self.assertEqual(result.generated_text, "memory text</memory>")
         self.assertEqual(
             result.assistant_prompt_prefix,
@@ -618,6 +619,7 @@ class TestQwen3LLM(unittest.TestCase):
         self.assertEqual(result.call_count, 1)
         self.assertIs(result.usage, completion_choice.usage)
         self.assertIsNone(result.client_idx)
+        # Assistant-body text (no wrapper) is passed to _generate_with_prefix_step
         self.assertEqual(
             mock_generate_with_prefix_step.call_args.args[1],
             "<memory>",
@@ -625,10 +627,6 @@ class TestQwen3LLM(unittest.TestCase):
         self.assertEqual(
             mock_generate_with_prefix_step.call_args.kwargs["stop"],
             ["</memory>"],
-        )
-        self.assertEqual(
-            mock_generate_with_prefix_step.call_args.kwargs["prefix_mode"],
-            "raw",
         )
 
     @patch("llm_utils.lm.llm.get_base_client")
@@ -655,6 +653,7 @@ class TestQwen3LLM(unittest.TestCase):
                 max_tokens=32,
             )
 
+        self.assertEqual(result.generated_text, "\nfinal answer</think_efficient>")
         self.assertEqual(
             result.assistant_prompt_prefix,
             "<memory>m</memory>\n<think_efficient>\nfinal answer</think_efficient>",
@@ -662,7 +661,40 @@ class TestQwen3LLM(unittest.TestCase):
         self.assertEqual(result.stop, "</think_efficient>")
 
     @patch("llm_utils.lm.llm.get_base_client")
-    def test_complete_until_strips_trailing_assistant_end_token(self, mock_get_client):
+    def test_complete_until_preserves_prefix_whitespace_verbatim(
+        self, mock_get_client
+    ):
+        mock_get_client.return_value = self._make_mock_client()
+        llm = Qwen3LLM()
+        completion_choice = self._make_completion_choice(
+            "reasoning step",
+            finish_reason="stop",
+            completion_tokens=4,
+            prompt_tokens=9,
+            total_tokens=13,
+        )
+
+        with patch.object(
+            llm,
+            "_generate_with_prefix_step",
+            return_value=completion_choice,
+        ) as mock_generate_with_prefix_step:
+            result = llm.complete_until(
+                "prompt",
+                "<think>\n",
+                stop="</think>",
+                max_tokens=32,
+            )
+
+        self.assertEqual(mock_generate_with_prefix_step.call_args.args[1], "<think>\n")
+        self.assertEqual(result.generated_text, "reasoning step</think>")
+        self.assertEqual(
+            result.assistant_prompt_prefix,
+            "<think>\nreasoning step</think>",
+        )
+
+    @patch("llm_utils.lm.llm.get_base_client")
+    def test_complete_until_strips_assistant_end_from_output(self, mock_get_client):
         mock_get_client.return_value = self._make_mock_client()
         llm = Qwen3LLM()
         completion_choice = self._make_completion_choice(
@@ -694,9 +726,10 @@ class TestQwen3LLM(unittest.TestCase):
             result.assistant_prompt_prefix,
             "<memory>\n\n\nHello! 👋\n\nHow can I help you today?",
         )
+        self.assertEqual(result.stop, "</memory>")
 
     @patch("llm_utils.lm.llm.get_base_client")
-    def test_complete_until_strips_trailing_assistant_end_from_input_state(
+    def test_complete_until_strips_assistant_end_from_input_state(
         self, mock_get_client
     ):
         mock_get_client.return_value = self._make_mock_client()
@@ -726,10 +759,12 @@ class TestQwen3LLM(unittest.TestCase):
             mock_generate_with_prefix_step.call_args.args[1],
             "<memory>seed</memory>",
         )
+        self.assertEqual(result.generated_text, "continued")
         self.assertEqual(
             result.assistant_prompt_prefix,
             "<memory>seed</memory>continued",
         )
+        self.assertEqual(result.stop, "</memory>")
 
     @patch("llm_utils.lm.llm.get_base_client")
     def test_complete_until_uses_constructor_generation_defaults(self, mock_get_client):
@@ -791,13 +826,11 @@ class TestQwen3LLM(unittest.TestCase):
             llm._generate_with_prefix_step(
                 [{"role": "user", "content": "prompt"}],
                 "<memory>",
-                prefix_mode="raw",
                 max_tokens=32,
             )
             llm._generate_with_prefix_step(
                 [{"role": "user", "content": "prompt"}],
                 "<memory>",
-                prefix_mode="raw",
                 max_tokens=32,
             )
 
@@ -823,6 +856,7 @@ class TestQwen3LLM(unittest.TestCase):
             client_idx=2,
         )
 
+        # inject strips only wrapper tokens and preserves the rest verbatim
         injected = state.inject("\n<think_efficient>\n")
 
         self.assertEqual(

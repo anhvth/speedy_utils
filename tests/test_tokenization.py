@@ -47,11 +47,12 @@ def test_split_assistant_parts_with_content_only():
 
 
 def test_build_assistant_prefix_normalizes_both_phases():
+    # build_assistant_prefix returns wrapper-free text (no ASSISTANT_PREFIX)
     assert build_assistant_prefix("seed", "final", True) == (
-        f"{ASSISTANT_PREFIX}\n{THINK_START}\nseed\n{THINK_END}final"
+        f"{THINK_START}\nseed\n{THINK_END}final"
     )
     assert build_assistant_prefix("seed", None, False) == (
-        f"{ASSISTANT_PREFIX}\n{THINK_START}\nseed"
+        f"{THINK_START}\nseed"
     )
 
 
@@ -116,7 +117,7 @@ def test_generate_with_prefix_step_uses_tokenizer_and_completion_api(
 
 
 @patch("llm_utils.lm.llm.get_base_client")
-def test_generate_with_prefix_step_normalizes_disabled_thinking_prefix(
+def test_generate_with_prefix_step_uses_assistant_body_verbatim(
     mock_get_client,
 ):
     mock_get_client.return_value = _make_mock_client()
@@ -148,14 +149,16 @@ def test_generate_with_prefix_step_normalizes_disabled_thinking_prefix(
             llm.client.completions, "create", return_value=completion
         ) as mock_completion_create,
     ):
+        # _generate_with_prefix_step takes assistant-body text and wraps it
         llm._generate_with_prefix_step(
             [{"role": "user", "content": "hi"}],
             "<think>\nseed",
-            enable_thinking=False,
+            max_tokens=1,
         )
 
+    # enable_thinking is consumed by caller; body is used verbatim
     assert mock_completion_create.call_args.kwargs == {
         "model": "test-model",
-        "prompt": "TOK_PROMPT<|im_start|>assistant\n<think>\n\n</think>",
+        "prompt": "TOK_PROMPT<|im_start|>assistant\n<think>\nseed",
         "max_tokens": 1,
     }
