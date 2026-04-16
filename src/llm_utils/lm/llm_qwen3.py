@@ -25,7 +25,9 @@ THINK_END = "</think>"
 ASSISTANT_END = "<|im_end|>"
 DEFAULT_THINKING_MAX_TOKENS = 8192
 DEFAULT_CONTENT_MAX_TOKENS = 4096
-DEFAULT_EARLY_THINKING_STOP_MESSAGE = "\n\n[SYSTEM] Thinking budget exhausted. Stopping now.\n\n"
+DEFAULT_EARLY_THINKING_STOP_MESSAGE = (
+    "\n\n[SYSTEM] Thinking budget exhausted. Stopping now.\n\n"
+)
 TRANSFORMERS_NO_ADVISORY_WARNINGS_ENV = "TRANSFORMERS_NO_ADVISORY_WARNINGS"
 _TOKENIZER_CACHE_ROOT = Path("/tmp/tokenizers")
 _AUTO_TOKENIZER_CLS = None
@@ -609,7 +611,7 @@ class Qwen3LLM(LLM):
         assistant_prompt_prefix: str,
         *,
         thinking_max_tokens: int | None = None,
-        early_thinking_stop_message: str | None = None,
+        early_thinking_stop_message: str | None | bool = None,
         **runtime_kwargs,
     ) -> _PrefixCompletionState:
         resolved_thinking_max_tokens = (
