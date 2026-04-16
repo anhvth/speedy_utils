@@ -106,6 +106,7 @@ def _get_mopenai_class():
             elif not cache and self.post != self._orig_post:
                 self.post = self._orig_post
 
+    cast(Any, MOpenAI).__signature__ = _OPENAI_FACTORY_SIGNATURE
     return MOpenAI
 
 
@@ -163,6 +164,7 @@ def _get_masyncopenai_class():
             elif not cache and self.post != self._orig_post:
                 self.post = self._orig_post
 
+    cast(Any, MAsyncOpenAI).__signature__ = _ASYNC_OPENAI_FACTORY_SIGNATURE
     return MAsyncOpenAI
 
 
@@ -425,6 +427,3 @@ def MAsyncOpenAI(
         **kwargs,
     )
 
-
-cast(Any, MOpenAI).__signature__ = _OPENAI_FACTORY_SIGNATURE
-cast(Any, MAsyncOpenAI).__signature__ = _ASYNC_OPENAI_FACTORY_SIGNATURE
