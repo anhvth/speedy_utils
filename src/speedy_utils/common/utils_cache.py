@@ -125,7 +125,7 @@ def identify(obj: Any, depth: int = 0, max_depth: int = 2) -> str:
             _try_store_quick_id(obj, out)
         return out
     if isinstance(obj, dict):
-        ks = sorted(obj.keys())
+        ks = sorted(obj.keys(), key=lambda k: (isinstance(k, str), str(k)))
         vs = [identify(obj[k], depth + 1, max_depth) for k in ks]
         out = identify([ks, vs], depth + 1, max_depth)
         if depth == 0:
