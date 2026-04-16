@@ -602,7 +602,7 @@ class Qwen3LLM(LLM):
             client_idx=resolved_client_idx,
         )
 
-    def _complete_reasoning(
+    def complete_reasoning(
         self,
         messages: Messages,
         assistant_prompt_prefix: str,
@@ -639,7 +639,7 @@ class Qwen3LLM(LLM):
 
         return state
 
-    def _complete_content(
+    def complete_content(
         self,
         messages: Messages,
         completion_state: _PrefixCompletionState,
@@ -704,70 +704,6 @@ class Qwen3LLM(LLM):
             extra["call_count"] = call_count
         return ChatCompletionMessage(role="assistant", content=content, **extra)
 
-    def complete_reasoning(
-        self,
-        input_data: str | BaseModel | list[dict],
-        assistant_prompt_prefix: str = "<think>\n",
-        *,
-        thinking_max_tokens: int | None = None,
-        **runtime_kwargs,
-    ) -> _PrefixCompletionState:
-        """
-        Complete the reasoning phase and return the updated prefix state.
-
-        The returned state can be passed to `complete_content()` to finish the
-        answer generation.
-        """
-        if thinking_max_tokens is None:
-            thinking_max_tokens = self.default_thinking_max_tokens
-        self._validate_prefix_completion_kwargs(
-            n=runtime_kwargs.get("n", 1),
-            thinking_max_tokens=thinking_max_tokens,
-            require_thinking_max_tokens=True,
-        )
-
-        messages = self._prepare_input(input_data)
-        return self._complete_reasoning(
-            messages,
-            assistant_prompt_prefix,
-            thinking_max_tokens=thinking_max_tokens,
-            **runtime_kwargs,
-        )
-
-    def complete_content(
-        self,
-        input_data: str | BaseModel | list[dict],
-        completion_state: _PrefixCompletionState | str,
-        *,
-        content_max_tokens: int | None = None,
-        **runtime_kwargs,
-    ) -> "ChatCompletionMessage":
-        """
-        Complete the visible answer from an already completed reasoning state.
-        """
-        if content_max_tokens is None:
-            content_max_tokens = self.default_content_max_tokens
-        self._validate_prefix_completion_kwargs(
-            n=runtime_kwargs.get("n", 1),
-            content_max_tokens=content_max_tokens,
-            require_content_max_tokens=True,
-        )
-
-        if isinstance(completion_state, str):
-            completion_state = self._build_prefix_state(
-                self._normalize_assistant_prefix(
-                    completion_state,
-                    enable_thinking=runtime_kwargs.get("enable_thinking"),
-                )
-            )
-
-        messages = self._prepare_input(input_data)
-        return self._complete_content(
-            messages,
-            completion_state,
-            content_max_tokens=content_max_tokens,
-            **runtime_kwargs,
-        )
 
     @clean_traceback
     def chat_completion(
@@ -777,6 +713,7 @@ class Qwen3LLM(LLM):
         *,
         thinking_max_tokens: int | None = None,
         content_max_tokens: int | None = None,
+        max_tokens: int | None = None,
         **runtime_kwargs,
     ) -> "ChatCompletionMessage":
         """
@@ -786,40 +723,58 @@ class Qwen3LLM(LLM):
         continues a `<think>...</think>` block inside the assistant turn before
         the final answer, and is distinct from the raw prompt `generate()` API.
         """
-        if thinking_max_tokens is None:
-            thinking_max_tokens = self.default_thinking_max_tokens
-        if content_max_tokens is None:
-            content_max_tokens = self.default_content_max_tokens
         self._validate_prefix_completion_kwargs(
             n=runtime_kwargs.get("n", 1),
-            thinking_max_tokens=thinking_max_tokens,
-            content_max_tokens=content_max_tokens,
+            thinking_max_tokens=thinking_max_tokens or self.default_thinking_max_tokens,
+            content_max_tokens=content_max_tokens or self.default_content_max_tokens,
             require_thinking_max_tokens=True,
             require_content_max_tokens=True,
         )
 
         messages = self._prepare_input(input_data)
-        reasoning_state = self._complete_reasoning(
-            messages,
-            assistant_prompt_prefix,
-            thinking_max_tokens=thinking_max_tokens,
-            **runtime_kwargs,
-        )
-        if is_content_done(
-            reasoning_state.content,
-            reasoning_state.stop_reason,
-        ):
-            message = self._build_openai_message(
-                reasoning=reasoning_state.reasoning,
-                content=reasoning_state.content or "",
-                usage=reasoning_state.usage,
-                call_count=reasoning_state.call_count,
+        if thinking_max_tokens and content_max_tokens:
+            reasoning_state = self.complete_reasoning(
+                messages,
+                assistant_prompt_prefix,
+                thinking_max_tokens=thinking_max_tokens or self.default_thinking_max_tokens,
+                **runtime_kwargs,
             )
-            return message
+            if is_content_done(
+                reasoning_state.content,
+                reasoning_state.stop_reason,
+            ):
+                message = self._build_openai_message(
+                    reasoning=reasoning_state.reasoning,
+                    content=reasoning_state.content or "",
+                    usage=reasoning_state.usage,
+                    call_count=reasoning_state.call_count,
+                )
+                return message
 
-        return self._complete_content(
-            messages,
-            reasoning_state,
-            content_max_tokens=content_max_tokens,
-            **runtime_kwargs,
-        )
+            return self.complete_content(
+                messages,
+                reasoning_state,
+                content_max_tokens=content_max_tokens or self.default_content_max_tokens,
+                **runtime_kwargs,
+            )
+
+        else:
+            # just complet until im_end
+            custom_state = self.complete_until(
+                messages,
+                assistant_prompt_prefix,
+                stop=ASSISTANT_END,
+                max_tokens=max_tokens,
+                include_stop_in_prefix=False,
+                **runtime_kwargs,
+            )
+            #parse to assistant chat message
+            text = custom_state.assistant_prompt_prefix
+            reasoning, content, _ = split_assistant_parts(text)
+            chat_msg = self._build_openai_message(
+                reasoning=reasoning,
+                content=content or "",
+                usage=custom_state.usage,
+                call_count=1,
+            )
+            return chat_msg
