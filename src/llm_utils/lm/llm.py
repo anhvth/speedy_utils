@@ -278,7 +278,8 @@ class LLM:
             logger.warning("No model specified in model_kwargs")
         return model
 
-    def _prepare_input(self, input_data: str | BaseModel | list[dict]) -> Messages:
+    @staticmethod
+    def _prepare_input(input_data: str | BaseModel | list[dict]) -> Messages:
         """Convert input to messages format."""
         if isinstance(input_data, list):
             assert isinstance(input_data[0], dict) and "role" in input_data[0], (
