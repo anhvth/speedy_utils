@@ -138,13 +138,6 @@ def _get_ipython_core():
         return None
 
 
-# Cache for lazy imports
-_pandas_cache = None
-_matplotlib_cache = None
-_plt_cache = None
-_get_ipython_cache = None
-
-
 # Lazy import classes for performance-critical modules
 class _LazyModule:
     """Lazy module loader that imports only when accessed."""
