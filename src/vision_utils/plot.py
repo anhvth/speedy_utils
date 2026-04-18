@@ -102,7 +102,7 @@ def _normalize_batch(
             images = [_normalize_image_format(images)]
         elif images.ndim == 2:
             # Single grayscale image (H, W)
-            images = [images[:, :, np.newaxis]]
+            images = [np.expand_dims(images, axis=2)]
         else:
             raise ValueError(
                 f'Invalid array shape: {images.shape}. Expected 2D, 3D, or 4D array'

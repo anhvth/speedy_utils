@@ -3,6 +3,7 @@
   "exclude": ["debug", "examples", "scripts", "**/node_modules", "**/__pycache__", "**/.*", ".venv"],
   "reportUnsupportedDunderAll": "none",
   "reportMissingImports": "none",
+  "reportMissingModuleSource": "none",
   "reportAttributeAccessIssue": "none",
   "pythonVersion": "3.11"
 }

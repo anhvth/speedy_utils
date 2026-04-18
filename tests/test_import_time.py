@@ -30,6 +30,7 @@ print(f"IMPORT_TIME:{elapsed}")
     )
 
     # Parse the import time from output
+    import_time = 0.0
     for line in result.stdout.splitlines():
         if line.startswith("IMPORT_TIME:"):
             import_time = float(line.split(":")[1])
@@ -65,6 +66,7 @@ print(f"IMPORT_TIME:{elapsed}")
     )
 
     # Parse the import time from output
+    import_time = 0.0
     for line in result.stdout.splitlines():
         if line.startswith("IMPORT_TIME:"):
             import_time = float(line.split(":")[1])
