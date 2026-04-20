@@ -382,46 +382,70 @@ def _setup_chainlit():
             stream = await aclient.chat.completions.create(**call_kwargs)
 
             thinking_completed = False
-            content = None
+            answer_streamed = False
+            guard_blocked = False
+            guard_fallback_text = ""
             final_answer = cl.Message(content="")
 
-            async with cl.Step(name="Thinking") as thinking_step:
+            thinking_step = None
+            async with cl.Step(name="Thinking") as step:
+                thinking_step = step
                 async for chunk in stream:
                     if not chunk.choices:
                         continue
+
                     delta = chunk.choices[0].delta
+                    moderation = getattr(chunk, "moderation", None)
+                    if moderation is None and isinstance(getattr(chunk, "model_extra", None), dict):
+                        moderation = chunk.model_extra.get("moderation")
+
+                    content = delta.content or ""
+                    if moderation is not None:
+                        guard_blocked = True
+                        guard_fallback_text = content or guard_fallback_text
+                        break
 
                     reasoning = getattr(delta, "reasoning_content", None) or getattr(
                         delta, "reasoning", None
                     )
-                    content = delta.content
 
                     if reasoning and not thinking_completed:
                         await thinking_step.stream_token(reasoning)
-                    elif not thinking_completed and content:
-                        thought_for = round(time.time() - start_time)
-                        thinking_step.name = f"Thought for {thought_for}s"
-                        await thinking_step.update()
-                        thinking_completed = True
-                        break
+                        continue
 
-                # If thinking never got content, close the step
+                    if content:
+                        if not thinking_completed:
+                            thought_for = round(time.time() - start_time)
+                            thinking_step.name = f"Thought for {thought_for}s"
+                            await thinking_step.update()
+                            thinking_completed = True
+                        await final_answer.stream_token(content)
+                        answer_streamed = True
+
                 if not thinking_completed:
                     thought_for = round(time.time() - start_time)
                     thinking_step.name = f"Thought for {thought_for}s"
                     await thinking_step.update()
 
-            # Stream the final answer (continues from where we left off)
-            if thinking_completed and content:
-                # We already got the first content token above
-                await final_answer.stream_token(content)
+            if guard_blocked:
+                try:
+                    await stream.close()
+                except Exception:
+                    pass
 
-            async for chunk in stream:
-                if not chunk.choices:
-                    continue
-                delta = chunk.choices[0].delta
-                if delta.content:
-                    await final_answer.stream_token(delta.content)
+                if thinking_step is not None:
+                    try:
+                        await thinking_step.remove()
+                    except Exception:
+                        pass
+
+                fallback_text = guard_fallback_text or "Xin lỗi, tôi không thể hỗ trợ yêu cầu này."
+                final_answer.content = fallback_text
+                if answer_streamed:
+                    await final_answer.update()
+                else:
+                    await final_answer.send()
+                return
 
             await final_answer.send()
 
