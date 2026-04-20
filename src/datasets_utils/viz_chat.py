@@ -49,6 +49,7 @@ from __future__ import annotations
 import argparse
 import bisect
 import json
+import os
 import random
 import sys
 import types
@@ -63,6 +64,8 @@ from rich.text import Text
 
 # Lazy import for datasets
 _dataset_module = None
+DEFAULT_CHAT_TEMPLATE_TOKENIZER = "Qwen/Qwen3.5-27B"
+os.environ.setdefault("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")
 
 
 def _get_dataset_module():
@@ -124,12 +127,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--tokenizer",
+        "-tokenizer",
         type=str,
-        default=None,
-        help="Tokenizer to use for decoding tokenized datasets (e.g., Qwen/Qwen3-8B). "
-        "Required when visualizing tokenized datasets.",
+        default=DEFAULT_CHAT_TEMPLATE_TOKENIZER,
+        help=(
+            "Tokenizer to use for chat-template rendering and tokenized dataset decoding "
+            f"(default: {DEFAULT_CHAT_TEMPLATE_TOKENIZER})."
+        ),
     )
     return parser.parse_args(argv)
+
+
+def _resolve_tokenizer_name(tokenizer_name: str | None) -> str:
+    """Resolve shorthand tokenizer names to canonical HF model IDs."""
+    if not tokenizer_name:
+        return DEFAULT_CHAT_TEMPLATE_TOKENIZER
+    normalized = tokenizer_name.strip()
+    if normalized.lower() in {"qwen3.5", "qwen-3.5"}:
+        return DEFAULT_CHAT_TEMPLATE_TOKENIZER
+    return normalized
 
 
 # =============================================================================
@@ -309,6 +325,8 @@ def _get_tokenizer(tokenizer_name: str) -> Any:
     """Load and cache a tokenizer by name."""
     if tokenizer_name in _tokenizer_cache:
         return _tokenizer_cache[tokenizer_name]
+
+    os.environ.setdefault("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")
 
     try:
         from transformers import AutoTokenizer
@@ -593,6 +611,108 @@ def _format_content(content: Any) -> str:
     return json.dumps(content, ensure_ascii=False, indent=2)
 
 
+def _truncate_content_for_visualization(content: Any, edge_chars: int = 200) -> Any:
+    """Trim long string content for cleaner visualization output."""
+    if not isinstance(content, str):
+        return content
+    if len(content) <= edge_chars * 2:
+        return content
+    omitted = len(content) - (edge_chars * 2)
+    return (
+        f"{content[:edge_chars]}\n"
+        f"... [truncated {omitted} chars] ...\n"
+        f"{content[-edge_chars:]}"
+    )
+
+
+def _build_visualization_messages(
+    messages: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Build message list for visualization-only rendering."""
+    visualized: list[dict[str, Any]] = []
+    for message in messages:
+        msg = dict(message)
+        msg["content"] = _truncate_content_for_visualization(msg.get("content", ""))
+        visualized.append(msg)
+    return visualized
+
+
+def _contains_rendered_chat_artifacts(messages: Sequence[Mapping[str, Any]]) -> bool:
+    """Return True when message content already includes rendered chat-template text."""
+    markers = ("<think>", "</think>", "<tool_call>", "</tool_call>", "<tool_response>")
+    for message in messages:
+        content = message.get("content", "")
+        if isinstance(content, str) and any(marker in content for marker in markers):
+            return True
+    return False
+
+
+def _render_role_content_text(messages: Sequence[Mapping[str, Any]]) -> str:
+    """Render role/content messages without applying a tokenizer template again."""
+    chunks = []
+    for message in _build_visualization_messages(messages):
+        role = str(message.get("role", "")).strip() or "<missing>"
+        content = _format_content(message.get("content", ""))
+        chunks.append(f"<|im_start|>{role}\n{content}<|im_end|>")
+    return "\n".join(chunks)
+
+
+def _render_chat_template_text(messages: Sequence[Mapping[str, Any]], tokenizer: Any) -> str:
+    """Render messages via tokenizer chat template for clean text visualization."""
+    if _contains_rendered_chat_artifacts(messages):
+        return _render_role_content_text(messages)
+
+    visualized_messages = _build_visualization_messages(messages)
+    try:
+        rendered = tokenizer.apply_chat_template(
+            visualized_messages,
+            tokenize=False,
+            add_generation_prompt=False,
+        )
+    except TypeError:
+        rendered = tokenizer.apply_chat_template(visualized_messages, tokenize=False)
+    if not isinstance(rendered, str):
+        return str(rendered)
+    return rendered
+
+
+def _split_chat_template_turns(rendered_text: str) -> list[str]:
+    """Split rendered chat template text into per-turn chunks."""
+    end_token = "<|im_end|>"
+    turns: list[str] = []
+    for chunk in rendered_text.split(end_token):
+        cleaned = chunk.strip()
+        if not cleaned:
+            continue
+        turns.append(f"{cleaned}{end_token}")
+    if not turns and rendered_text.strip():
+        turns.append(rendered_text.strip())
+    return turns
+
+
+def _extract_turn_role(turn_text: str) -> str:
+    """Extract role from a templated turn like '<|im_start|>user\\n...'."""
+    marker = "<|im_start|>"
+    if not turn_text.startswith(marker):
+        return ""
+    remainder = turn_text[len(marker) :]
+    return remainder.splitlines()[0].strip()
+
+
+def _build_template_turn_panel(turn_text: str, turn_idx: int, branch_name: str | None = None) -> Panel:
+    """Build a panel for a single rendered template turn with role-based color."""
+    role = _extract_turn_role(turn_text)
+    title = f"Turn {turn_idx}" if branch_name is None else f"Turn {turn_idx} ({branch_name})"
+    if role:
+        title = f"{title} [{role}]"
+    return Panel(
+        Text(turn_text),
+        title=title,
+        border_style=_role_style(role) if role else "magenta",
+        padding=(0, 1),
+    )
+
+
 def _role_style(role: str) -> str:
     """Get color style for role."""
     normalized = role.strip().lower()
@@ -726,6 +846,7 @@ def print_item(
     source_name: str | None,
     row_index: int,
     row: Mapping[str, Any],
+    tokenizer: Any,
     show_tools: bool = False,
 ) -> None:
     """Print a single item with all its messages."""
@@ -759,10 +880,16 @@ def print_item(
     # Show messages
     if branch_messages:
         for branch_name, messages in branch_messages.items():
-            _render_messages(console, messages, heading=f"Messages ({branch_name})")
+            rendered_text = _render_chat_template_text(messages, tokenizer)
+            turns = _split_chat_template_turns(rendered_text)
+            for turn_idx, turn_text in enumerate(turns):
+                console.print(_build_template_turn_panel(turn_text, turn_idx, branch_name))
     else:
         messages = normalize_messages(row)
-        _render_messages(console, messages, heading="Messages")
+        rendered_text = _render_chat_template_text(messages, tokenizer)
+        turns = _split_chat_template_turns(rendered_text)
+        for turn_idx, turn_text in enumerate(turns):
+            console.print(_build_template_turn_panel(turn_text, turn_idx))
 
     console.print()
 
@@ -867,6 +994,7 @@ def _wait_for_next_sample(
 def main(argv: list[str] | None = None) -> int:
     """Main entry point for the CLI."""
     args = parse_args(argv)
+    tokenizer_name = _resolve_tokenizer_name(args.tokenizer)
     source_path = Path(args.source)
 
     console = Console()
@@ -879,20 +1007,11 @@ def main(argv: list[str] | None = None) -> int:
     # Check if data is tokenized
     is_tokenized = items and _is_tokenized_row(items[0][2])
 
-    tokenizer = None
-    if is_tokenized:
-        if not args.tokenizer:
-            raise ValueError(
-                "Dataset appears to be tokenized (contains 'input_ids'). "
-                "Please provide --tokenizer to decode the tokens.\n"
-                "Example: viz_chat data/tokenized/ --tokenizer Qwen/Qwen3-8B"
-            )
-        tokenizer = _get_tokenizer(args.tokenizer)
+    tokenizer = _get_tokenizer(tokenizer_name)
 
     # Print summary
     console.print(f"Source: {source_path}", soft_wrap=True)
-    if is_tokenized:
-        console.print(f"Tokenizer: {args.tokenizer}", soft_wrap=True)
+    console.print(f"Tokenizer: {tokenizer_name}", soft_wrap=True)
     console.print(f"Total items: {len(items)}", soft_wrap=True)
     console.print(
         "Interactive mode: Enter=next random, 'g'=goto index, 'q'=quit",
@@ -930,6 +1049,7 @@ def main(argv: list[str] | None = None) -> int:
                 source_name=source_name,
                 row_index=row_index,
                 row=row,
+                tokenizer=tokenizer,
                 show_tools=args.show_tools,
             )
 
@@ -968,6 +1088,7 @@ def main(argv: list[str] | None = None) -> int:
                     source_name=source_name,
                     row_index=row_index,
                     row=row,
+                    tokenizer=tokenizer,
                     show_tools=args.show_tools,
                 )
 

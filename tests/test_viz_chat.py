@@ -11,6 +11,7 @@ import pytest
 
 import datasets_utils.viz_chat as viz_chat
 from datasets_utils.viz_chat import (
+    _build_template_turn_panel,
     _detect_format,
     _load_hf_dataset,
     _load_json,
@@ -341,6 +342,212 @@ class TestMainTokenized:
 
         output = capsys.readouterr().out
         assert "Total items: 2" in output
+
+
+class TestMainChatTemplate:
+    """Tests for chat-template visualization behavior."""
+
+    def test_main_uses_default_tokenizer_for_chat_template(self, monkeypatch, capsys):
+        """Non-tokenized rows should render via tokenizer chat template."""
+        rows = [
+            (
+                None,
+                0,
+                {
+                    "messages": [
+                        {"role": "user", "content": "hello"},
+                        {"role": "assistant", "content": "world"},
+                    ]
+                },
+            )
+        ]
+
+        tokenizer_names: list[str] = []
+        template_calls: list[list[dict[str, object]]] = []
+
+        class FakeTokenizer:
+            def apply_chat_template(
+                self, messages, tokenize=False, add_generation_prompt=False
+            ):
+                template_calls.append(messages)
+                return "templated-output"
+
+        monkeypatch.setattr(viz_chat, "load_data", lambda path: rows)
+        monkeypatch.setattr(
+            viz_chat,
+            "_get_tokenizer",
+            lambda name: tokenizer_names.append(name) or FakeTokenizer(),
+        )
+        monkeypatch.setattr(
+            viz_chat,
+            "_wait_for_next_sample",
+            lambda *args, **kwargs: (False, None),
+        )
+
+        exit_code = viz_chat.main(["dummy_source"])
+
+        assert exit_code == 0
+        assert tokenizer_names == ["Qwen/Qwen3.5-27B"]
+        assert len(template_calls) == 1
+        assert template_calls[0][0]["role"] == "user"
+
+        output = capsys.readouterr().out
+        assert "Tokenizer: Qwen/Qwen3.5-27B" in output
+        assert "templated-output" in output
+
+    def test_main_truncates_long_content_for_visualization(
+        self, monkeypatch, capsys
+    ):
+        """Long message content should be trimmed before rendering template."""
+        long_content = "A" * 600
+        rows = [
+            (
+                None,
+                0,
+                {"messages": [{"role": "user", "content": long_content}]},
+            )
+        ]
+
+        captured_messages: list[list[dict[str, object]]] = []
+
+        class FakeTokenizer:
+            def apply_chat_template(
+                self, messages, tokenize=False, add_generation_prompt=False
+            ):
+                captured_messages.append(messages)
+                return "ok"
+
+        monkeypatch.setattr(viz_chat, "load_data", lambda path: rows)
+        monkeypatch.setattr(viz_chat, "_get_tokenizer", lambda name: FakeTokenizer())
+        monkeypatch.setattr(
+            viz_chat,
+            "_wait_for_next_sample",
+            lambda *args, **kwargs: (False, None),
+        )
+
+        exit_code = viz_chat.main(["dummy_source"])
+
+        assert exit_code == 0
+        content = captured_messages[0][0]["content"]
+        assert isinstance(content, str)
+        assert len(content) < len(long_content)
+        assert "[truncated 200 chars]" in content
+
+        output = capsys.readouterr().out
+        assert "ok" in output
+
+    def test_main_resolves_qwen35_shorthand(self, monkeypatch):
+        """Single-dash tokenizer shorthand should map to canonical Qwen3.5 tokenizer."""
+        rows = [(None, 0, {"messages": [{"role": "user", "content": "hi"}]})]
+        tokenizer_names: list[str] = []
+
+        class FakeTokenizer:
+            def apply_chat_template(
+                self, messages, tokenize=False, add_generation_prompt=False
+            ):
+                return "ok"
+
+        monkeypatch.setattr(viz_chat, "load_data", lambda path: rows)
+        monkeypatch.setattr(
+            viz_chat,
+            "_get_tokenizer",
+            lambda name: tokenizer_names.append(name) or FakeTokenizer(),
+        )
+        monkeypatch.setattr(
+            viz_chat,
+            "_wait_for_next_sample",
+            lambda *args, **kwargs: (False, None),
+        )
+
+        exit_code = viz_chat.main(["dummy_source", "-tokenizer", "Qwen3.5"])
+
+        assert exit_code == 0
+        assert tokenizer_names == ["Qwen/Qwen3.5-27B"]
+
+    def test_main_splits_chat_template_into_turns(self, monkeypatch, capsys):
+        """Rendered template text should be displayed turn by turn."""
+        rows = [(None, 0, {"messages": [{"role": "user", "content": "hi"}]})]
+
+        class FakeTokenizer:
+            def apply_chat_template(
+                self, messages, tokenize=False, add_generation_prompt=False
+            ):
+                return (
+                    "<|im_start|>user\nu<|im_end|>\n"
+                    "<|im_start|>assistant\na<|im_end|>\n"
+                )
+
+        monkeypatch.setattr(viz_chat, "load_data", lambda path: rows)
+        monkeypatch.setattr(viz_chat, "_get_tokenizer", lambda name: FakeTokenizer())
+        monkeypatch.setattr(
+            viz_chat,
+            "_wait_for_next_sample",
+            lambda *args, **kwargs: (False, None),
+        )
+
+        exit_code = viz_chat.main(["dummy_source"])
+
+        assert exit_code == 0
+        output = capsys.readouterr().out
+        assert "Turn 0" in output
+        assert "Turn 1" in output
+        assert "<|im_start|>user" in output
+        assert "<|im_start|>assistant" in output
+
+    def test_main_does_not_retemplate_already_rendered_thinking(
+        self, monkeypatch, capsys
+    ):
+        """Rows with literal thinking markup should not be templated a second time."""
+        rows = [
+            (
+                None,
+                0,
+                {
+                    "messages": [
+                        {"role": "user", "content": "hi"},
+                        {
+                            "role": "assistant",
+                            "content": "<think>\nreason\n</think>\n\nhello",
+                        },
+                    ]
+                },
+            )
+        ]
+
+        class FakeTokenizer:
+            def apply_chat_template(
+                self, messages, tokenize=False, add_generation_prompt=False
+            ):
+                raise AssertionError("already rendered messages must not be retemplated")
+
+        monkeypatch.setattr(viz_chat, "load_data", lambda path: rows)
+        monkeypatch.setattr(viz_chat, "_get_tokenizer", lambda name: FakeTokenizer())
+        monkeypatch.setattr(
+            viz_chat,
+            "_wait_for_next_sample",
+            lambda *args, **kwargs: (False, None),
+        )
+
+        exit_code = viz_chat.main(["dummy_source"])
+
+        assert exit_code == 0
+        output = capsys.readouterr().out
+        assert output.count("<think>") == 1
+        assert "<think>\n\n</think>" not in output
+        assert "reason" in output
+        assert "hello" in output
+
+    def test_template_turn_panel_restores_role_color_coding(self):
+        """Template turn panels should use role-based border colors."""
+        system_panel = _build_template_turn_panel("<|im_start|>system\ns<|im_end|>", 0)
+        user_panel = _build_template_turn_panel("<|im_start|>user\nu<|im_end|>", 1)
+        assistant_panel = _build_template_turn_panel(
+            "<|im_start|>assistant\na<|im_end|>", 2
+        )
+
+        assert system_panel.border_style == "bold cyan"
+        assert user_panel.border_style == "bold green"
+        assert assistant_panel.border_style == "bold yellow"
 
 
 # =============================================================================
