@@ -467,9 +467,9 @@ def _launch_chainlit(config: ChatConfig) -> int:
     # Pass config via environment variables to the subprocess
     env = os.environ.copy()
     # Redirect chainlit artifacts (chainlit.md, .chainlit/, .files/) to /tmp
-    env["CHAINLIT_APP_ROOT"] = os.path.join(
-        tempfile.gettempdir(), "sp_chat", str(config.app_port)
-    )
+    app_root = os.path.join(tempfile.gettempdir(), "sp_chat", str(config.app_port))
+    os.makedirs(app_root, exist_ok=True)
+    env["CHAINLIT_APP_ROOT"] = app_root
     env["SP_CHAT_CLIENT"] = normalize_client_base_url(config.client)
     env["SP_CHAT_API_KEY"] = config.api_key
     if config.model:
