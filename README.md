@@ -256,6 +256,7 @@ The installed console scripts are:
 | `sp_chat` | Launch a Chainlit chat UI for an OpenAI-compatible backend |
 | `spu-prefetch-large-model` | Read large model files into the OS page cache |
 | `viz_chat` | Inspect chat datasets from JSON, JSONL, folders, or HF saves |
+| `pcat` | Interactive JSON/JSONL/HF-dataset viewer (TUI) |
 | `openapi_client_codegen` | Generate a sync client from an OpenAPI JSON spec |
 
 Examples:
@@ -517,6 +518,21 @@ viz_chat data/conversations.jsonl
 viz_chat data/sharegpt.jsonl --format sharegpt
 viz_chat data/tokenized_dataset/ --tokenizer Qwen/Qwen3-8B
 viz_chat data/with_tools.jsonl --show-tools
+```
+
+### `pcat` — Interactive JSON/JSONL/HF-dataset viewer
+
+Run without installing via `uvx`:
+
+```bash
+uvx --from git+https://github.com/anhvth/speedy_utils pcat data/file.jsonl
+```
+
+For frequent use, add a shell alias:
+
+```bash
+# Add to ~/.bashrc or ~/.zshrc
+alias pcat='uvx --from git+https://github.com/anhvth/speedy_utils pcat'
 ```
 
 ## Vision Utils
