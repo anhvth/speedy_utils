@@ -657,7 +657,9 @@ def _render_role_content_text(messages: Sequence[Mapping[str, Any]]) -> str:
     return "\n".join(chunks)
 
 
-def _render_chat_template_text(messages: Sequence[Mapping[str, Any]], tokenizer: Any) -> str:
+def _render_chat_template_text(
+    messages: Sequence[Mapping[str, Any]], tokenizer: Any
+) -> str:
     """Render messages via tokenizer chat template for clean text visualization."""
     if _contains_rendered_chat_artifacts(messages):
         return _render_role_content_text(messages)
@@ -699,10 +701,16 @@ def _extract_turn_role(turn_text: str) -> str:
     return remainder.splitlines()[0].strip()
 
 
-def _build_template_turn_panel(turn_text: str, turn_idx: int, branch_name: str | None = None) -> Panel:
+def _build_template_turn_panel(
+    turn_text: str, turn_idx: int, branch_name: str | None = None
+) -> Panel:
     """Build a panel for a single rendered template turn with role-based color."""
     role = _extract_turn_role(turn_text)
-    title = f"Turn {turn_idx}" if branch_name is None else f"Turn {turn_idx} ({branch_name})"
+    title = (
+        f"Turn {turn_idx}"
+        if branch_name is None
+        else f"Turn {turn_idx} ({branch_name})"
+    )
     if role:
         title = f"{title} [{role}]"
     return Panel(
@@ -883,7 +891,9 @@ def print_item(
             rendered_text = _render_chat_template_text(messages, tokenizer)
             turns = _split_chat_template_turns(rendered_text)
             for turn_idx, turn_text in enumerate(turns):
-                console.print(_build_template_turn_panel(turn_text, turn_idx, branch_name))
+                console.print(
+                    _build_template_turn_panel(turn_text, turn_idx, branch_name)
+                )
     else:
         messages = normalize_messages(row)
         rendered_text = _render_chat_template_text(messages, tokenizer)
@@ -951,7 +961,12 @@ def print_tokenized_item(
 
 
 def _wait_for_next_sample(
-    console: Console, *, item_number: int, total_items: int, total_in_dataset: int, current_index: int
+    console: Console,
+    *,
+    item_number: int,
+    total_items: int,
+    total_in_dataset: int,
+    current_index: int,
 ) -> tuple[bool, int | None]:
     """
     Wait for user input before showing next sample.

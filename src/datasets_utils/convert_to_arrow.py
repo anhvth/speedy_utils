@@ -1,7 +1,7 @@
 import os
 
 
-os.environ['HF_HOME'] = '/mnt/data/anhvth/tmp/'
+os.environ["HF_HOME"] = "/mnt/data/anhvth/tmp/"
 import sys
 from pathlib import Path
 
@@ -25,13 +25,20 @@ def convert_to_arrow(path_to_dir):
     # 2. Load and Save
     # 'keep_in_memory=False' ensures we don't crash RAM if the files are huge
     n_proc = os.cpu_count() if os.cpu_count() is not None else 1
-    dataset = load_dataset("parquet", data_files=parquet_files, split="train", keep_in_memory=True, num_proc=n_proc)
+    dataset = load_dataset(
+        "parquet",
+        data_files=parquet_files,
+        split="train",
+        keep_in_memory=True,
+        num_proc=n_proc,
+    )
 
     # This creates the native Arrow format for fast loading
     dataset.save_to_disk(output_dir)
 
     print(f"✅ Success! Saved to: {output_dir}")
     print("Now load it instantly with: load_from_disk('path')")
+
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
