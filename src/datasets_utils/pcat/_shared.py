@@ -67,6 +67,28 @@ class JsonlRowSource:
 
 
 @dataclass
+class JsonSingleRowSource:
+    path: Path
+    display_path: str
+
+    @classmethod
+    def from_path(cls, path: Path) -> JsonSingleRowSource:
+        return cls(path=path, display_path=str(path))
+
+    @property
+    def total_rows(self) -> int:
+        return 1
+
+    def load_row(self, index: int) -> Any:
+        if index != 0:
+            raise ValueError(f"row index {index} out of range, only 1 row available")
+        return load_json_file_row(self.path)
+
+    def reload(self) -> None:
+        return
+
+
+@dataclass
 class JsonDirRowSource:
     path: Path
     files: list[Path]
@@ -1070,6 +1092,8 @@ def main_jsonl(argv: Sequence[str] | None = None) -> int:
         source = JsonDirRowSource.from_path(path)
         if source.total_rows <= 0:
             parser.error(f"{path} has no .json files")
+    elif path.name.lower().endswith(".json"):
+        source = JsonSingleRowSource.from_path(path)
     else:
         source = JsonlRowSource.from_path(path)
         if source.total_rows <= 0:
