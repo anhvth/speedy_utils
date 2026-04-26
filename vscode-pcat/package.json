@@ -1,0 +1,144 @@
+{
+    "name": "pcat-vscode",
+    "displayName": "PCAT",
+    "description": "Open JSON, JSONL, and Hugging Face dataset paths with pcat from VS Code.",
+    "version": "0.1.0",
+    "publisher": "anhvth",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/anhvth/speedy_utils"
+    },
+    "engines": {
+        "vscode": "^1.92.0"
+    },
+    "categories": [
+        "Other",
+        "Data Science"
+    ],
+    "keywords": [
+        "pcat",
+        "json",
+        "jsonl",
+        "datasets",
+        "huggingface"
+    ],
+    "activationEvents": [
+        "onCustomEditor:pcat.viewer",
+        "onCommand:pcat.open",
+        "onCommand:pcat.openAtIndex",
+        "onCommand:pcat.previewPlainRow"
+    ],
+    "main": "./out/extension.js",
+    "contributes": {
+        "commands": [
+            {
+                "command": "pcat.open",
+                "title": "PCAT: Open"
+            },
+            {
+                "command": "pcat.openAtIndex",
+                "title": "PCAT: Open With Row Index"
+            },
+            {
+                "command": "pcat.previewPlainRow",
+                "title": "PCAT: Preview Plain Row"
+            },
+            {
+                "command": "pcat.reopenAsText",
+                "title": "PCAT: Reopen As Text Editor"
+            }
+        ],
+        "customEditors": [
+            {
+                "viewType": "pcat.viewer",
+                "displayName": "PCAT Viewer",
+                "selector": [
+                    {
+                        "filenamePattern": "*.jsonl"
+                    }
+                ],
+                "priority": "default"
+            }
+        ],
+        "menus": {
+            "explorer/context": [
+                {
+                    "command": "pcat.open",
+                    "when": "resourceScheme == file",
+                    "group": "navigation@50"
+                },
+                {
+                    "command": "pcat.previewPlainRow",
+                    "when": "resourceScheme == file",
+                    "group": "navigation@51"
+                }
+            ],
+            "editor/title": [
+                {
+                    "command": "pcat.open",
+                    "when": "resourceScheme == file",
+                    "group": "navigation@50"
+                },
+                {
+                    "command": "pcat.previewPlainRow",
+                    "when": "resourceScheme == file",
+                    "group": "navigation@51"
+                },
+                {
+                    "command": "pcat.reopenAsText",
+                    "when": "activeCustomEditorId == pcat.viewer",
+                    "group": "navigation@52"
+                }
+            ]
+        },
+        "configuration": {
+            "title": "PCAT",
+            "properties": {
+                "pcat.command": {
+                    "type": "string",
+                    "default": "pcat",
+                    "markdownDescription": "Shell command prefix used to start pcat. Examples: `pcat`, `uv run pcat`, `uvx --from git+https://github.com/anhvth/speedy_utils pcat`."
+                },
+                "pcat.extraArgs": {
+                    "type": "array",
+                    "default": [],
+                    "items": {
+                        "type": "string"
+                    },
+                    "markdownDescription": "Extra arguments appended before the target path."
+                },
+                "pcat.defaultSplit": {
+                    "type": "string",
+                    "default": "",
+                    "markdownDescription": "Default Hugging Face dataset split for directories containing `dataset_info.json`. Leave empty to let pcat decide."
+                },
+                "pcat.terminalName": {
+                    "type": "string",
+                    "default": "PCAT",
+                    "markdownDescription": "Integrated terminal name used for interactive pcat sessions."
+                },
+                "pcat.reuseTerminal": {
+                    "type": "boolean",
+                    "default": true,
+                    "markdownDescription": "Reuse the same integrated terminal for consecutive pcat launches."
+                },
+                "pcat.autoLaunchOnOpen": {
+                    "type": "boolean",
+                    "default": true,
+                    "markdownDescription": "Automatically launch `pcat` in the integrated terminal when a `.jsonl` file is opened with the PCAT custom editor."
+                }
+            }
+        }
+    },
+    "scripts": {
+        "compile": "tsc -p ./",
+        "watch": "tsc -watch -p ./",
+        "package": "npm run compile && vsce package --allow-missing-repository --skip-license"
+    },
+    "devDependencies": {
+        "@types/node": "^22.10.1",
+        "@types/vscode": "^1.92.0",
+        "@vscode/vsce": "^2.30.0",
+        "typescript": "^5.7.2"
+    }
+}
