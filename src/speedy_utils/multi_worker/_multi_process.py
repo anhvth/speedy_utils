@@ -74,7 +74,17 @@ class PreparedRun:
     backend_ctx: BackendRunContext
 
 
-def _normalize_backend_choice(backend: str) -> BackendName:
+def _resolve_default_backend(*, num_threads: int) -> BackendName:
+    return "spawn" if num_threads > 1 else "fork"
+
+
+def _normalize_backend_choice(
+    backend: BackendName | str | None,
+    *,
+    num_threads: int,
+) -> BackendName:
+    if backend is None:
+        return _resolve_default_backend(num_threads=num_threads)
     if backend == "spawn":
         return "spawn"
     if backend == "fork":
@@ -104,7 +114,7 @@ def _normalize_request(
     items: Iterable[Any] | None,
     num_procs: int | None,
     num_threads: int,
-    backend: str,
+    backend: BackendName | str | None,
 ) -> NormalizedRequest:
     """Validate the public request near the boundary."""
 
@@ -115,7 +125,10 @@ def _normalize_request(
         raise ValueError("'items' must be provided")
 
     normalized_items = list(items)
-    normalized_backend = _normalize_backend_choice(backend)
+    normalized_backend = _normalize_backend_choice(
+        backend,
+        num_threads=num_threads,
+    )
 
     if num_procs is None:
         normalized_num_procs = 1
@@ -264,7 +277,7 @@ def multi_process(
     num_threads: int = 1,
     lazy_output: bool = False,
     progress: bool = True,
-    backend: str = "spawn",
+    backend: BackendName | None = None,
     desc: str | None = None,
     dump_in_thread: bool = True,
     log_worker: Literal["zero", "first", "all"] = "first",

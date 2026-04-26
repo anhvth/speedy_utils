@@ -815,20 +815,9 @@ def yank_node(view: RowView, out_path: Path) -> str:
     label = "/".join(str(p) for p in node.path) or "<root>"
     return f"yanked {label} -> {out_path}"
 
-
-_EXPAND_CHARS_PER_LINE = 80
-
-
 def smart_expand(view: RowView, screen_height: int) -> None:
     view.expanded = set(all_container_paths(view.value))
-    candidate_scalars = set(all_scalar_paths(view.value))
-    body_lines = max(1, screen_height - 4)
-    char_budget = body_lines * _EXPAND_CHARS_PER_LINE
-    raw_size = len(json.dumps(view.value, ensure_ascii=False))
-    if raw_size <= char_budget:
-        view.scalar_expanded = candidate_scalars
-    else:
-        view.scalar_expanded = set()
+    view.scalar_expanded = set(all_scalar_paths(view.value))
     view.rebuild()
 
 
