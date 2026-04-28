@@ -192,6 +192,8 @@ def fast_load_jsonl(
                 )
             return pth_or_f  # assume binary
         s = str(pth_or_f).lower()
+        if not hasattr(pth_or_f, 'read'):
+            pth_or_f = os.path.expanduser(pth_or_f)
         if s.endswith('.gz'):
             return gzip.open(pth_or_f, 'rb')  # type: ignore
         if s.endswith('.bz2'):
