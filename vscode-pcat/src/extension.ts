@@ -11,6 +11,7 @@ type PromptedLaunchOptions = {
     index?: string;
     split?: string;
     plain?: boolean;
+    sample?: string;
 };
 
 type PcatConfig = {
@@ -127,6 +128,15 @@ class PcatReadonlyEditorProvider
                         return;
                     }
                     await previewPlainForUri(document.uri, { index });
+                    return;
+                }
+
+                if (message.type === "sample") {
+                    const sample = await promptForSample();
+                    if (sample === undefined) {
+                        return;
+                    }
+                    await openInteractiveForUri(document.uri, { sample });
                     return;
                 }
 
@@ -315,6 +325,26 @@ async function promptForSplit(
 }
 
 
+async function promptForSample(): Promise<string | undefined> {
+    const value = await vscode.window.showInputBox({
+        prompt: "Number of random rows to sample. Leave empty for 1.",
+        placeHolder: "Example: 10, 100",
+        validateInput: (input) => {
+            const trimmed = input.trim();
+            if (!trimmed || /^\d+$/.test(trimmed)) {
+                return null;
+            }
+            return "Enter a positive integer or leave it empty.";
+        },
+    });
+    if (value === undefined) {
+        return undefined;
+    }
+    const trimmed = value.trim();
+    return trimmed || "1";
+}
+
+
 function normalizeOptional(value: string | undefined): string | undefined {
     const trimmed = value?.trim();
     return trimmed ? trimmed : undefined;
@@ -422,7 +452,9 @@ function buildCommandLine(
     if (options.plain) {
         args.push("--plain");
     }
-    if (options.index) {
+    if (options.sample) {
+        args.push("--sample", options.sample);
+    } else if (options.index) {
         args.push("--index", options.index);
     }
     if (options.split) {
@@ -574,6 +606,7 @@ function getCustomEditorHtml(webview: vscode.Webview, targetUri: vscode.Uri): st
       <div class="actions">
         <button data-action="open">Open PCAT</button>
         <button data-action="openAtIndex">Open At Row</button>
+        <button data-action="sample">Sample Rows</button>
         <button data-action="preview" class="secondary">Preview Plain Row</button>
         <button data-action="text" class="secondary">Open As Text</button>
       </div>
