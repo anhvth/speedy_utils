@@ -38,6 +38,16 @@ def _build_subcommand_parser(mode: str) -> argparse.ArgumentParser:
         action="store_true",
         help="print pretty JSON of selected row and exit",
     )
+    parser.add_argument(
+        "-s",
+        "--sample",
+        nargs="?",
+        const=1,
+        type=int,
+        metavar="N",
+        default=None,
+        help="pre-draw N random rows (default 1); press s in TUI to step through",
+    )
     if mode == "hf-dataset":
         parser.add_argument(
             "--split",
@@ -68,6 +78,16 @@ def _build_auto_parser() -> argparse.ArgumentParser:
         "--plain",
         action="store_true",
         help="print pretty JSON of selected row and exit",
+    )
+    parser.add_argument(
+        "-s",
+        "--sample",
+        nargs="?",
+        const=1,
+        type=int,
+        metavar="N",
+        default=None,
+        help="pre-draw N random rows (default 1); press s in TUI to step through",
     )
     parser.add_argument(
         "--split", help="dataset split (auto-detect mode, HF datasets only)"
@@ -105,6 +125,8 @@ def main(argv: list[str] | None = None) -> int:
             sub_argv += ["--index", str(args.index)]
         if args.plain:
             sub_argv.append("--plain")
+        if args.sample is not None:
+            sub_argv += ["--sample", str(args.sample)]
         if mode == "hf-dataset" and args.split:
             sub_argv += ["--split", args.split]
         sub_argv.append(str(path))
@@ -130,6 +152,8 @@ def main(argv: list[str] | None = None) -> int:
             sub_argv += ["--index", str(args.index)]
         if args.plain:
             sub_argv.append("--plain")
+        if args.sample is not None:
+            sub_argv += ["--sample", str(args.sample)]
         sub_argv.append(str(path))
         return main_hf_dataset(sub_argv)
 
@@ -138,6 +162,8 @@ def main(argv: list[str] | None = None) -> int:
         sub_argv += ["--index", str(args.index)]
     if args.plain:
         sub_argv.append("--plain")
+    if args.sample is not None:
+        sub_argv += ["--sample", str(args.sample)]
     sub_argv.append(str(path))
     return main_jsonl(sub_argv)
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import curses
 import json
+import random
 import sys
 import textwrap
 from contextlib import suppress
@@ -618,6 +619,8 @@ class AppState:
     last_query: str = ""
     matches: list[int] = field(default_factory=list)
     match_pos: int = -1
+    sample_indices: list[int] = field(default_factory=list)
+    sample_pos: int = 0
 
     @property
     def total_rows(self) -> int:
@@ -639,6 +642,7 @@ def build_help_text(prog: str, yank_path: Path) -> list[str]:
         "  [ / ]        prev / next row",
         "  { / }        first / last row",
         "  :N           go to row N (1-based; negative from end: :-1)",
+        "  s            next sample (cycle pre-drawn samples, or pick a new random row)",
         "  /            search (case-insensitive)",
         "  n / N        next / prev match",
         "  r            reload source from disk",
@@ -754,7 +758,9 @@ def default_footer(app: AppState) -> str:
     n = len(app.view.nodes)
     pos = app.view.cursor + 1 if n else 0
     extra = ""
-    if app.last_query:
+    if app.sample_indices:
+        extra = f"  sample {app.sample_pos + 1}/{len(app.sample_indices)}  s=next"
+    elif app.last_query:
         if app.matches:
             extra = f"  /{app.last_query}  {app.match_pos + 1}/{len(app.matches)}"
         else:
@@ -964,6 +970,16 @@ def run_curses(stdscr, app: AppState) -> int:
         elif key == ord("r"):
             height, _ = stdscr.getmaxyx()
             reload_source(app, height)
+        elif key == ord("s"):
+            height, _ = stdscr.getmaxyx()
+            if app.sample_indices:
+                app.sample_pos = (app.sample_pos + 1) % len(app.sample_indices)
+                load_row(app, app.sample_indices[app.sample_pos], height)
+                app.status = f"sample {app.sample_pos + 1}/{len(app.sample_indices)}"
+            else:
+                idx = random.randrange(app.total_rows)
+                load_row(app, idx, height)
+                app.status = f"random → row {idx + 1}"
         elif key == ord(":"):
             raw = prompt(stdscr, ":").strip()
             if raw:
@@ -1020,6 +1036,20 @@ def build_common_parser(
         action="store_true",
         help="print pretty JSON of selected row and exit",
     )
+    parser.add_argument(
+        "-s",
+        "--sample",
+        nargs="?",
+        const=1,
+        type=int,
+        metavar="N",
+        default=None,
+        help=(
+            "pre-draw N random row indices (default 1 when flag given); "
+            "press s in the TUI to step through them. "
+            "Efficient: only the viewed row is loaded from disk."
+        ),
+    )
     return parser
 
 
@@ -1029,14 +1059,24 @@ def run_source_cli(
     index: int | None,
     plain: bool,
     prog: str,
+    sample: int | None = None,
 ) -> int:
     if source.total_rows <= 0:
         parser.error(f"{source.display_path} has no rows")
 
-    try:
-        resolved_index = resolve_initial_index(index, source.total_rows)
-    except ValueError as exc:
-        parser.error(str(exc))
+    # --sample: pre-draw N random indices without loading any row data.
+    # random.sample(range(N), k) is O(k) and never materialises the full range.
+    sample_indices: list[int] = []
+    if sample is not None:
+        k = min(max(1, sample), source.total_rows)
+        sample_indices = random.sample(range(source.total_rows), k)
+        resolved_index = sample_indices[0]
+    else:
+        try:
+            resolved_index = resolve_initial_index(index, source.total_rows)
+        except ValueError as exc:
+            parser.error(str(exc))
+            return 2
 
     try:
         value = source.load_row(resolved_index)
@@ -1054,6 +1094,8 @@ def run_source_cli(
         yank_path=Path(f"/tmp/{prog}-yank.txt"),
         row_index=resolved_index,
         view=RowView(value=value),
+        sample_indices=sample_indices,
+        sample_pos=0,
     )
     return curses.wrapper(run_curses, app)
 
@@ -1087,7 +1129,7 @@ def main_jsonl(argv: Sequence[str] | None = None) -> int:
         source = JsonlRowSource.from_path(path)
         if source.total_rows <= 0:
             parser.error(f"{path} has no non-empty JSONL rows")
-    return run_source_cli(parser, source, args.index, args.plain, prog="pcat-jsonl")
+    return run_source_cli(parser, source, args.index, args.plain, prog="pcat-jsonl", sample=args.sample)
 
 
 def main_hf_dataset(argv: Sequence[str] | None = None) -> int:
@@ -1117,5 +1159,5 @@ def main_hf_dataset(argv: Sequence[str] | None = None) -> int:
     if source.total_rows <= 0:
         parser.error(f"{source.display_path} has no rows")
     return run_source_cli(
-        parser, source, args.index, args.plain, prog="pcat-hf-dataset"
+        parser, source, args.index, args.plain, prog="pcat-hf-dataset", sample=args.sample
     )
