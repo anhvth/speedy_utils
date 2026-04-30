@@ -39,6 +39,7 @@ from speedy_utils.common.utils_error import (
 from speedy_utils.common.utils_io import (
     dump_json_or_pickle,
     dump_jsonl,
+    fast_load_jsonl,
     jdumps,
     jloads,
     load_by_ext,
@@ -85,6 +86,7 @@ __all__ = [
     # IO utilities
     "dump_json_or_pickle",
     "dump_jsonl",
+    "fast_load_jsonl",
     "load_by_ext",
     "load_json_or_pickle",
     "load_jsonl",
