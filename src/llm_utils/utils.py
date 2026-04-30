@@ -25,7 +25,9 @@ def _build_user_content(text: str, images: list[str] | None) -> object:
     """Build the user content block, multimodal when images are provided."""
     if not images:
         return text
-    parts: list[dict[str, object]] = [{"type": "text", "text": text}]
+    parts: list[dict[str, object]] = []
+    if text:
+        parts.append({"type": "text", "text": text})
     for img in images:
         parts.append({"type": "image_url", "image_url": {"url": _image_to_url(img)}})
     return parts
@@ -33,7 +35,7 @@ def _build_user_content(text: str, images: list[str] | None) -> object:
 
 def get_one_turn_conv(
     system: str,
-    user: str,
+    user: str = "",
     assistant: str | None = None,
     images: list[str] | None = None,
 ) -> list[ChatMessage]:
