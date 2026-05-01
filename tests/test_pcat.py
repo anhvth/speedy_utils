@@ -94,103 +94,48 @@ def test_sample_flag_absent_is_none() -> None:
 
 
 # ---------------------------------------------------------------------------
-# step_sample — pre-drawn sample mode
+# step_sample — always picks a fresh random row (like [ / ] but random)
 # ---------------------------------------------------------------------------
 
 
-def test_step_sample_advances_through_predrawn_indices() -> None:
-    rows = [{"i": i} for i in range(20)]
-    sample_indices = [3, 7, 15, 2]
-    app = _make_app(rows, sample_indices=sample_indices, sample_pos=0, start_index=3)
-
-    step_sample(app, 30)
-    assert app.row_index == 7
-    assert app.sample_pos == 1
-
-    step_sample(app, 30)
-    assert app.row_index == 15
-    assert app.sample_pos == 2
-
-    step_sample(app, 30)
-    assert app.row_index == 2
-    assert app.sample_pos == 3
-
-
-def test_step_sample_wraps_around_to_first() -> None:
-    rows = [{"i": i} for i in range(20)]
-    sample_indices = [3, 7]
-    # Already at last sample (pos=1, row=7); next press wraps to first (row=3).
-    app = _make_app(rows, sample_indices=sample_indices, sample_pos=1, start_index=7)
-
-    step_sample(app, 30)
-    assert app.row_index == 3
-    assert app.sample_pos == 0
-
-
-def test_step_sample_status_format() -> None:
-    rows = [{"i": i} for i in range(20)]
-    sample_indices = [0, 5, 10]
-    app = _make_app(rows, sample_indices=sample_indices, sample_pos=0, start_index=0)
-
-    status = step_sample(app, 30)
-    assert status == "sample 2/3"
-
-    status = step_sample(app, 30)
-    assert status == "sample 3/3"
-
-
-def test_step_sample_n1_does_not_raise_and_stays_on_same_row() -> None:
-    # N=1: only one pre-drawn index, which is always the current row after
-    # wrap-around. The loop exhausts all candidates and stays put — no crash.
-    rows = [{"i": i} for i in range(50)]
-    app = _make_app(rows, sample_indices=[17], sample_pos=0, start_index=17)
-
-    status = step_sample(app, 30)
-    assert app.row_index == 17          # could not advance
-    assert "sample 1/1" in status
-
-
-def test_step_sample_skips_current_row_on_wraparound() -> None:
-    # Three samples: [4, 9, 4] — impossible with random.sample, but we want
-    # to prove the skip logic works even if the same index appears elsewhere.
-    rows = [{"i": i} for i in range(20)]
-    # Simulate: sample_indices = [4, 9], currently at pos=1 (row=9).
-    # Wrapping takes pos to 0 → index 4; that is ≠ 9, so we load it.
-    app = _make_app(rows, sample_indices=[4, 9], sample_pos=1, start_index=9)
-    step_sample(app, 30)
-    assert app.row_index == 4
-
-
-# ---------------------------------------------------------------------------
-# step_sample — ad-hoc (no --sample) mode
-# ---------------------------------------------------------------------------
-
-
-def test_step_sample_adhoc_always_moves_to_different_row() -> None:
+def test_step_sample_always_moves_to_different_row() -> None:
     rows = [{"i": i} for i in range(10)]
-    app = _make_app(rows, sample_indices=[], start_index=5)
+    app = _make_app(rows, start_index=5)
 
     prev = app.row_index
     for _ in range(30):
         step_sample(app, 30)
-        assert app.row_index != prev, "step_sample must move to a different row"
+        assert app.row_index != prev, "step_sample must move to a different row each press"
         prev = app.row_index
 
 
-def test_step_sample_adhoc_status_format() -> None:
+def test_step_sample_status_format() -> None:
     rows = [{"i": i} for i in range(10)]
-    app = _make_app(rows, sample_indices=[], start_index=0)
+    app = _make_app(rows, start_index=0)
 
     status = step_sample(app, 30)
     assert status.startswith("random → row ")
+    assert "/10" in status
 
 
-def test_step_sample_adhoc_single_row_source_stays_put() -> None:
-    # Only one row exists; nothing else to jump to.
+def test_step_sample_single_row_stays_put() -> None:
     rows = [{"i": 0}]
-    app = _make_app(rows, sample_indices=[], start_index=0)
-    step_sample(app, 30)
+    app = _make_app(rows, start_index=0)
+    status = step_sample(app, 30)
     assert app.row_index == 0
+    assert status == "only one row"
+
+
+def test_step_sample_works_regardless_of_sample_indices() -> None:
+    # --sample N pre-draws a starting pool, but s always picks a fresh random row.
+    rows = [{"i": i} for i in range(20)]
+    app = _make_app(rows, sample_indices=[3, 7, 15], sample_pos=0, start_index=3)
+
+    prev = app.row_index
+    for _ in range(20):
+        step_sample(app, 30)
+        assert app.row_index != prev
+        prev = app.row_index
 
 
 # ---------------------------------------------------------------------------

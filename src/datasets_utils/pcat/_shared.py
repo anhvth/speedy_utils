@@ -758,9 +758,7 @@ def default_footer(app: AppState) -> str:
     n = len(app.view.nodes)
     pos = app.view.cursor + 1 if n else 0
     extra = ""
-    if app.sample_indices:
-        extra = f"  sample {app.sample_pos + 1}/{len(app.sample_indices)}  s=next"
-    elif app.last_query:
+    if app.last_query:
         if app.matches:
             extra = f"  /{app.last_query}  {app.match_pos + 1}/{len(app.matches)}"
         else:
@@ -866,34 +864,21 @@ def step_match(app: AppState, delta: int) -> None:
 
 
 def step_sample(app: AppState, screen_height: int) -> str:
-    """Advance to the next sample row and return a status string.
+    """Jump to a uniformly random row that differs from the current one.
 
-    Pre-drawn sample mode (``--sample N``): cycles through ``app.sample_indices``,
-    skipping indices that equal the current row (can happen on wrap-around or
-    when N=1).
-
-    Ad-hoc mode (no ``--sample``): picks a uniformly random row that is
-    guaranteed to differ from the current one.
+    Analogous to ``[``/``]`` (prev/next) but picks randomly.  Works the same
+    regardless of whether ``--sample`` was used to open the session.
     """
-    if app.sample_indices:
-        for _ in range(len(app.sample_indices)):
-            app.sample_pos = (app.sample_pos + 1) % len(app.sample_indices)
-            if app.sample_indices[app.sample_pos] != app.row_index:
-                break
-        target = app.sample_indices[app.sample_pos]
-        if target != app.row_index:
-            load_row(app, target, screen_height)
-        return f"sample {app.sample_pos + 1}/{len(app.sample_indices)}"
-    else:
-        total = app.total_rows
-        if total > 1:
-            idx = random.randrange(total - 1)
-            if idx >= app.row_index:
-                idx += 1
-        else:
-            idx = 0
-        load_row(app, idx, screen_height)
-        return f"random → row {idx + 1}"
+    total = app.total_rows
+    if total <= 1:
+        return "only one row"
+    # Uniform draw over all rows except the current one:
+    # draw from [0, total-2] then shift up past app.row_index.
+    idx = random.randrange(total - 1)
+    if idx >= app.row_index:
+        idx += 1
+    load_row(app, idx, screen_height)
+    return f"random → row {idx + 1}/{total}"
 
 
 def reload_source(app: AppState, screen_height: int) -> None:
