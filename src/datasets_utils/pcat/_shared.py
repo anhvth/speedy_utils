@@ -865,6 +865,37 @@ def step_match(app: AppState, delta: int) -> None:
     app.view.cursor = app.matches[app.match_pos]
 
 
+def step_sample(app: AppState, screen_height: int) -> str:
+    """Advance to the next sample row and return a status string.
+
+    Pre-drawn sample mode (``--sample N``): cycles through ``app.sample_indices``,
+    skipping indices that equal the current row (can happen on wrap-around or
+    when N=1).
+
+    Ad-hoc mode (no ``--sample``): picks a uniformly random row that is
+    guaranteed to differ from the current one.
+    """
+    if app.sample_indices:
+        for _ in range(len(app.sample_indices)):
+            app.sample_pos = (app.sample_pos + 1) % len(app.sample_indices)
+            if app.sample_indices[app.sample_pos] != app.row_index:
+                break
+        target = app.sample_indices[app.sample_pos]
+        if target != app.row_index:
+            load_row(app, target, screen_height)
+        return f"sample {app.sample_pos + 1}/{len(app.sample_indices)}"
+    else:
+        total = app.total_rows
+        if total > 1:
+            idx = random.randrange(total - 1)
+            if idx >= app.row_index:
+                idx += 1
+        else:
+            idx = 0
+        load_row(app, idx, screen_height)
+        return f"random → row {idx + 1}"
+
+
 def reload_source(app: AppState, screen_height: int) -> None:
     old_total = app.total_rows
     old_index = app.row_index
@@ -972,14 +1003,7 @@ def run_curses(stdscr, app: AppState) -> int:
             reload_source(app, height)
         elif key == ord("s"):
             height, _ = stdscr.getmaxyx()
-            if app.sample_indices:
-                app.sample_pos = (app.sample_pos + 1) % len(app.sample_indices)
-                load_row(app, app.sample_indices[app.sample_pos], height)
-                app.status = f"sample {app.sample_pos + 1}/{len(app.sample_indices)}"
-            else:
-                idx = random.randrange(app.total_rows)
-                load_row(app, idx, height)
-                app.status = f"random → row {idx + 1}"
+            app.status = step_sample(app, height)
         elif key == ord(":"):
             raw = prompt(stdscr, ":").strip()
             if raw:
