@@ -23,21 +23,20 @@ PCAT-specific actions such as reopening at a row index or opening the raw text.
 
 ## Configuration
 
-The extension only shells out to `pcat`, so you need a working command.
+By default, the extension runs `pcat`. If that binary is missing, it installs it
+once with:
 
-Recommended settings:
+```bash
+uv tool install git+https://github.com/anhvth/speedy_utils
+```
+
+After that, later launches use the installed `pcat` executable directly.
+
+For local checkout development, override the command:
 
 ```json
 {
   "pcat.command": "uv run pcat"
-}
-```
-
-If you want to use the published package without a local checkout:
-
-```json
-{
-  "pcat.command": "uvx --from git+https://github.com/anhvth/speedy_utils pcat"
 }
 ```
 

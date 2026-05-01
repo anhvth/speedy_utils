@@ -522,17 +522,16 @@ viz_chat data/with_tools.jsonl --show-tools
 
 ### `pcat` — Interactive JSON/JSONL/HF-dataset viewer
 
-Run without installing via `uvx`:
+Install once:
 
 ```bash
-uvx --from git+https://github.com/anhvth/speedy_utils pcat data/file.jsonl
+uv tool install git+https://github.com/anhvth/speedy_utils
 ```
 
-For frequent use, add a shell alias:
+Then use the installed executable:
 
 ```bash
-# Add to ~/.bashrc or ~/.zshrc
-alias pcat='uvx --from git+https://github.com/anhvth/speedy_utils pcat'
+pcat data/file.jsonl
 ```
 
 ## Vision Utils

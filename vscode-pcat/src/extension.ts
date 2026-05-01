@@ -5,6 +5,7 @@ import * as vscode from "vscode";
 
 
 const PCAT_VIEW_TYPE = "pcat.viewer";
+const PCAT_PACKAGE_SOURCE = "git+https://github.com/anhvth/speedy_utils";
 
 
 type PromptedLaunchOptions = {
@@ -378,15 +379,20 @@ async function openInteractiveForUri(
     targetUri: vscode.Uri,
     launchOptions: PromptedLaunchOptions,
 ): Promise<void> {
-    const config = readConfig();
-    const terminal = getTerminal(config, determineCwd(targetUri));
-    const cwd = determineCwd(targetUri);
-    if (cwd) {
-        terminal.sendText(`cd ${quoteForShell(cwd)}`, true);
-    }
+    try {
+        const config = await ensurePcatCommand(readConfig());
+        const terminal = getTerminal(config, determineCwd(targetUri));
+        const cwd = determineCwd(targetUri);
+        if (cwd) {
+            terminal.sendText(`cd ${quoteForShell(cwd)}`, true);
+        }
 
-    terminal.sendText(buildCommandLine(config, targetUri.fsPath, launchOptions), true);
-    terminal.show();
+        terminal.sendText(buildCommandLine(config, targetUri.fsPath, launchOptions), true);
+        terminal.show();
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        vscode.window.showErrorMessage(`PCAT launch failed: ${message}`);
+    }
 }
 
 
@@ -394,13 +400,12 @@ async function previewPlainForUri(
     targetUri: vscode.Uri,
     launchOptions: PromptedLaunchOptions,
 ): Promise<void> {
-    const config = readConfig();
-    const commandLine = buildCommandLine(config, targetUri.fsPath, {
-        ...launchOptions,
-        plain: true,
-    });
-
     try {
+        const config = await ensurePcatCommand(readConfig());
+        const commandLine = buildCommandLine(config, targetUri.fsPath, {
+            ...launchOptions,
+            plain: true,
+        });
         const output = await execCommand(commandLine, determineCwd(targetUri));
         const content = output.trim();
         if (!content) {
@@ -416,6 +421,86 @@ async function previewPlainForUri(
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         vscode.window.showErrorMessage(`PCAT preview failed: ${message}`);
+    }
+}
+
+
+async function ensurePcatCommand(config: PcatConfig): Promise<PcatConfig> {
+    if (config.command.trim() !== "pcat") {
+        return config;
+    }
+
+    const existingCommand = await findExecutableOnPath("pcat");
+    if (existingCommand) {
+        return config;
+    }
+
+    const existingUvToolCommand = await findUvToolExecutable("pcat");
+    if (existingUvToolCommand) {
+        return {
+            ...config,
+            command: quoteForShell(existingUvToolCommand),
+        };
+    }
+
+    await vscode.window.withProgress(
+        {
+            location: vscode.ProgressLocation.Notification,
+            title: "Installing pcat",
+            cancellable: false,
+        },
+        async () => {
+            await execCommand(`uv tool install ${PCAT_PACKAGE_SOURCE}`, undefined);
+        },
+    );
+
+    const installedCommand = await findExecutableOnPath("pcat");
+    if (installedCommand) {
+        return config;
+    }
+
+    const uvToolCommand = await findUvToolExecutable("pcat");
+    if (uvToolCommand) {
+        return {
+            ...config,
+            command: quoteForShell(uvToolCommand),
+        };
+    }
+
+    throw new Error(
+        "Installed pcat with uv, but the pcat executable was not found. Run `uv tool dir --bin` and add that directory to PATH.",
+    );
+}
+
+
+async function findExecutableOnPath(command: string): Promise<string | undefined> {
+    try {
+        const checkCommand = process.platform === "win32"
+            ? `where ${quoteForWindowsShell(command)}`
+            : `command -v ${quoteForShell(command)}`;
+        const output = await execCommand(checkCommand, undefined);
+        return normalizeOptional(output.split(/\r?\n/, 1)[0]);
+    } catch {
+        return undefined;
+    }
+}
+
+
+async function findUvToolExecutable(command: string): Promise<string | undefined> {
+    try {
+        const output = await execCommand("uv tool dir --bin", undefined);
+        const binDir = normalizeOptional(output);
+        if (!binDir) {
+            return undefined;
+        }
+
+        const executable = path.join(
+            binDir,
+            process.platform === "win32" ? `${command}.exe` : command,
+        );
+        return fs.existsSync(executable) ? executable : undefined;
+    } catch {
+        return undefined;
     }
 }
 
@@ -483,7 +568,7 @@ function determineCwd(targetUri: vscode.Uri): string | undefined {
 
 function quoteForShell(value: string): string {
     if (process.platform === "win32") {
-        return `"${value.replace(/"/g, '\\"')}"`;
+        return quoteForWindowsShell(value);
     }
 
     if (!value) {
@@ -491,6 +576,11 @@ function quoteForShell(value: string): string {
     }
 
     return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+
+function quoteForWindowsShell(value: string): string {
+    return `"${value.replace(/"/g, '\\"')}"`;
 }
 
 

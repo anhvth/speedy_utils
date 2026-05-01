@@ -1,6 +1,7 @@
 {
-    "python.defaultInterpreterPath": "/home/anhvth8/venvs/uv-base/bin/python",
-    "python.terminal.activateEnvironment": false,
+    "python.defaultInterpreterPath": "/home/anhvth8/projects/speedy_utils/.venv/bin/python",
+    "python.terminal.activateEnvironment": true,
+    "python-envs.defaultEnvManager": "ms-python.python:venv",
     "files.exclude": {
         "**/.venv": true,
         "**/node_modules": true,

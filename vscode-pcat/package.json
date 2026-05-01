@@ -97,7 +97,7 @@
                 "pcat.command": {
                     "type": "string",
                     "default": "pcat",
-                    "markdownDescription": "Shell command prefix used to start pcat. Examples: `pcat`, `uv run pcat`, `uvx --from git+https://github.com/anhvth/speedy_utils pcat`."
+                    "markdownDescription": "Shell command prefix used to start pcat. The default `pcat` command auto-installs once with `uv tool install git+https://github.com/anhvth/speedy_utils` when the binary is missing. Examples: `pcat`, `uv run pcat`."
                 },
                 "pcat.extraArgs": {
                     "type": "array",

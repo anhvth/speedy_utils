@@ -1,133 +1,177 @@
 ---
 name: 'edit-llm-inference-style'
-description: 'Guide for adjusting speedy_utils LLM inference style, including chat templating, <think> prefixes, stop sequences, and boxed-answer handling.'
+description: 'Guide for adjusting Qwen3LLM inference style in speedy_utils, including staged complete_until flows, <think> prefixes, stop sequences, and boxed-answer handling.'
 ---
 
-# Edit LLM Inference Style (speedy_utils)
+# Edit LLM Inference Style (Qwen3LLM)
 
-Use this skill to standardize or modify how speedy_utils builds prompts and consumes generation outputs. It focuses on chat templating, reasoning-style prefixes, and safe stopping rules for structured answer extraction.
+Use this skill when changing how Qwen3-style models generate reasoning and final answers in speedy_utils. The current API is centered on `Qwen3LLM`, especially `complete_until()`, `complete_reasoning()`, `complete_content()`, and `chat_completion()`.
 
 ## When to Use This Skill
 
 Use this skill when you need to:
-- Insert or enforce a reasoning prefix (for example, `<think>\n`).
-- Switch a flow to `LLM.generate()` instead of chat completion helpers.
-- Apply a tokenizer chat template before generating.
-- Stop generations on boxed answers (`\boxed{}`) or `<|im_end|>` tokens.
-- Normalize outputs before evaluation (for example, GSM8K or math tasks).
+- Insert or enforce a reasoning prefix such as `<think>\n`.
+- Split generation into multiple prefix-conditioned steps.
+- Stop reasoning on `</think>` and stop final content on `<|im_end|>`.
+- Force boxed-answer style completions for MCQ or math evaluation.
+- Change how reasoning truncation is handled when the thinking budget is exhausted.
 
 ## Prerequisites
 
-- A model-backed tokenizer available via `transformers.AutoTokenizer`.
-- A speedy_utils `LLM` instance configured to point at the correct backend.
+- A `Qwen3LLM` instance pointed at a compatible backend.
+- Familiarity with assistant-body prefixes: `complete_until()` works on assistant text, not on raw prompt strings.
 
 ## Core Capabilities
 
-### 1) Build a Chat-Templated Prompt
+### 1) Use `Qwen3LLM` as the Primary API
 
-Use the tokenizer to format messages and append a generation prefix:
+Prefer `Qwen3LLM` over low-level `LLM.generate()` when editing Qwen3 reasoning flows:
 
 ```python
-from transformers import AutoTokenizer
+from llm_utils import Qwen3LLM
 
-TOKENIZER_NAME = "Qwen/Qwen3-4B"
-THINK_PREFIX = "<think>\n"
+llm = Qwen3LLM(
+    client="http://localhost:8001/v1",
+    thinking_max_tokens=4096,
+    content_max_tokens=512,
+    temperature=0.8,
+)
+```
+
+### 2) Stage Generation with `complete_until()`
+
+`complete_until()` is the current low-level primitive for prefix-conditioned continuation.
+
+It accepts:
+- `messages`: the chat messages
+- `assistant_prompt_prefix`: the current assistant-body prefix or a previous continuation state
+- `stop`: one or more stop sequences
+- `max_tokens`: the budget for that step
+
+Example: generate reasoning until `</think>`:
+
+```python
+from llm_utils.lm.llm_qwen3 import THINK_END
 
 messages = [
-    {"role": "system", "content": instruction},
-    {"role": "user", "content": user_text},
+    {"role": "system", "content": system_prompt},
+    {"role": "user", "content": prompt_text},
 ]
 
-tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_NAME, trust_remote_code=True)
-prompt = tokenizer.apply_chat_template(
+reasoning_state = llm.complete_until(
     messages,
-    tokenize=False,
-    add_generation_prompt=True,
+    assistant_prompt_prefix="<think>\n",
+    stop=THINK_END,
+    max_tokens=llm.default_thinking_max_tokens,
 )
-prompt = f"{prompt}{THINK_PREFIX}"
 ```
 
-### 2) Generate with Low-Level `LLM.generate`
+### 3) Artificially Close Reasoning When Budget Is Exhausted
 
-`LLM.generate()` routes to `/inference/v1/generate`, which works directly with token IDs or raw text.
+If reasoning stops because the budget is exhausted rather than because `</think>` was emitted, inject the closing tag yourself before continuing.
 
 ```python
-result = llm.generate(
-    prompt,
-    max_tokens=512,
-    temperature=temperature,
-    stop=["<|im_end|>"],
-)
-text = result["text"]
+from llm_utils.lm.llm_qwen3 import THINK_END
+
+if reasoning_state.stop != THINK_END:
+    reasoning_state = reasoning_state.inject(f"\n{THINK_END}")
 ```
 
-### 3) Stop on Boxed Answers or `<|im_end|>`
+### 4) Force a Single-Token Boxed Answer
 
-Use a post-processing step to truncate output when a boxed answer appears:
+For MCQ evaluation, append `\n\nboxed{` and generate a single answer token:
+
+```python
+from llm_utils.lm.llm_qwen3 import ASSISTANT_END
+
+answer_state = llm.complete_until(
+    messages,
+    reasoning_state.inject("\n\nboxed{"),
+    stop=ASSISTANT_END,
+    max_tokens=1,
+    include_stop_in_prefix=False,
+)
+
+text = answer_state.assistant_prompt_prefix.strip()
+```
+
+This yields assistant text like:
+
+```text
+<think>
+...
+</think>
+
+boxed{C
+```
+
+That is acceptable if downstream evaluation falls back to standalone answer letters.
+
+### 5) Use `chat_completion()` Only for the Default Two-Step Chat Flow
+
+`chat_completion()` already composes:
+- reasoning generation
+- optional synthetic `</think>` closure
+- content generation
+
+Use it when you want the default Qwen3 chat behavior, not when you need exact staged control.
+
+### 6) Extract Final Answers Safely
+
+Prefer boxed answers first, then a fallback parser for standalone `A-E` if the final brace is omitted:
 
 ```python
 import re
 
-BOXED_PATTERN = re.compile(r"\\boxed\{.*?\}", re.DOTALL)
+BOXED_RE = re.compile(r"\\boxed\{\s*([A-Ea-e])\s*\}")
+LETTER_RE = re.compile(r"\b([A-Ea-e])\b")
 
 
-def truncate_completion(text: str) -> str:
-    end_positions = []
-    im_end_idx = text.find("<|im_end|>")
-    if im_end_idx != -1:
-        end_positions.append(im_end_idx)
-    boxed_match = BOXED_PATTERN.search(text)
+def extract_answer_letter(text: str) -> str | None:
+    boxed_match = BOXED_RE.search(text)
     if boxed_match:
-        end_positions.append(boxed_match.end())
-    if not end_positions:
-        return text
-    return text[: min(end_positions)]
-```
-
-### 4) Extract a Final Number Safely
-
-Prefer the boxed span when available:
-
-```python
-import re
-
-BOXED_PATTERN = re.compile(r"\\boxed\{.*?\}", re.DOTALL)
-
-
-def extract_final_number(text: str) -> str:
-    boxed_match = BOXED_PATTERN.search(text)
-    if boxed_match:
-        text = boxed_match.group(0)
-    nums = re.findall(r"-?\d+\.?\d*", text)
-    return nums[-1] if nums else ""
+        return boxed_match.group(1).upper()
+    letter_match = LETTER_RE.search(text)
+    if letter_match:
+        return letter_match.group(1).upper()
+    return None
 ```
 
 ## Guidelines
 
-- Always apply the tokenizer chat template when the model expects chat-formatted input.
-- Use a consistent reasoning prefix (`<think>\n`) to reduce formatting drift.
-- Prefer `LLM.generate()` for low-level control of stop sequences and token handling.
-- Post-truncate output to avoid extra text after boxed answers or special tokens.
-- Keep evaluation logic (parsing + correctness) in the eval script, not in the LLM client.
+- Prefer `Qwen3LLM.complete_until()` for exact staged flows.
+- Treat `assistant_prompt_prefix` as assistant-body text, not a full prompt.
+- Use `THINK_END` to stop reasoning and `ASSISTANT_END` to stop final content.
+- When a reasoning step hits the token cap, explicitly inject `</think>` before continuing.
+- Keep answer parsing in evaluation code rather than baking task-specific parsing into the client.
 
 ## Common Patterns
 
-### Pattern: GSM8K-style Generation
+### Pattern: MCQ Boxed-Letter Evaluation
 
 ```python
-prompt = format_prompt(question, tokenizer)
-raw_output = llm.generate(
-    prompt,
-    max_tokens=512,
-    temperature=temperature,
-    stop=["<|im_end|>"],
-)["text"]
-raw_output = truncate_completion(raw_output)
-pred = extract_final_number(raw_output)
+reasoning_state = llm.complete_until(
+    messages,
+    assistant_prompt_prefix="<think>\n",
+    stop=THINK_END,
+    max_tokens=llm.default_thinking_max_tokens,
+)
+if reasoning_state.stop != THINK_END:
+    reasoning_state = reasoning_state.inject(f"\n{THINK_END}")
+
+answer_state = llm.complete_until(
+    messages,
+    reasoning_state.inject("\n\nboxed{"),
+    stop=ASSISTANT_END,
+    max_tokens=1,
+    include_stop_in_prefix=False,
+)
+text = answer_state.assistant_prompt_prefix.strip()
+pred = extract_answer_letter(text)
 ```
 
 ## Related Files
 
-- `src/llm_utils/lm/mixins.py`: `LLM.generate()` implementation.
-- `src/llm_utils/chat_format/transform.py`: Chat templating utility.
-- `docs/GENERATE_QUICKREF.md`: `generate()` parameters and response format.
+- `src/llm_utils/lm/llm_qwen3.py`: `Qwen3LLM`, `complete_until()`, `complete_reasoning()`, `complete_content()`.
+- `src/llm_utils/lm/llm.py`: base client health checks and shared client logic.
+- `docs/GENERATE_QUICKREF.md`: legacy generate-path reference when you truly need the raw completion API.
