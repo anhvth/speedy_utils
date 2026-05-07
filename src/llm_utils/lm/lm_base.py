@@ -50,7 +50,9 @@ class LMBase:
         ports: list[int] | None = None,
     ) -> None:
         self.base_url = base_url
-        self.api_key = api_key or os.getenv('OPENAI_API_KEY', 'abc')
+        self.api_key = (
+            api_key or os.getenv("VLLM_API_KEY") or os.getenv("OPENAI_API_KEY", "abc")
+        )
         self._cache = cache
         self.ports = ports
 
@@ -63,20 +65,20 @@ class LMBase:
 
             port = random.choice(self.ports)
             # Replace port in base_url if it exists
-            base_url_pattern = r'(https?://[^:/]+):?\d*(/.*)?'
+            base_url_pattern = r"(https?://[^:/]+):?\d*(/.*)?"
             match = re.match(base_url_pattern, self.base_url)
             if match:
                 host_part = match.group(1)
-                path_part = match.group(2) or '/v1'
-                api_base = f'{host_part}:{port}{path_part}'
+                path_part = match.group(2) or "/v1"
+                api_base = f"{host_part}:{port}{path_part}"
             else:
                 api_base = self.base_url
-            logger.debug(f'Using port: {port}')
+            logger.debug(f"Using port: {port}")
         else:
             api_base = self.base_url
 
         if api_base is None:
-            raise ValueError('base_url must be provided')
+            raise ValueError("base_url must be provided")
 
         client = MOpenAI(
             api_key=self.api_key,
@@ -125,62 +127,62 @@ class LMBase:
 
         converted: Messages = []
         for msg in msgs:
-            role = msg['role']
-            content = msg['content']
-            if role == 'user':
+            role = msg["role"]
+            content = msg["content"]
+            if role == "user":
                 converted.append(
-                    ChatCompletionUserMessageParam(role='user', content=content)  # type: ignore[arg-type]
+                    ChatCompletionUserMessageParam(role="user", content=content)  # type: ignore[arg-type]
                 )
-            elif role == 'assistant':
+            elif role == "assistant":
                 converted.append(
                     ChatCompletionAssistantMessageParam(  # type: ignore[arg-type]
-                        role='assistant', content=content
+                        role="assistant", content=content
                     )
                 )
-            elif role == 'system':
+            elif role == "system":
                 converted.append(
-                    ChatCompletionSystemMessageParam(role='system', content=content)  # type: ignore[arg-type]
+                    ChatCompletionSystemMessageParam(role="system", content=content)  # type: ignore[arg-type]
                 )
-            elif role == 'tool':
+            elif role == "tool":
                 converted.append(
                     ChatCompletionToolMessageParam(  # type: ignore[arg-type]
-                        role='tool',
+                        role="tool",
                         content=content,
-                        tool_call_id=msg.get('tool_call_id') or '',
+                        tool_call_id=msg.get("tool_call_id") or "",
                     )
                 )
             else:
-                converted.append({'role': role, 'content': content})  # type: ignore[arg-type]
+                converted.append({"role": role, "content": content})  # type: ignore[arg-type]
         return converted
 
     @staticmethod
     def _parse_output(
         raw_response: Any, response_format: type[str] | type[BaseModel]
     ) -> str | BaseModel:
-        if hasattr(raw_response, 'model_dump'):
+        if hasattr(raw_response, "model_dump"):
             raw_response = raw_response.model_dump()
 
         if response_format is str:
-            if isinstance(raw_response, dict) and 'choices' in raw_response:
-                message = raw_response['choices'][0]['message']
-                return message.get('content', '') or ''
+            if isinstance(raw_response, dict) and "choices" in raw_response:
+                message = raw_response["choices"][0]["message"]
+                return message.get("content", "") or ""
             return cast(str, raw_response)
 
         model_cls = cast(type[BaseModel], response_format)
 
-        if isinstance(raw_response, dict) and 'choices' in raw_response:
-            message = raw_response['choices'][0]['message']
-            if 'parsed' in message:
-                return model_cls.model_validate(message['parsed'])
-            content = message.get('content')
+        if isinstance(raw_response, dict) and "choices" in raw_response:
+            message = raw_response["choices"][0]["message"]
+            if "parsed" in message:
+                return model_cls.model_validate(message["parsed"])
+            content = message.get("content")
             if content is None:
-                raise ValueError('Model returned empty content')
+                raise ValueError("Model returned empty content")
             try:
                 data = json.loads(content)
                 return model_cls.model_validate(data)
             except Exception as exc:
                 raise ValueError(
-                    f'Failed to parse model output as JSON:\n{content}'
+                    f"Failed to parse model output as JSON:\n{content}"
                 ) from exc
 
         if isinstance(raw_response, model_cls):
@@ -193,7 +195,7 @@ class LMBase:
             return model_cls.model_validate(data)
         except Exception as exc:
             raise ValueError(
-                f'Model did not return valid JSON:\n---\n{raw_response}'
+                f"Model did not return valid JSON:\n---\n{raw_response}"
             ) from exc
 
     # ------------------------------------------------------------------ #
@@ -208,14 +210,14 @@ class LMBase:
 
         try:
             if base_url is None:
-                raise ValueError('base_url must be provided')
+                raise ValueError("base_url must be provided")
             client = LMBase(base_url=base_url).client
             base_url_obj: URL = client.base_url
-            logger.debug(f'Base URL: {base_url_obj}')
+            logger.debug(f"Base URL: {base_url_obj}")
             models: SyncPage[Model] = client.models.list()  # type: ignore[assignment]
             return [model.id for model in models.data]
         except Exception as exc:
-            logger.error(f'Failed to list models: {exc}')
+            logger.error(f"Failed to list models: {exc}")
             return []
 
     def build_system_prompt(
@@ -226,15 +228,15 @@ class LMBase:
         system_content,
     ):
         if add_json_schema_to_instruction and response_model:
-            schema_block = f'\n\n<output_json_schema>\n{json.dumps(json_schema, indent=2)}\n</output_json_schema>'
+            schema_block = f"\n\n<output_json_schema>\n{json.dumps(json_schema, indent=2)}\n</output_json_schema>"
             # if schema_block not in system_content:
-            if '<output_json_schema>' in system_content:
+            if "<output_json_schema>" in system_content:
                 # remove exsting schema block
                 import re  # replace
 
                 system_content = re.sub(
-                    r'<output_json_schema>.*?</output_json_schema>',
-                    '',
+                    r"<output_json_schema>.*?</output_json_schema>",
+                    "",
                     system_content,
                     flags=re.DOTALL,
                 )
@@ -247,7 +249,7 @@ class LMBase:
         """Inspect the history of the LLM calls."""
 
 
-def get_model_name(client: 'OpenAI | str | int') -> str:
+def get_model_name(client: "OpenAI | str | int") -> str:
     """
     Get the first available model name from the client.
 
@@ -267,20 +269,20 @@ def get_model_name(client: 'OpenAI | str | int') -> str:
             openai_client = client
         elif isinstance(client, str):
             # String base_url
-            openai_client = OpenAI(base_url=client, api_key='abc')
+            openai_client = OpenAI(base_url=client, api_key="abc")
         elif isinstance(client, int):
             # Port number
-            base_url = f'http://localhost:{client}/v1'
-            openai_client = OpenAI(base_url=base_url, api_key='abc')
+            base_url = f"http://localhost:{client}/v1"
+            openai_client = OpenAI(base_url=base_url, api_key="abc")
         else:
-            raise ValueError(f'Unsupported client type: {type(client)}')
+            raise ValueError(f"Unsupported client type: {type(client)}")
 
         models = openai_client.models.list()
         if not models.data:
-            raise ValueError('No models available')
+            raise ValueError("No models available")
 
         return models.data[0].id
 
     except Exception as exc:
-        logger.error(f'Failed to get model name: {exc}')
-        raise ValueError(f'Could not retrieve model name: {exc}') from exc
+        logger.error(f"Failed to get model name: {exc}")
+        raise ValueError(f"Could not retrieve model name: {exc}") from exc

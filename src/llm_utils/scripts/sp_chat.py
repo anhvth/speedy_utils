@@ -47,7 +47,7 @@ class ChatConfig:
         app_port: int = 5009,
         app_host: str = "0.0.0.0",
         model: str | None = None,
-        api_key: str = "abc",
+        api_key: str | None = None,
         thinking: bool = True,
     ):
         self.client = client
@@ -232,7 +232,7 @@ def parse_cli_args(argv: Iterable[str]) -> ChatConfig:
         elif key == "model":
             config.model = value or None
         elif key == "api_key":
-            config.api_key = value or "abc"
+            config.api_key = value or None
         elif key == "thinking":
             config.thinking = _parse_bool("thinking", value)
         else:
@@ -262,7 +262,10 @@ def _list_models_sync(base_url: str, api_key: str) -> tuple[List[str], str | Non
     from openai import OpenAI
 
     try:
-        c = OpenAI(base_url=base_url, api_key=api_key)
+        c_kwargs = {"base_url": base_url}
+        if api_key is not None:
+            c_kwargs["api_key"] = api_key
+        c = OpenAI(**c_kwargs)
         resp = c.models.list()
         return sorted([m.id for m in resp.data]), None
     except Exception as exc:
@@ -275,11 +278,14 @@ def _setup_chainlit():
     from openai import AsyncOpenAI
 
     base_url = os.environ.get("SP_CHAT_CLIENT", "http://localhost:4343/v1")
-    api_key = os.environ.get("SP_CHAT_API_KEY", "abc")
+    api_key = os.environ.get("SP_CHAT_API_KEY")
     initial_model = os.environ.get("SP_CHAT_MODEL")
     enable_thinking_default = os.environ.get("SP_CHAT_THINKING", "true") == "true"
 
-    client = AsyncOpenAI(base_url=base_url, api_key=api_key)
+    kwargs = {"base_url": base_url}
+    if api_key is not None:
+        kwargs["api_key"] = api_key
+    client = AsyncOpenAI(**kwargs)
 
     @cl.on_chat_start
     async def start():
@@ -471,7 +477,8 @@ def _launch_chainlit(config: ChatConfig) -> int:
     os.makedirs(app_root, exist_ok=True)
     env["CHAINLIT_APP_ROOT"] = app_root
     env["SP_CHAT_CLIENT"] = normalize_client_base_url(config.client)
-    env["SP_CHAT_API_KEY"] = config.api_key
+    if config.api_key is not None:
+        env["SP_CHAT_API_KEY"] = config.api_key
     if config.model:
         env["SP_CHAT_MODEL"] = config.model
     env["SP_CHAT_THINKING"] = "true" if config.thinking else "false"
