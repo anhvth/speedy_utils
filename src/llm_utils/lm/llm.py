@@ -4,9 +4,12 @@
 
 # Typing imports
 import json
+import os
 import random
 import threading
+import time
 import weakref
+from collections.abc import Callable
 from contextlib import contextmanager
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, cast
@@ -33,6 +36,60 @@ if TYPE_CHECKING:
 
 # Type aliases for better readability
 Messages = list[dict]  # Simplified type, actual type validated at runtime
+
+
+_CLIENT_BOOTSTRAP_TTL_SECONDS = 60.0
+_client_bootstrap_cache_lock = threading.Lock()
+_client_bootstrap_cache: dict[tuple[Any, ...], tuple[float, tuple[int, ...], Any]] = {}
+
+
+def _normalize_client_bootstrap_key(client: Any) -> tuple[Any, ...]:
+    """Build a stable cache key for one client spec."""
+    if client is None:
+        return ("none",)
+    if isinstance(client, int):
+        return ("int", client)
+    if isinstance(client, str):
+        return ("str", client)
+    if isinstance(client, list):
+        return (
+            "list",
+            tuple(_normalize_client_bootstrap_key(item) for item in client),
+        )
+
+    base_url = getattr(client, "base_url", None)
+    if base_url is not None:
+        return ("base_url", str(base_url))
+    return ("object", id(client))
+
+
+def _client_bootstrap_cache_key(client: Any, api_key: str) -> tuple[Any, ...]:
+    """Build the process-local cache key for LLM bootstrap metadata."""
+    return (_normalize_client_bootstrap_key(client), api_key)
+
+
+def _get_or_create_client_bootstrap(
+    cache_key: tuple[Any, ...],
+    bootstrap_fn: Callable[[], tuple[list[int], Any | None]],
+) -> tuple[list[int], Any | None]:
+    """Reuse recent client bootstrap results across LLM instances."""
+    now = time.monotonic()
+    with _client_bootstrap_cache_lock:
+        cached = _client_bootstrap_cache.get(cache_key)
+        if cached is not None:
+            expires_at, cached_alive_indices, cached_primary_models_response = cached
+            if expires_at > now:
+                return list(cached_alive_indices), cached_primary_models_response
+            _client_bootstrap_cache.pop(cache_key, None)
+
+        alive_indices, primary_models_response = bootstrap_fn()
+        if alive_indices and primary_models_response is not None:
+            _client_bootstrap_cache[cache_key] = (
+                now + _CLIENT_BOOTSTRAP_TTL_SECONDS,
+                tuple(alive_indices),
+                primary_models_response,
+            )
+        return alive_indices, primary_models_response
 
 
 class LLM:
@@ -93,11 +150,11 @@ class LLM:
         self._verbose = verbose
         # Avoid importing OpenAI client class at module import time.
         # If a client object provides an api_key attribute, use it.
-        self.api_key = "abc"
+        self.api_key = os.getenv("VLLM_API_KEY") or os.getenv("OPENAI_API_KEY", "abc")
         if client is not None and not isinstance(client, list):
-            api_key = getattr(client, "api_key", None)
-            if isinstance(api_key, str) and api_key:
-                self.api_key = api_key
+            client_api_key = getattr(client, "api_key", None)
+            if isinstance(client_api_key, str) and client_api_key:
+                self.api_key = client_api_key
 
         raw_clients = get_base_client(
             client,
@@ -105,12 +162,18 @@ class LLM:
             api_key=self.api_key,
         )
         primary_models_response: Any | None = None
+        bootstrap_cache_key = _client_bootstrap_cache_key(raw_clients, self.api_key)
 
         # Handle list of clients for load balancing
         if isinstance(raw_clients, list):
             self._clients = raw_clients
-            self._alive_clients: list[Any] = []
-            self._check_clients_health()
+            alive_indices, primary_models_response = _get_or_create_client_bootstrap(
+                bootstrap_cache_key,
+                self._check_clients_health,
+            )
+            self._alive_clients = [
+                raw_clients[idx] for idx in alive_indices if 0 <= idx < len(raw_clients)
+            ]
             if not self._alive_clients:
                 raise RuntimeError(
                     f"None of the {len(self._clients)} provided clients are alive."
@@ -118,18 +181,28 @@ class LLM:
         else:
             # Single client mode
             self._clients = [raw_clients]
-            # check connection of client
-            try:
-                primary_models_response = raw_clients.models.list()
+            self._alive_clients = []
+
+            def _bootstrap_single_client() -> tuple[list[int], Any | None]:
+                try:
+                    models_response = raw_clients.models.list()
+                    self._alive_clients = [raw_clients]
+                    return [0], models_response
+                except Exception as e:
+                    logger.error(
+                        f"Failed to connect to OpenAI client: {str(e)}, base_url={raw_clients.base_url}"
+                    )
+                    raise e
+
+            _, primary_models_response = _get_or_create_client_bootstrap(
+                bootstrap_cache_key,
+                _bootstrap_single_client,
+            )
+            if primary_models_response is not None:
                 self._alive_clients = [raw_clients]
-            except Exception as e:
-                logger.error(
-                    f"Failed to connect to OpenAI client: {str(e)}, base_url={raw_clients.base_url}"
-                )
-                raise e
 
         if primary_models_response is None:
-            primary_models_response = self._alive_clients[0].models.list()
+            raise RuntimeError("No alive clients available.")
         primary_models = primary_models_response.data
 
         if verbose:
@@ -151,15 +224,20 @@ class LLM:
         if self._multiple_clients and self._verbose:
             self._start_load_balance_reporter()
 
-    def _check_clients_health(self) -> None:
-        """Check health of all clients and populate _alive_clients list."""
+    def _check_clients_health(self) -> tuple[list[int], Any | None]:
+        """Check health of all clients and return alive indices and models."""
         self._alive_clients = []
+        alive_indices: list[int] = []
         dead_urls = []
+        primary_models_response: Any | None = None
 
-        for client in self._clients:
+        for idx, client in enumerate(self._clients):
             try:
-                client.models.list()
+                models_response = client.models.list()
                 self._alive_clients.append(client)
+                alive_indices.append(idx)
+                if primary_models_response is None:
+                    primary_models_response = models_response
             except Exception as e:
                 url = getattr(client, "base_url", str(client))
                 dead_urls.append(url)
@@ -171,6 +249,8 @@ class LLM:
                 f"Using {len(self._alive_clients)} alive clients. "
                 f"Dead clients: {dead_urls}"
             )
+
+        return alive_indices, primary_models_response
 
     @property
     def client(self) -> Any:
@@ -277,6 +357,36 @@ class LLM:
         if not model:
             logger.warning("No model specified in model_kwargs")
         return model
+
+    @property
+    def temperature(self) -> float | None:
+        """Return the temperature from model_kwargs."""
+        return self.model_kwargs.get("temperature")
+
+    @property
+    def top_p(self) -> float | None:
+        """Return the top_p from model_kwargs."""
+        return self.model_kwargs.get("top_p")
+
+    @property
+    def max_tokens(self) -> int | None:
+        """Return the max_tokens from model_kwargs."""
+        return self.model_kwargs.get("max_tokens")
+
+    @property
+    def stop(self) -> str | list[str] | tuple[str, ...] | None:
+        """Return the stop sequences from model_kwargs."""
+        return self.model_kwargs.get("stop")
+
+    @property
+    def presence_penalty(self) -> float | None:
+        """Return the presence_penalty from model_kwargs."""
+        return self.model_kwargs.get("presence_penalty")
+
+    @property
+    def frequency_penalty(self) -> float | None:
+        """Return the frequency_penalty from model_kwargs."""
+        return self.model_kwargs.get("frequency_penalty")
 
     @staticmethod
     def _prepare_input(input_data: str | BaseModel | list[dict]) -> Messages:

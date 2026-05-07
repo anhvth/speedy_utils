@@ -1,5 +1,6 @@
 """Unit tests for the simplified sync LLM public API."""
 
+from itertools import count
 from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import MagicMock, patch
@@ -23,6 +24,16 @@ class TestLLMCallContract(TestCase):
     def _make_mock_client():
         mock_client = MagicMock()
         mock_model = MagicMock(id="test-model")
+        mock_client.models.list.return_value = MagicMock(data=[mock_model])
+        return mock_client
+
+    @staticmethod
+    def _make_mock_client_with_model_id(
+        model_id: str, base_url: str = "http://test-server:8000/v1"
+    ):
+        mock_client = MagicMock()
+        mock_model = MagicMock(id=model_id)
+        mock_client.base_url = base_url
         mock_client.models.list.return_value = MagicMock(data=[mock_model])
         return mock_client
 
@@ -133,6 +144,45 @@ class TestLLMCallContract(TestCase):
             mock_client.completions.create.call_args.kwargs["prompt"],
             "prompt",
         )
+
+    @patch("llm_utils.lm.llm.time.monotonic")
+    @patch("llm_utils.lm.llm.get_base_client")
+    def test_constructor_reuses_client_bootstrap_for_60_seconds(
+        self, mock_get_client, mock_monotonic
+    ):
+        client_counter = count()
+
+        def make_client_batch():
+            batch = next(client_counter)
+            return [
+                self._make_mock_client_with_model_id(
+                    f"test-model-{batch}-0", "http://worker-0:7777/v1"
+                ),
+                self._make_mock_client_with_model_id(
+                    f"test-model-{batch}-1", "http://worker-6:7777/v1"
+                ),
+            ]
+
+        first_clients = make_client_batch()
+        second_clients = make_client_batch()
+        third_clients = make_client_batch()
+        mock_get_client.side_effect = [first_clients, second_clients, third_clients]
+        mock_monotonic.side_effect = [0.0, 30.0, 61.0]
+
+        llm_first = LLM(client=["http://worker-0:7777/v1", "http://worker-6:7777/v1"])
+        llm_second = LLM(client=["http://worker-0:7777/v1", "http://worker-6:7777/v1"])
+        llm_third = LLM(client=["http://worker-0:7777/v1", "http://worker-6:7777/v1"])
+
+        for client in first_clients:
+            client.models.list.assert_called_once()
+        for client in second_clients:
+            client.models.list.assert_not_called()
+        for client in third_clients:
+            client.models.list.assert_called_once()
+
+        self.assertEqual(llm_first.model, "test-model-0-0")
+        self.assertEqual(llm_second.model, "test-model-0-0")
+        self.assertEqual(llm_third.model, "test-model-2-0")
 
     @patch("llm_utils.lm.llm.get_base_client")
     def test_generate_preserves_vllm_completion_metadata(self, mock_get_client):
