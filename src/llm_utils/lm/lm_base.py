@@ -51,7 +51,7 @@ class LMBase:
     ) -> None:
         self.base_url = base_url
         self.api_key = (
-            api_key or os.getenv("VLLM_API_KEY") or os.getenv("OPENAI_API_KEY", "abc")
+            api_key or os.getenv("OPENAI_API_KEY", "abc")
         )
         self._cache = cache
         self.ports = ports

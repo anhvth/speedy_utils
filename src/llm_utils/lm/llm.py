@@ -92,6 +92,30 @@ def _get_or_create_client_bootstrap(
         return alive_indices, primary_models_response
 
 
+def _parse_with_warnings(
+    client: Any,
+    model_name: str,
+    messages: list[dict],
+    pydantic_model_to_use: type,
+    api_kwargs: dict[str, Any],
+) -> Any:
+    """Call chat completions parse, suppressing Pydantic serializer warnings."""
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="Pydantic serializer warnings",
+            category=UserWarning,
+        )
+        return client.chat.completions.parse(
+            model=model_name,
+            messages=messages,
+            response_format=pydantic_model_to_use,
+            **api_kwargs,
+        )
+
+
 class LLM:
     """LLM task with runtime response-model selection."""
 
@@ -549,13 +573,51 @@ class LLM:
         self._last_conversations.append(conversation_messages)
 
     @staticmethod
+    def _format_bad_request_body(exc: "BadRequestError") -> str:
+        """Format BadRequestError.body for readable logging."""
+        body = exc.body
+        if body is None:
+            return ""
+        if isinstance(body, dict):
+            # OpenAI-style: {"error": {"message": "...", "code": "..."}}
+            err = body.get("error", body)
+            if isinstance(err, dict):
+                msg = err.get("message", "") or ""
+                code = err.get("code", "") or ""
+                return f" [{code}] {msg}" if code else f" {msg}"
+            return f" {err}"
+        # String body (common with vLLM overload): just the message itself
+        if "invalid http request" in str(body).lower():
+            return " body=Invalid HTTP request received (vLLM connection overload — reduce concurrency or increase vLLM capacity)"
+        return f" body={body}"
+
+    @staticmethod
+    def _is_retryable(exc: Exception) -> bool:
+        """Check if the exception is transient and worth retrying."""
+        from openai import APITimeoutError, BadRequestError, RateLimitError
+
+        if isinstance(exc, (APITimeoutError, RateLimitError)):
+            return True
+        # BadRequestError can be transient when vLLM is overloaded
+        if isinstance(exc, BadRequestError):
+            body = exc.body
+            if isinstance(body, dict):
+                err = body.get("error", body) if isinstance(body, dict) else body
+                code = (err.get("code") or "") if isinstance(err, dict) else ""
+                # Non-retryable: input validation, auth-style codes
+                if code in ("context_length_exceeded", "content_filter"):
+                    return False
+            return True
+        return False
+
+    @staticmethod
     def _handle_completion_exception(
         exc: Exception,
         *,
         api_kwargs: dict[str, Any],
         model_name: str,
     ) -> None:
-        """Normalize completion-style API exceptions."""
+        """Normalize completion-style API exceptions. Raises always (caller retries)."""
         from openai import (
             APITimeoutError,
             AuthenticationError,
@@ -564,15 +626,19 @@ class LLM:
         )
 
         if isinstance(exc, APITimeoutError):
-            error_msg = (
-                f"OpenAI API timeout ({api_kwargs['timeout']}) error: {exc} "
-                f"for model {model_name}"
+            logger.warning(
+                f"OpenAI API timeout ({api_kwargs['timeout']}) for {model_name}: {exc}"
             )
-            logger.error(error_msg)
             raise exc
         if isinstance(exc, (AuthenticationError, RateLimitError, BadRequestError)):
-            error_msg = f"OpenAI API error ({type(exc).__name__}): {exc}"
-            logger.error(error_msg)
+            body_detail = ""
+            if isinstance(exc, BadRequestError):
+                body_detail = LLM._format_bad_request_body(exc)
+            # RateLimit: warn, not error (transient)
+            logger_func = logger.warning if isinstance(exc, RateLimitError) else logger.error
+            logger_func(
+                f"OpenAI API error ({type(exc).__name__}): {exc}{body_detail}"
+            )
             raise exc
         if isinstance(exc, ValueError):
             logger.error(f"ValueError during API call: {exc}")
@@ -583,6 +649,46 @@ class LLM:
                 f"Input too long for model {model_name}. Error: {str(exc)[:100]}..."
             ) from exc
         raise exc
+
+    @staticmethod
+    def _call_with_retry(
+        fn: Callable[[], Any],
+        *,
+        max_retries: int = 5,
+        model_name: str = "",
+    ) -> Any:
+        """Call fn, retrying on transient errors with random sleep 0.1--2s."""
+        from openai import APITimeoutError, BadRequestError, RateLimitError
+
+        last_exc: Exception | None = None
+        for attempt in range(max_retries + 1):
+            try:
+                return fn()
+            except (APITimeoutError, RateLimitError, BadRequestError) as exc:
+                last_exc = exc
+                if not LLM._is_retryable(exc):
+                    raise
+                if attempt >= max_retries:
+                    logger.error(
+                        f"Giving up after {max_retries} retries for {model_name}: {exc}"
+                    )
+                    raise
+                sleep_dur = random.uniform(0.1, 2.0)
+                hint = ""
+                if isinstance(exc, BadRequestError):
+                    b = exc.body
+                    if isinstance(b, str) and "invalid http" in b.lower():
+                        hint = " vLLM overload"
+                logger.warning(
+                    f"Retry {attempt + 1}/{max_retries} {model_name}"
+                    f" sleep={sleep_dur:.2f}s{hint}"
+                )
+                time.sleep(sleep_dur)
+            except Exception as exc:
+                last_exc = exc
+                raise
+        # Should not reach here, but satisfy type narrowing
+        raise last_exc  # type: ignore[misc]
 
     def _raw_completion_step(
         self,
@@ -620,18 +726,14 @@ class LLM:
         )
         with borrow_client as client:
             self._set_cache(cache, client=client)
-            try:
-                completion = client.completions.create(
+            completion = LLM._call_with_retry(
+                lambda: client.completions.create(
                     model=model_name,
                     prompt=prompt,
                     **api_kwargs,
-                )
-            except Exception as exc:
-                self._handle_completion_exception(
-                    exc,
-                    api_kwargs=api_kwargs,
-                    model_name=model_name,
-                )
+                ),
+                model_name=model_name,
+            )
 
         choice = self._get_completion_choice(completion)
         usage = self._get_completion_usage(completion)
@@ -665,16 +767,12 @@ class LLM:
 
         with self._borrow_client() as client:
             self._set_cache(cache, client=client)
-            try:
-                completion = client.chat.completions.create(
+            completion = LLM._call_with_retry(
+                lambda: client.chat.completions.create(
                     model=model_name, messages=messages, **api_kwargs
-                )
-            except Exception as exc:
-                self._handle_completion_exception(
-                    exc,
-                    api_kwargs=api_kwargs,
-                    model_name=model_name,
-                )
+                ),
+                model_name=model_name,
+            )
         # print(completion)
 
         choices = getattr(completion, "choices", None)
@@ -789,39 +887,10 @@ class LLM:
         pydantic_model_to_use: type[BaseModel] = cast(type[BaseModel], response_model)
         with self._borrow_client() as client:
             self._set_cache(cache, client=client)
-            try:
-                import warnings
-
-                with warnings.catch_warnings():
-                    warnings.filterwarnings(
-                        "ignore",
-                        message="Pydantic serializer warnings",
-                        category=UserWarning,
-                    )
-                    completion = client.chat.completions.parse(
-                        model=model_name,
-                        messages=messages,
-                        response_format=pydantic_model_to_use,
-                        **api_kwargs,
-                    )
-            except Exception as exc:
-                # Import openai exceptions for type checking
-                from openai import AuthenticationError, BadRequestError, RateLimitError
-
-                if isinstance(
-                    exc, (AuthenticationError, RateLimitError, BadRequestError)
-                ):
-                    error_msg = f"OpenAI API error ({type(exc).__name__}): {exc}"
-                    logger.error(error_msg)
-                    raise
-                is_length_error = "Length" in str(
-                    exc
-                ) or "maximum context length" in str(exc)
-                if is_length_error:
-                    raise ValueError(
-                        f"Input too long for model {model_name}. Error: {str(exc)[:100]}..."
-                    ) from exc
-                raise
+            completion = LLM._call_with_retry(
+                lambda: _parse_with_warnings(client, model_name, messages, pydantic_model_to_use, api_kwargs),
+                model_name=model_name,
+            )
 
         choices = getattr(completion, "choices", None)
         if not choices:
