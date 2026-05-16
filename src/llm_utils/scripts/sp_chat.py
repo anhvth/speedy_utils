@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from contextlib import suppress
 from pathlib import Path
 from typing import Any, Iterable, List
 from urllib.parse import urlparse
@@ -36,6 +37,7 @@ Supported key=value args:
 DEFAULT_MAX_TOKENS = 4096
 DEFAULT_TEMPERATURE = 0.7
 DEFAULT_SYSTEM_PROMPT = ""
+DEFAULT_API_KEY = "abc"
 
 
 class ChatConfig:
@@ -47,7 +49,7 @@ class ChatConfig:
         app_port: int = 5009,
         app_host: str = "0.0.0.0",
         model: str | None = None,
-        api_key: str | None = None,
+        api_key: str | None = DEFAULT_API_KEY,
         thinking: bool = True,
     ):
         self.client = client
@@ -249,6 +251,10 @@ def _is_running_in_chainlit() -> bool:
     return os.environ.get("SP_CHAT_RUNNING") == "1"
 
 
+def _openai_client_kwargs(base_url: str, api_key: str | None) -> dict[str, str]:
+    return {"base_url": base_url, "api_key": api_key or DEFAULT_API_KEY}
+
+
 async def _list_models_async(client: Any) -> tuple[List[str], str | None]:
     try:
         resp = await client.models.list()
@@ -257,15 +263,14 @@ async def _list_models_async(client: Any) -> tuple[List[str], str | None]:
         return [], str(exc)
 
 
-def _list_models_sync(base_url: str, api_key: str) -> tuple[List[str], str | None]:
+def _list_models_sync(
+    base_url: str, api_key: str | None
+) -> tuple[List[str], str | None]:
     """Synchronous model listing used during startup info."""
     from openai import OpenAI
 
     try:
-        c_kwargs = {"base_url": base_url}
-        if api_key is not None:
-            c_kwargs["api_key"] = api_key
-        c = OpenAI(**c_kwargs)
+        c = OpenAI(**_openai_client_kwargs(base_url, api_key))
         resp = c.models.list()
         return sorted([m.id for m in resp.data]), None
     except Exception as exc:
@@ -278,14 +283,11 @@ def _setup_chainlit():
     from openai import AsyncOpenAI
 
     base_url = os.environ.get("SP_CHAT_CLIENT", "http://localhost:4343/v1")
-    api_key = os.environ.get("SP_CHAT_API_KEY")
+    api_key = os.environ.get("SP_CHAT_API_KEY", DEFAULT_API_KEY)
     initial_model = os.environ.get("SP_CHAT_MODEL")
     enable_thinking_default = os.environ.get("SP_CHAT_THINKING", "true") == "true"
 
-    kwargs = {"base_url": base_url}
-    if api_key is not None:
-        kwargs["api_key"] = api_key
-    client = AsyncOpenAI(**kwargs)
+    client = AsyncOpenAI(**_openai_client_kwargs(base_url, api_key))
 
     @cl.on_chat_start
     async def start():
@@ -435,16 +437,12 @@ def _setup_chainlit():
                     await thinking_step.update()
 
             if guard_blocked:
-                try:
+                with suppress(Exception):
                     await stream.close()
-                except Exception:
-                    pass
 
                 if thinking_step is not None:
-                    try:
+                    with suppress(Exception):
                         await thinking_step.remove()
-                    except Exception:
-                        pass
 
                 fallback_text = guard_fallback_text or "Xin lỗi, tôi không thể hỗ trợ yêu cầu này."
                 final_answer.content = fallback_text
@@ -477,8 +475,7 @@ def _launch_chainlit(config: ChatConfig) -> int:
     os.makedirs(app_root, exist_ok=True)
     env["CHAINLIT_APP_ROOT"] = app_root
     env["SP_CHAT_CLIENT"] = normalize_client_base_url(config.client)
-    if config.api_key is not None:
-        env["SP_CHAT_API_KEY"] = config.api_key
+    env["SP_CHAT_API_KEY"] = config.api_key or DEFAULT_API_KEY
     if config.model:
         env["SP_CHAT_MODEL"] = config.model
     env["SP_CHAT_THINKING"] = "true" if config.thinking else "false"

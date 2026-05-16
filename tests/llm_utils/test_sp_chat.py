@@ -3,11 +3,12 @@ from typing import Any
 import pytest
 
 from llm_utils.scripts.sp_chat import (
-    ChatConfig,
     DEFAULT_MAX_TOKENS,
     DEFAULT_TEMPERATURE,
+    ChatConfig,
     _archive_current_chat,
     _build_history_title,
+    _openai_client_kwargs,
     _render_streaming_blocks,
     _reset_chat_state,
     normalize_client_base_url,
@@ -18,6 +19,13 @@ from llm_utils.scripts.sp_chat import (
 def test_parse_cli_args_defaults() -> None:
     config = parse_cli_args([])
     assert config == ChatConfig()
+    assert config.api_key == "abc"
+
+
+def test_openai_client_kwargs_default_to_dummy_api_key() -> None:
+    kwargs = _openai_client_kwargs("http://localhost:8000/v1", None)
+
+    assert kwargs == {"base_url": "http://localhost:8000/v1", "api_key": "abc"}
 
 
 def test_parse_cli_args_key_value_inputs() -> None:
