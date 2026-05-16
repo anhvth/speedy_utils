@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import base64
 import html
+import mimetypes
 import os
 import subprocess
 import sys
@@ -38,6 +40,14 @@ DEFAULT_MAX_TOKENS = 4096
 DEFAULT_TEMPERATURE = 0.7
 DEFAULT_SYSTEM_PROMPT = ""
 DEFAULT_API_KEY = "abc"
+SUPPORTED_TEXT_ATTACHMENT_MIMES = {
+    "application/json",
+    "application/x-ndjson",
+    "application/xml",
+    "text/csv",
+    "text/markdown",
+    "text/plain",
+}
 
 
 class ChatConfig:
@@ -255,6 +265,141 @@ def _openai_client_kwargs(base_url: str, api_key: str | None) -> dict[str, str]:
     return {"base_url": base_url, "api_key": api_key or DEFAULT_API_KEY}
 
 
+def _message_role(message: Any) -> str:
+    message_type = getattr(message, "type", None)
+    if message_type == "assistant_message":
+        return "assistant"
+    if message_type == "user_message":
+        return "user"
+    return "system"
+
+
+def _guess_attachment_mime(element: Any) -> str:
+    mime = getattr(element, "mime", None)
+    if mime:
+        return str(mime)
+
+    url = getattr(element, "url", None)
+    if url:
+        guessed = mimetypes.guess_type(str(url))[0]
+        if guessed:
+            return guessed
+
+    path = getattr(element, "path", None)
+    if path:
+        guessed = mimetypes.guess_type(str(path))[0]
+        if guessed:
+            return guessed
+
+    element_type = getattr(element, "type", None)
+    if element_type == "image":
+        return "image/png"
+    if element_type == "text":
+        return "text/plain"
+    return "application/octet-stream"
+
+
+def _read_attachment_bytes(element: Any) -> bytes | None:
+    content = getattr(element, "content", None)
+    if isinstance(content, bytes):
+        return content
+    if isinstance(content, bytearray):
+        return bytes(content)
+    if isinstance(content, str):
+        return content.encode()
+
+    path = getattr(element, "path", None)
+    if path:
+        try:
+            return Path(path).read_bytes()
+        except OSError:
+            return None
+    return None
+
+
+def _attachment_name(element: Any, fallback: str = "attachment") -> str:
+    name = getattr(element, "name", None)
+    if name:
+        return str(name)
+
+    path = getattr(element, "path", None)
+    if path:
+        return Path(path).name
+
+    url = getattr(element, "url", None)
+    if url:
+        return Path(str(url).rstrip("/")).name or fallback
+
+    return fallback
+
+
+def _image_element_to_content_part(element: Any) -> dict[str, Any] | None:
+    mime = _guess_attachment_mime(element)
+    element_type = getattr(element, "type", None)
+    if element_type != "image" and not mime.startswith("image/"):
+        return None
+
+    url = getattr(element, "url", None)
+    if url:
+        image_url = str(url)
+    else:
+        data = _read_attachment_bytes(element)
+        if data is None:
+            return None
+        encoded = base64.b64encode(data).decode("ascii")
+        image_url = f"data:{mime};base64,{encoded}"
+
+    return {"type": "image_url", "image_url": {"url": image_url}}
+
+
+def _text_element_to_content_part(element: Any) -> dict[str, str] | None:
+    mime = _guess_attachment_mime(element)
+    element_type = getattr(element, "type", None)
+    if element_type != "text" and not (
+        mime.startswith("text/") or mime in SUPPORTED_TEXT_ATTACHMENT_MIMES
+    ):
+        return None
+
+    data = _read_attachment_bytes(element)
+    if data is None:
+        return None
+
+    try:
+        text = data.decode()
+    except UnicodeDecodeError:
+        text = data.decode(errors="replace")
+
+    name = _attachment_name(element)
+    return {"type": "text", "text": f"\n\nAttached file: {name}\n{text}"}
+
+
+def _message_to_openai(message: Any) -> dict[str, Any]:
+    role = _message_role(message)
+    content = getattr(message, "content", "")
+
+    if role != "user":
+        return {"role": role, "content": content}
+
+    parts: list[dict[str, Any]] = []
+    if content:
+        parts.append({"type": "text", "text": str(content)})
+
+    for element in getattr(message, "elements", []) or []:
+        part = _image_element_to_content_part(element)
+        if part is None:
+            part = _text_element_to_content_part(element)
+        if part is not None:
+            parts.append(part)
+
+    if not parts:
+        return {"role": role, "content": content}
+    return {"role": role, "content": parts}
+
+
+def _chainlit_context_to_openai(messages: Iterable[Any]) -> list[dict[str, Any]]:
+    return [_message_to_openai(message) for message in messages]
+
+
 async def _list_models_async(client: Any) -> tuple[List[str], str | None]:
     try:
         resp = await client.models.list()
@@ -371,7 +516,7 @@ def _setup_chainlit():
         messages = []
         if system_prompt and system_prompt.strip():
             messages.append({"role": "system", "content": system_prompt})
-        messages.extend(cl.chat_context.to_openai())
+        messages.extend(_chainlit_context_to_openai(cl.chat_context.get()))
 
         call_kwargs = {
             "model": model,
@@ -405,7 +550,9 @@ def _setup_chainlit():
 
                     delta = chunk.choices[0].delta
                     moderation = getattr(chunk, "moderation", None)
-                    if moderation is None and isinstance(getattr(chunk, "model_extra", None), dict):
+                    if moderation is None and isinstance(
+                        getattr(chunk, "model_extra", None), dict
+                    ):
                         moderation = chunk.model_extra.get("moderation")
 
                     content = delta.content or ""
@@ -444,7 +591,9 @@ def _setup_chainlit():
                     with suppress(Exception):
                         await thinking_step.remove()
 
-                fallback_text = guard_fallback_text or "Xin lỗi, tôi không thể hỗ trợ yêu cầu này."
+                fallback_text = (
+                    guard_fallback_text or "Xin lỗi, tôi không thể hỗ trợ yêu cầu này."
+                )
                 final_answer.content = fallback_text
                 if answer_streamed:
                     await final_answer.update()
