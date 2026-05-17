@@ -6129,7 +6129,7 @@ requires-dist = [
     { name = "datasets" },
     { name = "dill" },
     { name = "fastcore" },
-    { name = "json-repair" },
+    { name = "json-repair", specifier = ">=0.44.1" },
     { name = "loguru" },
     { name = "matplotlib" },
     { name = "numpy" },

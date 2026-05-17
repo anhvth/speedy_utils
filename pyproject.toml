@@ -23,7 +23,7 @@ dependencies = [
     "chainlit>=2.0",
     "datasets",
     "psutil",
-    "json-repair",
+    "json-repair>=0.44.1",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
