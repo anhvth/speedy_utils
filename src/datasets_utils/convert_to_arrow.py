@@ -8,6 +8,9 @@ from pathlib import Path
 from datasets import load_dataset
 
 
+__all__ = ["convert_to_arrow"]
+
+
 def convert_to_arrow(path_to_dir):
     # 1. Setup paths
     input_path = Path(path_to_dir).resolve()

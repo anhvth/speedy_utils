@@ -1,6 +1,9 @@
 from ..__imports import *
 
 
+__all__ = ["ReportManager"]
+
+
 class ReportManager:
     def __init__(self):
         self.cache_dir = os.path.expanduser('~/.cache/speedy_utils')

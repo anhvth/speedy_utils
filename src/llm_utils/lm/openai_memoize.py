@@ -22,6 +22,9 @@ _LOCAL_PROXY_VARS = (
 _localhost_proxy_notice_shown = False
 
 
+__all__ = ["MOpenAI", "MAsyncOpenAI"]
+
+
 def _unset_proxy_env_for_localhost(base_url: Any) -> list[str]:
     """Unset proxy env vars when base_url points to localhost/loopback."""
     global _localhost_proxy_notice_shown

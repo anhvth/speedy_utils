@@ -1,6 +1,9 @@
 from ..__imports import *
 
 
+__all__ = ["setup_logger", "log"]
+
+
 # A subclass of OrderedDict to automatically evict the oldest item after max_size is exceeded
 class _RateLimitCache(OrderedDict):
     def __init__(self, max_size: int, *args, **kwargs):

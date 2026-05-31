@@ -36,6 +36,9 @@ Messages = list[dict]  # Simplified type, actual type validated at runtime
 B = TypeVar('B', bound='BasePromptBuilder')
 
 
+__all__ = ["BasePromptBuilder"]
+
+
 class BasePromptBuilder(BaseModel, ABC):
     """
     Abstract base class for prompt builders.

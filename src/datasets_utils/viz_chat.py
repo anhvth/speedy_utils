@@ -68,6 +68,19 @@ DEFAULT_CHAT_TEMPLATE_TOKENIZER = "Qwen/Qwen3.5-27B"
 os.environ.setdefault("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")
 
 
+__all__ = [
+    "parse_args",
+    "load_data",
+    "decode_tokenized_row",
+    "normalize_messages",
+    "extract_tools",
+    "sample_items",
+    "print_item",
+    "print_tokenized_item",
+    "main",
+]
+
+
 def _get_dataset_module():
     """Lazy load the datasets module."""
     global _dataset_module

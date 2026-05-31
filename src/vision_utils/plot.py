@@ -10,6 +10,9 @@ if TYPE_CHECKING:
     from .io_utils import read_images
 
 
+__all__ = ["plot_images_notebook", "visualize_tensor"]
+
+
 def _check_torch_available():
     """Check if torch is available without importing at module level."""
     try:

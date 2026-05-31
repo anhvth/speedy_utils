@@ -7,6 +7,13 @@ without the process being terminated.
 """
 
 
+__all__ = [
+    "SpeedyExecutionError",
+    "SpeedyWorkerError",
+    "SpeedySerializationError",
+]
+
+
 class SpeedyExecutionError(Exception):
     """Base exception for speedy_utils runtime failures.
 

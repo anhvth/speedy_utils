@@ -9,6 +9,9 @@ from .llm import LLM
 from .signature import Signature
 
 
+__all__ = ["LLMSignature"]
+
+
 class LLMSignature(LLM):
     """LLM wrapper that derives prompt and schema defaults from a Signature."""
 

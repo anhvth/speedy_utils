@@ -7,6 +7,9 @@ if TYPE_CHECKING:
     from openai import OpenAI
 
 
+__all__ = ["get_base_client"]
+
+
 def _create_single_client(url: str, api_key: str, cache: bool) -> Any:
     """Create a single MOpenAI client for a given URL."""
     from .openai_memoize import MOpenAI

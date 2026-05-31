@@ -38,6 +38,15 @@ _TRANSFORMERS_IMPORT_ERROR_MESSAGE = (
 )
 
 
+__all__ = [
+    "Qwen3LLM",
+    "split_assistant_parts",
+    "build_assistant_prefix",
+    "is_content_done",
+    "strip_assistant_end",
+]
+
+
 class _PrefixCompletionState(BaseModel):
     assistant_prompt_prefix: str
     reasoning: str | None = None

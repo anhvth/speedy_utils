@@ -38,6 +38,9 @@ if TYPE_CHECKING:
     from openai.types.model import Model
 
 
+__all__ = ["LMBase", "get_model_name"]
+
+
 class LMBase:
     """Unified **sync** language‑model wrapper with optional JSON parsing."""
 

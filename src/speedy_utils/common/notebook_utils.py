@@ -1,6 +1,9 @@
 from ..__imports import *
 
 
+__all__ = ["change_dir", "display_pretty_table_html", "print_table"]
+
+
 def change_dir(target_directory: str = 'POLY') -> None:
     """Change directory to the first occurrence of x in the current path."""
     cur_dir = pathlib.Path('./')

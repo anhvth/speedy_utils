@@ -950,6 +950,49 @@ class LLM:
         )
         return cast(BaseModel, result["parsed"])
 
+    def _stream_chat(
+        self,
+        input_data: str | BaseModel | list[dict],
+        *,
+        response_model: type[BaseModel] | type[str] | None,
+        return_dict: bool,
+        cache: bool | None,
+        enable_thinking: bool | None,
+        **runtime_kwargs,
+    ) -> Any:
+        """Stream a chat completion directly from the API (no caching)."""
+        if return_dict:
+            raise ValueError(
+                "Streaming is only supported with the default return value."
+            )
+        if response_model not in (str, None):
+            raise ValueError(
+                "Streaming is only supported for text completions, not structured outputs. "
+                "Set response_model=None or response_model=str to use streaming."
+            )
+        if cache is not False and self.cache:
+            logger.warning(
+                "Caching is disabled when streaming. "
+                "Responses will be streamed directly from the API without caching."
+            )
+
+        messages = self._prepare_input(input_data)
+        effective_kwargs = {**self.model_kwargs, **runtime_kwargs}
+        model_name, api_kwargs = self._build_api_kwargs(
+            effective_kwargs,
+            enable_thinking=enable_thinking,
+            drop_keys=("stream",),
+        )
+        with self._borrow_client() as client:
+            # Disable caching on the selected client to prevent pickle errors.
+            self._set_cache(False, client=client)
+            return client.chat.completions.create(
+                model=model_name,
+                messages=messages,
+                stream=True,
+                **api_kwargs,
+            )
+
     def __call__(
         self,
         input_data: str | BaseModel | list[dict],
@@ -961,67 +1004,37 @@ class LLM:
         return_dict: bool = False,
         **openai_client_kwargs,
     ) -> Any:
-        """Convenience wrapper around the explicit chat and completion methods."""
-
+        """Route one request to the right chat/completion/streaming path."""
         if n != 1:
             raise ValueError("LLM only supports n=1")
 
-        # Handle streaming (only for text completion)
         if stream:
-            if return_dict:
-                raise ValueError(
-                    "Streaming is only supported with the default return value."
-                )
-            pydantic_model = response_model
-            if pydantic_model not in (str, None):
-                raise ValueError(
-                    "Streaming is only supported for text completions, not structured outputs. "
-                    "Set response_model=None or response_model=str to use streaming."
-                )
-            # Disable caching when streaming - warn user and disable on client
-            if cache is not False and self.cache:
-                logger.warning(
-                    "Caching is disabled when streaming. "
-                    "Responses will be streamed directly from the API without caching."
-                )
-            messages = self._prepare_input(input_data)
-            effective_kwargs = {**self.model_kwargs, **openai_client_kwargs}
-            model_name, api_kwargs = self._build_api_kwargs(
-                effective_kwargs,
+            return self._stream_chat(
+                input_data,
+                response_model=response_model,
+                return_dict=return_dict,
+                cache=cache,
                 enable_thinking=enable_thinking,
-                drop_keys=("stream",),
+                **openai_client_kwargs,
             )
-            with self._borrow_client() as client:
-                # Explicitly disable caching on the selected client to prevent pickle errors
-                self._set_cache(False, client=client)
-                return client.chat.completions.create(
-                    model=model_name,
-                    messages=messages,
-                    stream=True,
-                    **api_kwargs,
-                )
 
-        pydantic_model = response_model
         if return_dict:
-            if pydantic_model in (str, None):
-                result = self._chat_completion_result(
+            if response_model in (str, None):
+                return self._chat_completion_result(
                     input_data,
                     cache=cache,
                     enable_thinking=enable_thinking,
                     **openai_client_kwargs,
                 )[0]
-            else:
-                result = self._pydantic_completion(
-                    input_data,
-                    response_model=cast(type[BaseModel], pydantic_model),
-                    cache=cache,
-                    enable_thinking=enable_thinking,
-                    **openai_client_kwargs,
-                )
-                return result
-            return result
+            return self._pydantic_completion(
+                input_data,
+                response_model=cast(type[BaseModel], response_model),
+                cache=cache,
+                enable_thinking=enable_thinking,
+                **openai_client_kwargs,
+            )
 
-        if pydantic_model in (str, None):
+        if response_model in (str, None):
             return self.chat_completion(
                 input_data,
                 cache=cache,
@@ -1030,7 +1043,7 @@ class LLM:
             )
         return self.pydantic_parse(
             input_data,
-            response_model=cast(type[BaseModel], pydantic_model),
+            response_model=cast(type[BaseModel], response_model),
             cache=cache,
             enable_thinking=enable_thinking,
             **openai_client_kwargs,
