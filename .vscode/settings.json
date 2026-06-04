@@ -1,5 +1,5 @@
 {
-    "python.defaultInterpreterPath": "/home/anhvth8/projects/speedy_utils/.venv/bin/python",
+    "python.defaultInterpreterPath": "/home/anhvth8/.local/share/venvs/speedy_utils/bin/python",
     "python.terminal.activateEnvironment": true,
     "python-envs.defaultEnvManager": "ms-python.python:venv",
     "files.exclude": {
