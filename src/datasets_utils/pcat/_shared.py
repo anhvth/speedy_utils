@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import curses
 import json
+import locale
 import random
 import sys
 import textwrap
@@ -10,6 +11,11 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, Sequence
+
+
+# Set locale to support UTF-8 in Curses
+with suppress(Exception):
+    locale.setlocale(locale.LC_ALL, "")
 
 
 # ---------------------------------------------------------------------------
@@ -786,11 +792,37 @@ def prompt(stdscr, prefix: str) -> str:
     addstr_safe(stdscr, height - 1, 0, prefix)
     stdscr.refresh()
     try:
-        result = stdscr.getstr(height - 1, len(prefix), 256).decode(
-            "utf-8", errors="replace"
-        )
+        # Use get_wch for wide character support if possible
+        result_chars = []
+        while True:
+            ch = stdscr.get_wch()
+            if isinstance(ch, str):
+                if ch in ("\n", "\r"):
+                    break
+                # Handle backspace
+                if ch in ("\x7f", "\x08", "\b"):
+                    if result_chars:
+                        result_chars.pop()
+                        curr_y, curr_x = stdscr.getyx()
+                        if curr_x > len(prefix):
+                            stdscr.move(curr_y, curr_x - 1)
+                            stdscr.delch()
+                    continue
+                result_chars.append(ch)
+                # echo it
+                stdscr.addstr(ch)
+            else:
+                if ch == curses.KEY_ENTER or ch == 10 or ch == 13:
+                    break
+        result = "".join(result_chars)
     except Exception:
-        result = ""
+        # Fallback to getstr if get_wch fails or isn't available
+        try:
+            result = stdscr.getstr(height - 1, len(prefix), 256).decode(
+                "utf-8", errors="replace"
+            )
+        except Exception:
+            result = ""
     curses.noecho()
     with suppress(curses.error):
         curses.curs_set(0)
