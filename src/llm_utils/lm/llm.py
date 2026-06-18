@@ -92,6 +92,105 @@ def _get_or_create_client_bootstrap(
         return alive_indices, primary_models_response
 
 
+_DEFAULT_WAIT_POLL_INTERVAL = 1.0
+
+
+# Optional bootstrap wait helper. Older builds / partial source trees may
+# not define this; default to None so the call sites below can fall back to
+# calling bootstrap_fn() directly.
+_wait_for_endpoint_bootstrap = None  # type: ignore[assignment]
+
+
+def _wait_for_endpoint_bootstrap(  # type: ignore[no-redef]
+    llm: "LLM",
+    cache_key: tuple[Any, ...],
+    bootstrap_fn: Callable[[], tuple[list[int], Any | None]],
+    *,
+    wait_for_endpoint: float,
+) -> tuple[list[int], Any | None]:
+    """Run ``bootstrap_fn``, waiting up to ``wait_for_endpoint`` seconds.
+
+    The client/endpoint is expected to come up shortly after the LLM is
+    constructed (e.g. a vLLM worker is starting). When the bootstrap fails
+    on the first try, we log a progress message like
+    ``"waiting for 10/600..."`` every poll interval and retry until either
+    the endpoint responds or the budget is exhausted.
+
+    A ``wait_for_endpoint`` value of ``0`` (or any non-positive number)
+    disables the wait and surfaces the bootstrap error immediately,
+    preserving the original fast-fail behaviour.
+    """
+    wait_budget = max(0.0, float(wait_for_endpoint))
+    poll_interval = _DEFAULT_WAIT_POLL_INTERVAL
+
+    # While the constructor is intentionally waiting, suppress per-attempt
+    # error logs from the bootstrap helper so the terminal isn't spammed
+    # with the same "Connection error" line every second for the full wait
+    # budget. The progress line and the final "did not become ready"
+    # error are still emitted.
+    llm._waiting_for_endpoint = True
+    try:
+        # Fast path: try the regular bootstrap (which may also serve a
+        # cached recent result) without waiting.
+        try:
+            result = _get_or_create_client_bootstrap(cache_key, bootstrap_fn)
+        except Exception:
+            result = ([], None)
+
+        if result[0] and result[1] is not None:
+            return result
+
+        if wait_budget <= 0:
+            # Re-raise the original bootstrap error so the caller sees the
+            # same failure as before the wait feature was introduced.
+            return _get_or_create_client_bootstrap(cache_key, bootstrap_fn)
+
+        deadline = time.monotonic() + wait_budget
+        elapsed = 0.0
+        client_label = _describe_bootstrap_target(llm)
+        print(
+            f"LLM endpoint {client_label} is not ready; waiting (budget={wait_budget:.0f}s)...",
+            flush=True,
+        )
+        while True:
+            time.sleep(poll_interval)
+            elapsed = min(wait_budget, elapsed + poll_interval)
+            try:
+                result = _get_or_create_client_bootstrap(cache_key, bootstrap_fn)
+            except Exception:  # noqa: BLE001
+                result = ([], None)
+            if result[0] and result[1] is not None:
+                print(
+                    f"\rLLM endpoint {client_label} became ready after {elapsed:.0f}s",
+                    flush=True,
+                )
+                return result
+            if time.monotonic() >= deadline:
+                logger.error(
+                    "LLM endpoint {} did not become ready within {:.0f}s",
+                    client_label,
+                    wait_budget,
+                )
+                return _get_or_create_client_bootstrap(cache_key, bootstrap_fn)
+            print(
+                f"\rwaiting for {elapsed:.0f}/{wait_budget:.0f}...",
+                end="",
+                flush=True,
+            )
+    finally:
+        llm._waiting_for_endpoint = False
+
+
+def _describe_bootstrap_target(llm: "LLM") -> str:
+    """Return a short human-readable label for the LLM's bootstrap target."""
+    clients = getattr(llm, "_clients", None) or []
+    if not clients:
+        return "endpoint"
+    if len(clients) == 1:
+        return llm._client_label(clients[0])
+    return f"{len(clients)} endpoints"
+
+
 def _parse_with_warnings(
     client: Any,
     model_name: str,
@@ -141,6 +240,7 @@ class LLM:
         stop: str | list[str] | tuple[str, ...] | None = None,
         presence_penalty: float | None = None,
         frequency_penalty: float | None = None,
+        wait_for_endpoint: float = 600.0,
         **model_kwargs,
     ):
         """Initialize LLMTask."""
@@ -172,6 +272,11 @@ class LLM:
         self.enable_thinking = enable_thinking
         self.cache = cache
         self._verbose = verbose
+        self.wait_for_endpoint = wait_for_endpoint
+        # Set while the constructor is waiting for the endpoint to come up.
+        # Bootstrap helpers use it to downgrade per-attempt ERROR logs to DEBUG
+        # so the terminal isn't spammed during a long intentional wait.
+        self._waiting_for_endpoint = False
         # Avoid importing OpenAI client class at module import time.
         # If a client object provides an api_key attribute, use it.
         self.api_key = os.getenv("VLLM_API_KEY") or os.getenv("OPENAI_API_KEY", "abc")
@@ -191,10 +296,16 @@ class LLM:
         # Handle list of clients for load balancing
         if isinstance(raw_clients, list):
             self._clients = raw_clients
-            alive_indices, primary_models_response = _get_or_create_client_bootstrap(
-                bootstrap_cache_key,
-                self._check_clients_health,
-            )
+            # If the bootstrap wait helper is unavailable, call directly.
+            if _wait_for_endpoint_bootstrap is None:
+                alive_indices, primary_models_response = self._check_clients_health()
+            else:
+                alive_indices, primary_models_response = _wait_for_endpoint_bootstrap(
+                    self,
+                    bootstrap_cache_key,
+                    self._check_clients_health,
+                    wait_for_endpoint=wait_for_endpoint,
+                )
             self._alive_clients = [
                 raw_clients[idx] for idx in alive_indices if 0 <= idx < len(raw_clients)
             ]
@@ -213,15 +324,27 @@ class LLM:
                     self._alive_clients = [raw_clients]
                     return [0], models_response
                 except Exception as e:
-                    logger.error(
-                        f"Failed to connect to OpenAI client: {str(e)}, base_url={raw_clients.base_url}"
-                    )
+                    # While the constructor is intentionally waiting for the
+                    # endpoint to come up we stay silent — the
+                    # "waiting for N/600..." progress line tells the user
+                    # what's going on, and the bootstrap error is only
+                    # surfaced (and logged) once the wait budget is
+                    # exhausted.
+                    if not self._waiting_for_endpoint:
+                        logger.error(
+                            f"Failed to connect to OpenAI client: {str(e)}, base_url={raw_clients.base_url}"
+                        )
                     raise e
 
-            _, primary_models_response = _get_or_create_client_bootstrap(
-                bootstrap_cache_key,
-                _bootstrap_single_client,
-            )
+            if _wait_for_endpoint_bootstrap is None:
+                _, primary_models_response = _bootstrap_single_client()
+            else:
+                _, primary_models_response = _wait_for_endpoint_bootstrap(
+                    self,
+                    bootstrap_cache_key,
+                    _bootstrap_single_client,
+                    wait_for_endpoint=wait_for_endpoint,
+                )
             if primary_models_response is not None:
                 self._alive_clients = [raw_clients]
 
@@ -635,10 +758,10 @@ class LLM:
             if isinstance(exc, BadRequestError):
                 body_detail = LLM._format_bad_request_body(exc)
             # RateLimit: warn, not error (transient)
-            logger_func = logger.warning if isinstance(exc, RateLimitError) else logger.error
-            logger_func(
-                f"OpenAI API error ({type(exc).__name__}): {exc}{body_detail}"
+            logger_func = (
+                logger.warning if isinstance(exc, RateLimitError) else logger.error
             )
+            logger_func(f"OpenAI API error ({type(exc).__name__}): {exc}{body_detail}")
             raise exc
         if isinstance(exc, ValueError):
             logger.error(f"ValueError during API call: {exc}")
@@ -888,7 +1011,9 @@ class LLM:
         with self._borrow_client() as client:
             self._set_cache(cache, client=client)
             completion = LLM._call_with_retry(
-                lambda: _parse_with_warnings(client, model_name, messages, pydantic_model_to_use, api_kwargs),
+                lambda: _parse_with_warnings(
+                    client, model_name, messages, pydantic_model_to_use, api_kwargs
+                ),
                 model_name=model_name,
             )
 

@@ -4,7 +4,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from ._shared import main_hf_dataset, main_jsonl
+from ._shared import JsonlGlobRowSource, main_hf_dataset, main_jsonl
 
 
 _SUBCOMMANDS = {"jsonl", "hf-dataset"}
@@ -92,6 +92,40 @@ def _build_auto_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--split", help="dataset split (auto-detect mode, HF datasets only)"
     )
+    parser.add_argument(
+        "--serve",
+        action="store_true",
+        help="start a local web server to browse rows in the browser",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8888,
+        help="port for --serve (default: 8888)",
+    )
+    parser.add_argument(
+        "--host",
+        type=str,
+        default="127.0.0.1",
+        help="bind address for --serve (default: 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default="auto",
+        help="render mode for --serve: auto, generic, raw, sdd (default: auto)",
+    )
+    parser.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="do not open browser when --serve starts",
+    )
+    parser.add_argument(
+        "--ext",
+        type=str,
+        default="**/*.jsonl",
+        help="glob pattern for folder-based --serve (default: **/*.jsonl)",
+    )
     return parser
 
 
@@ -104,6 +138,33 @@ def _detect_subcommand(argv: list[str]) -> tuple[str | None, list[str]]:
             return token, argv[:i] + argv[i + 1 :]
         return None, argv
     return None, argv
+
+
+def _serve_glob_dir(path: Path, args: argparse.Namespace) -> int:
+    """Serve a folder by globbing for JSONL files and showing a file picker."""
+    from .serve import serve as _serve
+
+    try:
+        glob_source = JsonlGlobRowSource.from_path(path, pattern=args.ext)
+    except ValueError as exc:
+        _build_auto_parser().error(str(exc))
+        return 2
+
+    print(f"  Found {len(glob_source.files)} files in {path}/{args.ext}", file=sys.stderr)
+
+    # Pre-select first file as the initial source (the handler shows picker anyway)
+    from ._shared import JsonlRowSource
+
+    initial = JsonlRowSource.from_path(glob_source.files[0])
+
+    return _serve(
+        initial,
+        host=args.host,
+        port=args.port,
+        mode=args.mode,
+        open_browser=not args.no_browser,
+        glob_source=glob_source,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -154,8 +215,24 @@ def main(argv: list[str] | None = None) -> int:
             sub_argv.append("--plain")
         if args.sample is not None:
             sub_argv += ["--sample", str(args.sample)]
+        if args.serve:
+            sub_argv.append("--serve")
+        if args.port != 8888:
+            sub_argv += ["--port", str(args.port)]
+        if args.host != "127.0.0.1":
+            sub_argv += ["--host", args.host]
+        if args.mode != "auto":
+            sub_argv += ["--mode", args.mode]
+        if args.no_browser:
+            sub_argv.append("--no-browser")
+        if args.ext != "**/*.jsonl":
+            sub_argv += ["--ext", args.ext]
         sub_argv.append(str(path))
         return main_hf_dataset(sub_argv)
+
+    # Folder + --serve: use glob source with file picker
+    if path.is_dir() and args.serve:
+        return _serve_glob_dir(path, args)
 
     sub_argv = []
     if args.index is not None:
@@ -164,6 +241,18 @@ def main(argv: list[str] | None = None) -> int:
         sub_argv.append("--plain")
     if args.sample is not None:
         sub_argv += ["--sample", str(args.sample)]
+    if args.serve:
+        sub_argv.append("--serve")
+    if args.port != 8888:
+        sub_argv += ["--port", str(args.port)]
+    if args.host != "127.0.0.1":
+        sub_argv += ["--host", args.host]
+    if args.mode != "auto":
+        sub_argv += ["--mode", args.mode]
+    if args.no_browser:
+        sub_argv.append("--no-browser")
+    if args.ext != "**/*.jsonl":
+        sub_argv += ["--ext", args.ext]
     sub_argv.append(str(path))
     return main_jsonl(sub_argv)
 

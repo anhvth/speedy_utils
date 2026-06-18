@@ -14,8 +14,21 @@ from typing import Any, Protocol, Sequence
 
 
 # Set locale to support UTF-8 in Curses
-with suppress(Exception):
-    locale.setlocale(locale.LC_ALL, "")
+_UTF8_LOCALES = ["", "C.UTF-8", "en_US.UTF-8", "en_US.utf8", "UTF-8"]
+_locale_set = False
+for _loc in _UTF8_LOCALES:
+    with suppress(locale.Error):
+        locale.setlocale(locale.LC_ALL, _loc)
+        _locale_set = True
+        break
+if not _locale_set:
+    # Last resort: try to force C.UTF-8 via environment override
+    import os as _os
+
+    _os.environ.setdefault("LC_ALL", "C.UTF-8")
+    _os.environ.setdefault("LC_CTYPE", "C.UTF-8")
+    with suppress(locale.Error):
+        locale.setlocale(locale.LC_ALL, "C.UTF-8")
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +128,68 @@ class JsonDirRowSource:
 
     def reload(self) -> None:
         self.files = build_json_dir_index(self.path)
+
+
+@dataclass
+class JsonlGlobRowSource:
+    """RowSource backed by a folder globbed recursively for JSONL files.
+
+    This is used in --serve mode when a folder path is given.  The source
+    tracks a *list* of JSONL files and serves whichever one the user picks.
+    """
+
+    path: Path
+    pattern: str
+    files: list[Path] = field(default_factory=list)
+    _active_source: JsonlRowSource | None = None
+    _active_idx: int = 0
+
+    @classmethod
+    def from_path(cls, path: Path, pattern: str = "**/*.jsonl") -> JsonlGlobRowSource:
+        files = sorted(path.glob(pattern))
+        if not files:
+            raise ValueError(f"no files matched pattern '{pattern}' in {path}")
+        return cls(path=path, pattern=pattern, files=files)
+
+    @property
+    def file_list(self) -> list[Path]:
+        return self.files
+
+    @property
+    def display_path(self) -> str:
+        if self._active_source is not None:
+            return self._active_source.display_path
+        return f"{self.path}/{self.pattern}"
+
+    @property
+    def total_rows(self) -> int:
+        if self._active_source is not None:
+            return self._active_source.total_rows
+        return 0
+
+    def select_file(self, index: int) -> JsonlRowSource:
+        """Select a file by index in the globbed file list."""
+        if not 0 <= index < len(self.files):
+            raise ValueError(f"file index {index} out of range (0..{len(self.files) - 1})")
+        self._active_idx = index
+        self._active_source = JsonlRowSource.from_path(self.files[index])
+        return self._active_source
+
+    def load_row(self, index: int) -> Any:
+        if self._active_source is None:
+            raise RuntimeError("no file selected in JsonlGlobRowSource")
+        return self._active_source.load_row(index)
+
+    def reload(self) -> None:
+        self.files = sorted(self.path.glob(self.pattern))
+        if self._active_source is not None and self._active_idx < len(self.files):
+            self._active_source = JsonlRowSource.from_path(self.files[self._active_idx])
+        else:
+            self._active_source = None
+
+    def refresh(self) -> None:
+        """Re-glob the directory for new files (called periodically by serve background thread)."""
+        self.files = sorted(self.path.glob(self.pattern))
 
 
 @dataclass
@@ -277,14 +352,58 @@ def _wrap_scalar(value: Any, text_width: int) -> list[str]:
         if not physical:
             result.append("")
             continue
-        wrapped = textwrap.wrap(
-            physical,
-            width=text_width,
+        # Use display-width-aware wrapping so CJK wide chars don't
+        # overflow the terminal column budget.  textwrap.wrap counts
+        # code points, which undercounts wide characters.
+        wrapped = _wrap_text_display_width(physical, width=text_width) or [""]
+        result.extend(wrapped)
+    return result or [""]
+
+
+def _wrap_text_display_width(text: str, width: int) -> list[str]:
+    """Wrap *text* to *width* display columns, breaking on word
+    boundaries when possible."""
+    if _display_width(text) <= width:
+        return [text]
+    # Fast path: all narrow characters → delegate to textwrap.wrap
+    if all(_east_asian_width(ch) not in ("W", "F") for ch in text):
+        return textwrap.wrap(
+            text,
+            width=width,
             break_long_words=True,
             break_on_hyphens=False,
         ) or [""]
-        result.extend(wrapped)
-    return result or [""]
+    # Fallback: greedy display-width wrapping
+    lines: list[str] = []
+    i = 0
+    while i < len(text):
+        # Try to take a full line
+        line_width = 0
+        j = i
+        last_break = i
+        while j < len(text) and line_width <= width:
+            ch_w = 2 if _east_asian_width(text[j]) in ("W", "F") else 1
+            if line_width + ch_w > width:
+                break
+            line_width += ch_w
+            j += 1
+            if j < len(text) and text[j - 1] in (" ", "\t"):
+                last_break = j
+        # If we couldn't advance at all, force at least one char
+        if j == i:
+            j = i + 1
+        else:
+            # Prefer breaking at last word boundary if it gives a
+            # reasonable line length (at least half the width)
+            if (
+                last_break > i
+                and last_break < j
+                and _display_width(text[i:last_break]) >= width // 2
+            ):
+                j = last_break
+        lines.append(text[i:j])
+        i = j
+    return lines
 
 
 def build_nodes(
@@ -368,6 +487,43 @@ def all_scalar_paths(value: Any) -> list[tuple]:
 
     visit(value, ())
     return out
+
+
+# ---------------------------------------------------------------------------
+# Display-width helper
+# ---------------------------------------------------------------------------
+
+
+def _display_width(text: str) -> int:
+    """Return the terminal display width of *text*.
+
+    Most Latin, Vietnamese precomposed, and CJK wide characters are
+    accounted for.  Zero-width and combining characters contribute 0.
+    """
+    w = 0
+    for ch in text:
+        ea = _east_asian_width(ch)
+        if ea in ("W", "F"):
+            w += 2
+        elif ea in ("Na", "H", "N", "A"):
+            w += 1
+        # else: zero-width (Mn, Mc, Me, Cf, Zl, Zp, Cc, Cs, Co, Cn)
+    return w
+
+
+# Cache for east-asian-width lookups (unicodedata calls are not free in tight loops)
+_EA_CACHE: dict[str, str] = {}
+
+
+def _east_asian_width(ch: str) -> str:
+    """Cached unicodedata.east_asian_width."""
+    try:
+        return _EA_CACHE[ch]
+    except KeyError:
+        import unicodedata
+
+        _EA_CACHE[ch] = unicodedata.east_asian_width(ch)
+        return _EA_CACHE[ch]
 
 
 # ---------------------------------------------------------------------------
@@ -455,6 +611,11 @@ def scalar_segments(value: Any) -> list[Segment]:
 
 
 def clip_line(line: Line, width: int) -> Line:
+    """Clip *line* to at most *width* terminal columns.
+
+    Uses display width so that CJK wide characters are counted as 2
+    columns and zero-width combining characters contribute 0.
+    """
     if width <= 0:
         return []
     used = 0
@@ -462,19 +623,42 @@ def clip_line(line: Line, width: int) -> Line:
     for text, attr in line:
         if used >= width:
             break
+        text_w = _display_width(text)
         remaining = width - used
-        if len(text) <= remaining:
+        if text_w <= remaining:
             out.append((text, attr))
-            used += len(text)
+            used += text_w
         else:
-            if remaining <= 1:
-                out.append(("…", CP_PUNCT))
-                used += 1
-            else:
-                out.append((text[: remaining - 1] + "…", attr))
-                used = width
+            # Need to truncate text to fit remaining columns.
+            # Walk character by character so we don't slice a
+            # combining sequence in the middle.
+            truncated, tw = _truncate_to_width(text, remaining)
+            if tw <= 0:
+                continue
+            out.append((truncated, attr))
+            used += tw
             break
     return out
+
+
+def _truncate_to_width(text: str, max_width: int) -> tuple[str, int]:
+    """Return (prefix, display_width) fitting within *max_width* columns.
+
+    If truncation is needed an ellipsis is appended, but only when it
+    fits within the budget (at least 2 columns available).  Otherwise
+    returns as many chars as possible without the ellipsis marker.
+    """
+    w = 0
+    for i, ch in enumerate(text):
+        ch_w = 2 if _east_asian_width(ch) in ("W", "F") else 1
+        if w + ch_w > max_width:
+            # Truncated mid-string.  See if we can append an ellipsis.
+            if i > 0 and w + 1 <= max_width:
+                return text[:i] + "…", w + 1
+            # Not enough room for ellipsis, just return what fits.
+            return text[:i], w
+        w += ch_w
+    return text, w
 
 
 # ---------------------------------------------------------------------------
@@ -682,8 +866,27 @@ def init_colors() -> None:
 
 
 def addstr_safe(stdscr, y: int, x: int, text: str, attr: int = 0) -> None:
-    with suppress(curses.error):
+    """Write *text* to *stdscr* at (y, x).
+
+    Falls back to ASCII-safe rendering when the terminal locale cannot
+    represent the full Unicode text, transliterating to closest ASCII
+    so that Vietnamese (and other non-Latin) scripts remain at least
+    readable rather than silently disappearing.
+    """
+    try:
         stdscr.addstr(y, x, text, attr)
+    except curses.error:
+        # Terminal cannot render the raw Unicode text.  Fall back to
+        # ASCII-safe representation so the user still sees something.
+        try:
+            safe = text.encode("ascii", errors="replace").decode("ascii")
+            # skip degenerate output (e.g. 90% replacement chars)
+            if safe.count("?") / max(len(safe), 1) < 0.5:
+                stdscr.addstr(y, x, safe, attr)
+            # else: truly cannot render; leave cell blank rather than
+            # flooding with question marks
+        except curses.error:
+            pass
 
 
 def draw(stdscr, app: AppState) -> None:
@@ -751,7 +954,7 @@ def draw(stdscr, app: AppState) -> None:
             if pair and curses.has_colors() and idx not in app.matches:
                 attr |= curses.color_pair(pair)
             addstr_safe(stdscr, row, x, text, attr)
-            x += len(text)
+            x += _display_width(text)
 
     footer = app.status or default_footer(app)
     addstr_safe(
@@ -804,7 +1007,7 @@ def prompt(stdscr, prefix: str) -> str:
                     if result_chars:
                         result_chars.pop()
                         curr_y, curr_x = stdscr.getyx()
-                        if curr_x > len(prefix):
+                        if curr_x > _display_width(prefix):
                             stdscr.move(curr_y, curr_x - 1)
                             stdscr.delch()
                     continue
@@ -818,7 +1021,7 @@ def prompt(stdscr, prefix: str) -> str:
     except Exception:
         # Fallback to getstr if get_wch fails or isn't available
         try:
-            result = stdscr.getstr(height - 1, len(prefix), 256).decode(
+            result = stdscr.getstr(height - 1, _display_width(prefix), 256).decode(
                 "utf-8", errors="replace"
             )
         except Exception:
@@ -850,6 +1053,7 @@ def yank_node(view: RowView, out_path: Path) -> str:
         osc52_copy(pretty)
     label = "/".join(str(p) for p in node.path) or "<root>"
     return f"yanked {label} -> {out_path}"
+
 
 def smart_expand(view: RowView, screen_height: int) -> None:
     view.expanded = set(all_container_paths(view.value))
@@ -1091,6 +1295,34 @@ def build_common_parser(
             "Efficient: only the viewed row is loaded from disk."
         ),
     )
+    parser.add_argument(
+        "--serve",
+        action="store_true",
+        help="start a local web server to browse rows in the browser",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8888,
+        help="port for --serve (default: 8888)",
+    )
+    parser.add_argument(
+        "--host",
+        type=str,
+        default="127.0.0.1",
+        help="bind address for --serve (default: 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default="auto",
+        help="render mode for --serve: auto, generic, raw, sdd (default: auto)",
+    )
+    parser.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="do not open browser when --serve starts",
+    )
     return parser
 
 
@@ -1101,9 +1333,26 @@ def run_source_cli(
     plain: bool,
     prog: str,
     sample: int | None = None,
+    serve: bool = False,
+    port: int = 8888,
+    host: str = "127.0.0.1",
+    mode: str = "auto",
+    open_browser: bool = True,
 ) -> int:
     if source.total_rows <= 0:
         parser.error(f"{source.display_path} has no rows")
+
+    # --serve: start web server
+    if serve:
+        from .serve import serve as _serve
+
+        return _serve(
+            source,
+            host=host,
+            port=port,
+            mode=mode,
+            open_browser=open_browser,
+        )
 
     # --sample: pre-draw N random indices without loading any row data.
     # random.sample(range(N), k) is O(k) and never materialises the full range.
@@ -1146,11 +1395,48 @@ def run_source_cli(
 # ---------------------------------------------------------------------------
 
 
+def _run_glob_serve(
+    parser: argparse.ArgumentParser,
+    path: Path,
+    args: argparse.Namespace,
+) -> int:
+    """Serve a folder by globbing for JSONL files with a file picker."""
+    from .serve import serve as _serve
+
+    try:
+        glob_source = JsonlGlobRowSource.from_path(path, pattern=args.ext)
+    except ValueError as exc:
+        parser.error(str(exc))
+        return 2
+
+    print(
+        f"  Found {len(glob_source.files)} files in {path}/{args.ext}",
+        file=sys.stderr,
+    )
+
+    initial = JsonlRowSource.from_path(glob_source.files[0])
+
+    return _serve(
+        initial,
+        host=args.host,
+        port=args.port,
+        mode=args.mode,
+        open_browser=not args.no_browser,
+        glob_source=glob_source,
+    )
+
+
 def main_jsonl(argv: Sequence[str] | None = None) -> int:
     parser = build_common_parser(
         prog="pcat-jsonl",
         description="Pretty interactive viewer for JSONL files or folders of JSON files (vim-style nav).",
         path_help="path to a .jsonl file or a directory of .json files",
+    )
+    parser.add_argument(
+        "--ext",
+        type=str,
+        default="**/*.jsonl",
+        help="glob pattern for folder-based --serve (default: **/*.jsonl)",
     )
     args = parser.parse_args(argv)
     if args.path is None:
@@ -1159,6 +1445,10 @@ def main_jsonl(argv: Sequence[str] | None = None) -> int:
     path = args.path.expanduser()
     if not path.exists():
         parser.error(f"path not found: {path}")
+
+    # Folder + --serve with --ext: use glob source + file picker
+    if path.is_dir() and args.serve:
+        return _run_glob_serve(parser, path, args)
 
     if path.is_dir():
         source = JsonDirRowSource.from_path(path)
@@ -1170,7 +1460,19 @@ def main_jsonl(argv: Sequence[str] | None = None) -> int:
         source = JsonlRowSource.from_path(path)
         if source.total_rows <= 0:
             parser.error(f"{path} has no non-empty JSONL rows")
-    return run_source_cli(parser, source, args.index, args.plain, prog="pcat-jsonl", sample=args.sample)
+    return run_source_cli(
+        parser,
+        source,
+        args.index,
+        args.plain,
+        prog="pcat-jsonl",
+        sample=args.sample,
+        serve=args.serve if hasattr(args, "serve") else False,
+        port=args.port if hasattr(args, "port") else 8888,
+        host=args.host if hasattr(args, "host") else "127.0.0.1",
+        mode=args.mode if hasattr(args, "mode") else "auto",
+        open_browser=not args.no_browser if hasattr(args, "no_browser") else True,
+    )
 
 
 def main_hf_dataset(argv: Sequence[str] | None = None) -> int:
@@ -1200,5 +1502,15 @@ def main_hf_dataset(argv: Sequence[str] | None = None) -> int:
     if source.total_rows <= 0:
         parser.error(f"{source.display_path} has no rows")
     return run_source_cli(
-        parser, source, args.index, args.plain, prog="pcat-hf-dataset", sample=args.sample
+        parser,
+        source,
+        args.index,
+        args.plain,
+        prog="pcat-hf-dataset",
+        sample=args.sample,
+        serve=args.serve if hasattr(args, "serve") else False,
+        port=args.port if hasattr(args, "port") else 8888,
+        host=args.host if hasattr(args, "host") else "127.0.0.1",
+        mode=args.mode if hasattr(args, "mode") else "auto",
+        open_browser=not args.no_browser if hasattr(args, "no_browser") else True,
     )
