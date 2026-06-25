@@ -44,6 +44,18 @@ cd speedy_utils
 uv sync
 ```
 
+Install the repo's AI skill definitions locally:
+
+```bash
+./setup-skill.sh
+```
+
+Or bootstrap them directly from GitHub:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/anhvth/speedy_utils/master/setup-speedy-utils.sh | bash
+```
+
 Upgrading from older split packages:
 
 ```bash
