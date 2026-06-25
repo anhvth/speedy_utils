@@ -621,22 +621,26 @@ class _PrefixedWriter:
     def __init__(self, stream, prefix: str):
         self._stream = stream
         self._prefix = prefix
-        self._at_line_start = True
+        self._buffer = ""
 
     def write(self, s):
         if not s:
             return 0
-        total = 0
-        for chunk in s.splitlines(True):
-            if self._at_line_start:
-                self._stream.write(self._prefix)
-                total += len(self._prefix)
-            self._stream.write(chunk)
-            total += len(chunk)
-            self._at_line_start = chunk.endswith("\n")
-        return total
+
+        self._buffer += s
+        while True:
+            newline_idx = self._buffer.find("\n")
+            if newline_idx == -1:
+                break
+            line = self._buffer[: newline_idx + 1]
+            self._stream.write(f"{self._prefix}{line}")
+            self._buffer = self._buffer[newline_idx + 1 :]
+        return len(s)
 
     def flush(self):
+        if self._buffer:
+            self._stream.write(f"{self._prefix}{self._buffer}")
+            self._buffer = ""
         self._stream.flush()
 
 

@@ -8,6 +8,7 @@ import pytest
 import speedy_utils.multi_worker.thread as thread_mod
 from speedy_utils.multi_worker.thread import (
     SPEEDY_RUNNING_THREADS,
+    _chunk_items_for_processes,
     _prune_dead_threads,
     kill_all_thread,
     multi_thread,
@@ -22,6 +23,26 @@ def _sleepy(x, delay=0.001):
     """Tiny deterministic sleep to keep threads busy but tests fast."""
     time.sleep(delay)
     return x
+
+
+def _identity_for_process_progress(x):
+    return x
+
+
+class _FakeTqdm:
+    instances = []
+
+    def __init__(self, *args, **kwargs):
+        self.total = kwargs.get('total')
+        self.n = 0
+        self.closed = False
+        self.__class__.instances.append(self)
+
+    def update(self, value):
+        self.n += value
+
+    def close(self):
+        self.closed = True
 
 
 # ────────────────────────────────────────────────────────────
@@ -45,6 +66,46 @@ def test_workers_default_safe_limit(monkeypatch):
     monkeypatch.delenv('SPEEDY_UTILS_MAX_WORKERS', raising=False)
     monkeypatch.setattr(thread_mod.os, 'cpu_count', lambda: 256)
     assert thread_mod._safe_worker_limit() == 2048
+
+
+def test_multi_thread_n_proc_chunks_at_most_requested_processes():
+    items = list(range(1000))
+
+    chunks = _chunk_items_for_processes(items, 64)
+
+    assert len(chunks) == 64
+    assert [item for chunk in chunks for item in chunk] == items
+    sizes = [len(chunk) for chunk in chunks]
+    assert max(sizes) - min(sizes) <= 1
+
+
+def test_multi_thread_n_proc_chunks_do_not_exceed_item_count():
+    items = list(range(5))
+
+    chunks = _chunk_items_for_processes(items, 64)
+
+    assert len(chunks) == len(items)
+    assert [item for chunk in chunks for item in chunk] == items
+
+
+def test_multi_thread_n_proc_progress_reports_global_item_count(monkeypatch):
+    _FakeTqdm.instances = []
+    monkeypatch.setattr(thread_mod, 'tqdm', _FakeTqdm)
+    items = list(range(10))
+
+    out = multi_thread(
+        _identity_for_process_progress,
+        items,
+        workers=1,
+        n_proc=4,
+        progress=True,
+    )
+
+    assert out == items
+    assert len(_FakeTqdm.instances) == 1
+    assert _FakeTqdm.instances[0].total == len(items)
+    assert _FakeTqdm.instances[0].n == len(items)
+    assert _FakeTqdm.instances[0].closed
 
 
 # ────────────────────────────────────────────────────────────

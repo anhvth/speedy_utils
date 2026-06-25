@@ -316,3 +316,24 @@ def test_system_prompt_none_does_not_crash() -> None:
         messages.append({"role": "system", "content": system_prompt})
 
     assert messages == [{"role": "system", "content": "You are helpful"}]
+
+
+def test_launch_chainlit_cwd(monkeypatch) -> None:
+    import subprocess
+    from unittest.mock import MagicMock
+    from llm_utils.scripts.sp_chat import _launch_chainlit, ChatConfig
+    import llm_utils.scripts.sp_chat
+
+    mock_run = MagicMock()
+    mock_run.return_value.returncode = 0
+    monkeypatch.setattr(subprocess, "run", mock_run)
+    monkeypatch.setattr(llm_utils.scripts.sp_chat, "_list_models_sync", lambda *args, **kwargs: ([], None))
+
+    config = ChatConfig(app_port=12345)
+    _launch_chainlit(config)
+
+    assert mock_run.called
+    kwargs = mock_run.call_args[1]
+    assert "cwd" in kwargs
+    assert kwargs["cwd"].endswith("12345")
+

@@ -660,7 +660,7 @@ def _launch_chainlit(config: ChatConfig) -> int:
     )
     print(f"Chat UI → http://{host_display}:{config.app_port}")
 
-    return subprocess.run(cmd, env=env, check=False).returncode
+    return subprocess.run(cmd, env=env, cwd=app_root, check=False).returncode
 
 
 def main() -> int:

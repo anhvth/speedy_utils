@@ -611,13 +611,17 @@ def _run_multi_process_fanout(
     if not items:
         return []
 
-    n_per_proc = max(len(items) // n_proc, 1)
-    chunks = [items[i : i + n_per_proc] for i in range(0, len(items), n_per_proc)]
+    worker_count = _resolve_worker_count(workers)
+    process_chunk_size = max(worker_count * batch, 1)
+    chunks = [
+        items[i : i + process_chunk_size]
+        for i in range(0, len(items), process_chunk_size)
+    ]
     in_process_multi_thread = threaded(process=True)(multi_thread)
     results: list[R | None] = []
-    processes: list[tuple[Any, str]] = []
+    processes: list[tuple[int, Any, str, int]] = []
 
-    for proc_idx, chunk in enumerate(chunks):
+    def start_process(proc_idx: int, chunk: list[T]) -> tuple[int, Any, str, int]:
         with tempfile.NamedTemporaryFile(delete=False, suffix='multi_thread.pkl') as fh:
             file_pkl = fh.name
         assert isinstance(in_process_multi_thread, Callable)
@@ -627,7 +631,7 @@ def _run_multi_process_fanout(
             workers=workers,
             batch=batch,
             ordered=ordered,
-            progress=progress and proc_idx == 0,
+            progress=False,
             progress_update=progress_update,
             prefetch_factor=prefetch_factor,
             timeout=timeout,
@@ -637,20 +641,83 @@ def _run_multi_process_fanout(
             store_output_pkl_file=file_pkl,
             **fixed_kwargs,
         )
-        processes.append((proc, file_pkl))
+        return proc_idx, proc, file_pkl, len(chunk)
 
-    for proc, file_pkl in processes:
-        proc.join()
-        logger.info('process finished: {}', proc)
+    proc_results: dict[int, list[R | None]] = {}
+    finished_order: list[int] = []
+    chunk_iter = iter(enumerate(chunks))
+    remaining: list[tuple[int, Any, str, int]] = []
+    progress_bar = None
+    if progress and tqdm is not None:
+        progress_bar = tqdm(total=len(items), colour='green')
+
+    try:
         try:
-            results.extend(load_by_ext(file_pkl))
-        finally:
-            try:
-                os.unlink(file_pkl)
-            except OSError as exc:  # pragma: no cover - best effort cleanup
-                logger.warning('failed to remove temp file {}: {}', file_pkl, exc)
+            while len(remaining) < n_proc:
+                proc_idx, chunk = next(chunk_iter)
+                remaining.append(start_process(proc_idx, chunk))
+        except StopIteration:
+            pass
+
+        while remaining:
+            progressed = False
+            for entry in list(remaining):
+                proc_idx, proc, file_pkl, logical_size = entry
+                if proc.is_alive():
+                    continue
+
+                proc.join()
+                logger.trace('process finished: {}', proc)
+                try:
+                    proc_results[proc_idx] = load_by_ext(file_pkl)
+                finally:
+                    try:
+                        os.unlink(file_pkl)
+                    except OSError as exc:  # pragma: no cover - best effort cleanup
+                        logger.warning(
+                            'failed to remove temp file {}: {}', file_pkl, exc
+                        )
+                if progress_bar is not None:
+                    progress_bar.update(logical_size)
+                finished_order.append(proc_idx)
+                remaining.remove(entry)
+                progressed = True
+
+                try:
+                    next_proc_idx, next_chunk = next(chunk_iter)
+                    remaining.append(start_process(next_proc_idx, next_chunk))
+                except StopIteration:
+                    pass
+
+            if not progressed:
+                time.sleep(0.1)
+    finally:
+        if progress_bar is not None:
+            progress_bar.close()
+
+    result_order = range(len(chunks)) if ordered else finished_order
+    for proc_idx in result_order:
+        results.extend(proc_results.get(proc_idx, []))
 
     return results
+
+
+def _chunk_items_for_processes(items: list[T], n_proc: int) -> list[list[T]]:
+    if n_proc <= 0:
+        raise ValueError('n_proc must be a positive integer')
+    if not items:
+        return []
+
+    proc_count = min(n_proc, len(items))
+    base, extra = divmod(len(items), proc_count)
+    chunks: list[list[T]] = []
+    start = 0
+    for proc_idx in range(proc_count):
+        size = base + (1 if proc_idx < extra else 0)
+        end = start + size
+        chunks.append(items[start:end])
+        start = end
+    return chunks
 
 
 def _input_value_for_error(items_list: list[Any] | None, idx: int) -> Any:

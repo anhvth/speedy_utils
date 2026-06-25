@@ -1,11 +1,13 @@
 """Tests for multi_process progress and error behavior."""
 
+from io import StringIO
 import queue
 import time
 from unittest.mock import MagicMock, patch
 
 from speedy_utils.multi_worker.process import multi_process
 from speedy_utils.multi_worker import _multi_process as mp_mod
+from speedy_utils.multi_worker.common import _PrefixedWriter
 
 
 # Test helper functions for multiprocessing
@@ -72,6 +74,42 @@ def test_sequential_backend_basic_map():
 
     # Check results
     assert result == test_input
+
+
+def test_prefixed_writer_coalesces_fragmented_writes_into_one_prefixed_line():
+    stream = StringIO()
+    writer = _PrefixedWriter(stream, "[worker-123] ")
+
+    writer.write("[transformers] ")
+    writer.write("PyTorch was not found. ")
+    writer.write("Models won't be available.\n")
+    writer.flush()
+
+    assert (
+        stream.getvalue()
+        == "[worker-123] [transformers] PyTorch was not found. Models won't be available.\n"
+    )
+
+
+def test_prefixed_writer_prefixes_each_completed_line_once():
+    stream = StringIO()
+    writer = _PrefixedWriter(stream, "[worker-123] ")
+
+    writer.write("alpha\nbeta\n")
+    writer.flush()
+
+    assert stream.getvalue() == "[worker-123] alpha\n[worker-123] beta\n"
+
+
+def test_prefixed_writer_flushes_unterminated_line_once():
+    stream = StringIO()
+    writer = _PrefixedWriter(stream, "[worker-123] ")
+
+    writer.write("partial")
+    writer.write(" line")
+    writer.flush()
+
+    assert stream.getvalue() == "[worker-123] partial line"
 
 
 class _FakeTqdm:
