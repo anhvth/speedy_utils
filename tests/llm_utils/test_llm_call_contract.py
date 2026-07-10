@@ -509,6 +509,47 @@ class TestLLMCallContract(TestCase):
         mock_client.models.list.assert_called_once()
 
     @patch("llm_utils.lm.llm.get_base_client")
+    def test_init_prefers_current_inference_model_from_models_metadata(
+        self, mock_get_client
+    ):
+        mock_client = MagicMock()
+        mock_client.models.list.return_value = SimpleNamespace(
+            data=[
+                SimpleNamespace(id="base", active=False, loaded=False),
+                SimpleNamespace(id="inactive-policy", active=False, loaded=False),
+                SimpleNamespace(id="active-policy", active=True, loaded=True),
+            ],
+            current_inference_model={
+                "model": "active-policy",
+                "role": "policy",
+                "loaded": True,
+            },
+        )
+        mock_get_client.return_value = mock_client
+
+        llm = LLM()
+
+        self.assertEqual(llm.model, "active-policy")
+
+    @patch("llm_utils.lm.llm.get_base_client")
+    def test_init_prefers_active_model_when_current_metadata_is_missing(
+        self, mock_get_client
+    ):
+        mock_client = MagicMock()
+        mock_client.models.list.return_value = SimpleNamespace(
+            data=[
+                {"id": "base", "active": False, "loaded": False},
+                {"id": "inactive-policy", "active": False, "loaded": False},
+                {"id": "active-policy", "active": True, "loaded": True},
+            ]
+        )
+        mock_get_client.return_value = mock_client
+
+        llm = LLM()
+
+        self.assertEqual(llm.model, "active-policy")
+
+    @patch("llm_utils.lm.llm.get_base_client")
     def test_call_streams_from_chat_api(self, mock_get_client):
         mock_client = self._make_mock_client()
         mock_get_client.return_value = mock_client

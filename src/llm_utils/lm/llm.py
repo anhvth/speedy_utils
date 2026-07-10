@@ -215,6 +215,49 @@ def _parse_with_warnings(
         )
 
 
+def _response_attr(obj: Any, key: str, default: Any = None) -> Any:
+    """Read fields from dicts, OpenAI models, or simple test doubles."""
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    value = getattr(obj, key, default)
+    if value is not default:
+        return value
+    model_extra = getattr(obj, "model_extra", None)
+    if isinstance(model_extra, dict):
+        return model_extra.get(key, default)
+    return default
+
+
+def _model_id(model: Any) -> str | None:
+    model_id = _response_attr(model, "id")
+    if isinstance(model_id, str) and model_id:
+        return model_id
+    return None
+
+
+def _select_default_model_id(models_response: Any) -> str:
+    """Choose the model callers should use when the endpoint exposes metadata."""
+    current_inference_model = _response_attr(models_response, "current_inference_model")
+    current_model = _response_attr(current_inference_model, "model")
+    if isinstance(current_model, str) and current_model:
+        return current_model
+
+    models = list(_response_attr(models_response, "data", []) or [])
+    for preferred_key in ("active", "loaded"):
+        for model in models:
+            if _response_attr(model, preferred_key) is True:
+                model_id = _model_id(model)
+                if model_id:
+                    return model_id
+
+    for model in models:
+        model_id = _model_id(model)
+        if model_id:
+            return model_id
+
+    raise RuntimeError("No models available.")
+
+
 class LLM:
     """LLM task with runtime response-model selection."""
 
@@ -353,11 +396,13 @@ class LLM:
         primary_models = primary_models_response.data
 
         if verbose:
-            available_models = [model.id for model in primary_models]
+            available_models = [_model_id(model) for model in primary_models]
             logger.info(f"Available models: {available_models}")
 
         if not self.model_kwargs.get("model", ""):
-            self.model_kwargs["model"] = primary_models[0].id
+            self.model_kwargs["model"] = _select_default_model_id(
+                primary_models_response
+            )
 
         self._multiple_clients = len(self._alive_clients) > 1
         self._client_balance_lock = threading.Lock()

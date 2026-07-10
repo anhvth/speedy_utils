@@ -37,7 +37,7 @@ Supported key=value args:
 """
 
 DEFAULT_MAX_TOKENS = 4096
-DEFAULT_TEMPERATURE = 0.7
+DEFAULT_TEMPERATURE: float | None = None
 DEFAULT_SYSTEM_PROMPT = ""
 DEFAULT_API_KEY = "abc"
 SUPPORTED_TEXT_ATTACHMENT_MIMES = {
@@ -422,6 +422,57 @@ def _list_models_sync(
         return [], str(exc)
 
 
+def _chat_settings_defaults(
+    *,
+    model_options: list[str],
+    initial_model: str | None,
+    enable_thinking_default: bool,
+) -> dict[str, Any]:
+    if model_options:
+        model = (
+            initial_model
+            if initial_model and initial_model in model_options
+            else model_options[0]
+        )
+    else:
+        model = initial_model or "default"
+
+    return {
+        "model": model,
+        "temperature": DEFAULT_TEMPERATURE,
+        "max_tokens": DEFAULT_MAX_TOKENS,
+        "system_prompt": DEFAULT_SYSTEM_PROMPT,
+        "thinking": enable_thinking_default,
+    }
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    return float(value)
+
+
+def _chat_completion_kwargs(
+    *,
+    model: str,
+    messages: list[dict[str, Any]],
+    temperature: Any,
+    max_tokens: int,
+) -> dict[str, Any]:
+    call_kwargs = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "stream": True,
+    }
+    temperature_value = _optional_float(temperature)
+    if temperature_value is not None:
+        call_kwargs["temperature"] = temperature_value
+    return call_kwargs
+
+
 def _setup_chainlit():
     import chainlit as cl
     from chainlit.input_widget import Select, Slider, Switch, TextInput
@@ -436,6 +487,17 @@ def _setup_chainlit():
 
     @cl.on_chat_start
     async def start():
+        cl.user_session.set("client", client)
+        if initial_model:
+            cl.user_session.set(
+                "settings",
+                _chat_settings_defaults(
+                    model_options=[initial_model],
+                    initial_model=initial_model,
+                    enable_thinking_default=enable_thinking_default,
+                ),
+            )
+
         models, error = await _list_models_async(client)
 
         if models:
@@ -457,13 +519,10 @@ def _setup_chainlit():
                     values=model_options,
                     initial_index=default_idx,
                 ),
-                Slider(
+                TextInput(
                     id="temperature",
                     label="Temperature",
-                    initial=DEFAULT_TEMPERATURE,
-                    min=0,
-                    max=2,
-                    step=0.05,
+                    initial="",
                 ),
                 Slider(
                     id="max_tokens",
@@ -488,7 +547,6 @@ def _setup_chainlit():
         ).send()
 
         cl.user_session.set("settings", settings)
-        cl.user_session.set("client", client)
         if error:
             # Keep startup clean (no hardcoded first message), only surface real errors.
             await cl.Message(
@@ -504,11 +562,21 @@ def _setup_chainlit():
         settings = cl.user_session.get("settings")
         aclient: AsyncOpenAI = cl.user_session.get("client")  # type: ignore[assignment]
 
-        assert settings is not None, "settings not initialized"
-        assert aclient is not None, "client not initialized"
+        if aclient is None:
+            aclient = client
+            cl.user_session.set("client", aclient)
+
+        if settings is None:
+            models, _error = await _list_models_async(aclient)
+            settings = _chat_settings_defaults(
+                model_options=models,
+                initial_model=initial_model,
+                enable_thinking_default=enable_thinking_default,
+            )
+            cl.user_session.set("settings", settings)
 
         model = settings["model"]
-        temperature = float(settings["temperature"])
+        temperature = settings["temperature"]
         max_tokens = int(settings["max_tokens"])
         system_prompt = settings["system_prompt"]
         enable_thinking = settings["thinking"]
@@ -518,13 +586,12 @@ def _setup_chainlit():
             messages.append({"role": "system", "content": system_prompt})
         messages.extend(_chainlit_context_to_openai(cl.chat_context.get()))
 
-        call_kwargs = {
-            "model": model,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "stream": True,
-        }
+        call_kwargs = _chat_completion_kwargs(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
         if enable_thinking:
             call_kwargs["extra_body"] = {
                 "chat_template_kwargs": {"enable_thinking": True}

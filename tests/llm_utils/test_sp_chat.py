@@ -8,6 +8,8 @@ from llm_utils.scripts.sp_chat import (
     ChatConfig,
     _archive_current_chat,
     _build_history_title,
+    _chat_completion_kwargs,
+    _chat_settings_defaults,
     _chainlit_context_to_openai,
     _openai_client_kwargs,
     _render_streaming_blocks,
@@ -27,6 +29,55 @@ def test_openai_client_kwargs_default_to_dummy_api_key() -> None:
     kwargs = _openai_client_kwargs("http://localhost:8000/v1", None)
 
     assert kwargs == {"base_url": "http://localhost:8000/v1", "api_key": "abc"}
+
+
+def test_chat_settings_defaults_seed_message_handler_before_ui_settings() -> None:
+    settings = _chat_settings_defaults(
+        model_options=["Qwen3.5-122B-A10B"],
+        initial_model=None,
+        enable_thinking_default=True,
+    )
+
+    assert settings == {
+        "model": "Qwen3.5-122B-A10B",
+        "temperature": DEFAULT_TEMPERATURE,
+        "max_tokens": DEFAULT_MAX_TOKENS,
+        "system_prompt": "",
+        "thinking": True,
+    }
+
+
+def test_chat_settings_defaults_falls_back_to_initial_model() -> None:
+    settings = _chat_settings_defaults(
+        model_options=[],
+        initial_model="configured-model",
+        enable_thinking_default=False,
+    )
+
+    assert settings["model"] == "configured-model"
+    assert settings["thinking"] is False
+
+
+def test_chat_completion_kwargs_omits_default_temperature() -> None:
+    kwargs = _chat_completion_kwargs(
+        model="model",
+        messages=[{"role": "user", "content": "hello"}],
+        temperature=DEFAULT_TEMPERATURE,
+        max_tokens=128,
+    )
+
+    assert "temperature" not in kwargs
+
+
+def test_chat_completion_kwargs_keeps_explicit_temperature() -> None:
+    kwargs = _chat_completion_kwargs(
+        model="model",
+        messages=[{"role": "user", "content": "hello"}],
+        temperature="0.7",
+        max_tokens=128,
+    )
+
+    assert kwargs["temperature"] == 0.7
 
 
 def test_parse_cli_args_key_value_inputs() -> None:
@@ -336,4 +387,3 @@ def test_launch_chainlit_cwd(monkeypatch) -> None:
     kwargs = mock_run.call_args[1]
     assert "cwd" in kwargs
     assert kwargs["cwd"].endswith("12345")
-

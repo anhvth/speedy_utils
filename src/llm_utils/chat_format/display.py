@@ -4,6 +4,7 @@ import json
 from difflib import SequenceMatcher
 from typing import TYPE_CHECKING, Any
 
+
 # Lazy import IPython.display
 if TYPE_CHECKING:
     from IPython.display import HTML, display
@@ -206,12 +207,8 @@ def _build_assistant_content_parts(
     return None, str(content)
 
 
-def _show_chat_html(
-    messages: list[dict[str, Any]], max_reasoning_length: int | None
-) -> None:
-    """Display chat messages as HTML in notebook."""
-    from IPython.display import HTML, display
-
+def _chat_html(messages: list[dict[str, Any]], max_reasoning_length: int | None) -> str:
+    """Build chat messages HTML."""
     html_parts = [
         "<div style='font-family:monospace; line-height:1.6em; white-space:pre-wrap;'>"
     ]
@@ -251,7 +248,136 @@ def _show_chat_html(
             html_parts.append(separator)
 
     html_parts.append('</div>')
-    display(HTML(''.join(html_parts)))
+    return ''.join(html_parts)
+
+
+def _show_chat_html(
+    messages: list[dict[str, Any]], max_reasoning_length: int | None
+) -> None:
+    """Display chat messages as HTML in notebook."""
+    from IPython.display import HTML, display
+
+    display(HTML(_chat_html(messages, max_reasoning_length)))
+
+
+def _show_multi_conversations_html(
+    conversations: list[list[dict[str, Any]]],
+    max_reasoning_length: int | None,
+    titles: list[str] | None = None,
+) -> None:
+    """Display multiple conversations as CSS-only notebook tabs."""
+    from html import escape
+
+    from IPython.display import HTML, display
+
+    if not conversations:
+        display(HTML("<div>No conversations to display.</div>"))
+        return
+
+    tabs_id = f"llm-utils-chat-tabs-{id(conversations)}"
+    radios: list[str] = []
+    labels: list[str] = []
+    panels: list[str] = []
+    css_rules: list[str] = []
+
+    for i, messages in enumerate(conversations):
+        tab_id = f"{tabs_id}-tab-{i}"
+        checked = " checked" if i == 0 else ""
+        if titles is not None and i < len(titles):
+            title = titles[i]
+        else:
+            first_user = next(
+                (
+                    str(_message_value(msg, "content", ""))
+                    for msg in messages
+                    if str(_message_value(msg, "role", "")).lower() == "user"
+                ),
+                f"Conversation {i + 1}",
+            )
+            title = first_user[:42]
+
+        radios.append(
+            f'<input class="chat-tab-radio" type="radio" '
+            f'name="{tabs_id}" id="{tab_id}"{checked}>'
+        )
+        labels.append(
+            f'<label class="chat-tab-button" for="{tab_id}">'
+            f"{i + 1}. {escape(title)}</label>"
+        )
+        panels.append(
+            f'<section class="chat-tab-panel panel-{i}">'
+            f"{_chat_html(messages, max_reasoning_length)}</section>"
+        )
+        css_rules.append(
+            f"#{tab_id}:checked ~ .chat-tab-panels .panel-{i} "
+            "{ display: block; }"
+        )
+        css_rules.append(
+            f"#{tab_id}:checked ~ .chat-tab-buttons label[for='{tab_id}'] "
+            "{ background: #18181b; color: #fafafa; border-color: #18181b; }"
+        )
+
+    display(
+        HTML(
+            f"""
+<div id="{tabs_id}" class="llm-utils-chat-tabs">
+  {''.join(radios)}
+  <div class="chat-tab-buttons">{''.join(labels)}</div>
+  <div class="chat-tab-panels">{''.join(panels)}</div>
+</div>
+<style>
+  #{tabs_id} {{
+    font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }}
+  #{tabs_id} .chat-tab-radio {{
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+  }}
+  #{tabs_id} .chat-tab-buttons {{
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 0 0 10px;
+  }}
+  #{tabs_id} .chat-tab-button {{
+    border: 1px solid #d4d4d8;
+    background: #f4f4f5;
+    color: #27272a;
+    border-radius: 6px;
+    padding: 5px 8px;
+    cursor: pointer;
+    max-width: 280px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }}
+  #{tabs_id} .chat-tab-button:hover {{
+    background: #e4e4e7;
+  }}
+  #{tabs_id} .chat-tab-panel {{
+    display: none;
+  }}
+  {' '.join(css_rules)}
+</style>
+"""
+        )
+    )
+
+
+def _show_multi_conversations_terminal(
+    conversations: list[list[dict[str, Any]]],
+    max_reasoning_length: int | None,
+    titles: list[str] | None = None,
+) -> None:
+    """Display multiple conversations in terminal."""
+    for i, messages in enumerate(conversations):
+        title = titles[i] if titles is not None and i < len(titles) else None
+        header = title or f"Conversation {i + 1}"
+        print(f"{TERMINAL_BOLD}=== {header} ==={TERMINAL_RESET}")
+        _show_chat_terminal(messages, max_reasoning_length)
+        if i < len(conversations) - 1:
+            print()
 
 
 def _show_chat_terminal(
@@ -286,8 +412,24 @@ def _show_chat_terminal(
             print(separator)
 
 
+def _normalize_multi_conversations(
+    conversations: list[list[dict[str, Any]]] | list[dict[str, Any]],
+) -> list[list[dict[str, Any]]]:
+    """Normalize multi-conversation input."""
+    if not conversations:
+        return []
+    first = conversations[0]
+    if isinstance(first, dict):
+        return [conversations]  # type: ignore[list-item]
+    return conversations  # type: ignore[return-value]
+
+
 def show_chat(
-    messages: list[dict[str, Any]], max_reasoning_length: int | None = 2000
+    messages: list[dict[str, Any]] | list[list[dict[str, Any]]],
+    max_reasoning_length: int | None = 2000,
+    *,
+    mode: str = "single",
+    titles: list[str] | None = None,
 ) -> None:
     """
     Display chat messages with colored formatting.
@@ -296,8 +438,13 @@ def show_chat(
     Handles reasoning_content in assistant messages, formatting it with <think> tags.
 
     Args:
-        messages: List of message dicts with 'role', 'content', and optionally 'reasoning_content'
+        messages: List of message dicts with 'role', 'content', and optionally 'reasoning_content'.
+            For multi-conversation modes, pass a list of conversations, where each
+            conversation is a list of message dicts.
         max_reasoning_length: Max chars for reasoning before truncation (None = no limit)
+        mode: Display mode. Use "single" for one conversation or "multi-convs"
+            for tabbed multi-chat display in notebooks.
+        titles: Optional tab titles for multi-conversation modes.
 
     Example:
         >>> messages = [
@@ -307,10 +454,28 @@ def show_chat(
         ... ]
         >>> show_chat(messages)
     """
+    if mode == "multi-convs":
+        conversations = _normalize_multi_conversations(messages)
+        if _is_notebook():
+            _show_multi_conversations_html(
+                conversations, max_reasoning_length, titles=titles
+            )
+        else:
+            _show_multi_conversations_terminal(
+                conversations, max_reasoning_length, titles=titles
+        )
+        return
+
+    if mode != "single":
+        raise ValueError(
+            f"Unsupported show_chat mode: {mode!r}. "
+            "Use 'single' or 'multi-convs'."
+        )
+
     if _is_notebook():
-        _show_chat_html(messages, max_reasoning_length)
+        _show_chat_html(messages, max_reasoning_length)  # type: ignore[arg-type]
     else:
-        _show_chat_terminal(messages, max_reasoning_length)
+        _show_chat_terminal(messages, max_reasoning_length)  # type: ignore[arg-type]
 
 
 def get_conversation_one_turn(
@@ -401,7 +566,11 @@ def display_conversations(data1: Any, data2: Any) -> None:
 
 
 def display_chat_messages_as_html(
-    messages: list[dict[str, Any]], max_reasoning_length: int | None = 2000
+    messages: list[dict[str, Any]] | list[list[dict[str, Any]]],
+    max_reasoning_length: int | None = 2000,
+    *,
+    mode: str = "single",
+    titles: list[str] | None = None,
 ) -> None:
     """Deprecated alias for show_chat."""
     import warnings
@@ -411,7 +580,12 @@ def display_chat_messages_as_html(
         DeprecationWarning,
         stacklevel=2,
     )
-    return show_chat(messages, max_reasoning_length)
+    return show_chat(
+        messages,
+        max_reasoning_length,
+        mode=mode,
+        titles=titles,
+    )
 
 
 __all__ = [
