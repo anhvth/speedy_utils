@@ -341,7 +341,7 @@ class TestQwen3LLM(unittest.TestCase):
         self, mock_get_client
     ):
         mock_get_client.return_value = self._make_mock_client()
-        llm = Qwen3LLM(enable_thinking=False)
+        llm = Qwen3LLM(reasoning_mode="no-think")
 
         with patch.object(llm, "_generate_with_prefix_step") as mock_generate:
             state = llm.complete_reasoning(
@@ -450,7 +450,7 @@ class TestQwen3LLM(unittest.TestCase):
         self, mock_get_client
     ):
         mock_get_client.return_value = self._make_mock_client()
-        llm = Qwen3LLM(enable_thinking=False)
+        llm = Qwen3LLM(reasoning_mode="no-think")
         content_choice = self._make_completion_choice(
             "final answer",
             finish_reason="stop",
@@ -482,11 +482,11 @@ class TestQwen3LLM(unittest.TestCase):
         )
 
     @patch("llm_utils.lm.llm.get_base_client")
-    def test_chat_completion_per_call_disable_overrides_constructor_default(
+    def test_chat_completion_no_think_constructor_skips_reasoning(
         self, mock_get_client
     ):
         mock_get_client.return_value = self._make_mock_client()
-        llm = Qwen3LLM(enable_thinking=True)
+        llm = Qwen3LLM(reasoning_mode="no-think")
         content_choice = self._make_completion_choice("final answer")
 
         with patch.object(
@@ -494,10 +494,7 @@ class TestQwen3LLM(unittest.TestCase):
             "_generate_with_prefix_step",
             side_effect=[content_choice],
         ) as mock_generate_with_prefix_step:
-            result = llm.chat_completion(
-                "prompt",
-                enable_thinking=False,
-            )
+            result = llm.chat_completion("prompt")
 
         self.assertEqual(result.content, "final answer")
         self.assertEqual(mock_generate_with_prefix_step.call_count, 1)
@@ -507,11 +504,114 @@ class TestQwen3LLM(unittest.TestCase):
         )
 
     @patch("llm_utils.lm.llm.get_base_client")
+    def test_chat_reasoning_mode_think_sends_enable_thinking_true(
+        self, mock_get_client
+    ):
+        mock_client = self._make_mock_client()
+        mock_client.chat.completions.create.return_value = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=ChatCompletionMessage(role="assistant", content="answer")
+                )
+            ]
+        )
+        mock_get_client.return_value = mock_client
+        llm = Qwen3LLM(reasoning_mode="think", model="test-model")
+
+        result = llm.chat([{"role": "user", "content": "prompt"}])
+
+        self.assertEqual(result.content, "answer")
+        chat_kwargs = mock_client.chat.completions.create.call_args.kwargs
+        self.assertIs(
+            chat_kwargs["extra_body"]["chat_template_kwargs"]["enable_thinking"],
+            True,
+        )
+
+    @patch("llm_utils.lm.llm.get_base_client")
+    def test_chat_reasoning_mode_no_think_sends_enable_thinking_false(
+        self, mock_get_client
+    ):
+        mock_client = self._make_mock_client()
+        mock_client.chat.completions.create.return_value = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=ChatCompletionMessage(role="assistant", content="answer")
+                )
+            ]
+        )
+        mock_get_client.return_value = mock_client
+        llm = Qwen3LLM(reasoning_mode="no-think", model="test-model")
+
+        result = llm.chat([{"role": "user", "content": "prompt"}])
+
+        self.assertEqual(result.content, "answer")
+        chat_kwargs = mock_client.chat.completions.create.call_args.kwargs
+        self.assertIs(
+            chat_kwargs["extra_body"]["chat_template_kwargs"]["enable_thinking"],
+            False,
+        )
+
+    @patch("llm_utils.lm.llm.get_base_client")
+    def test_chat_reasoning_mode_no_think_constructor_sends_false(
+        self, mock_get_client
+    ):
+        mock_client = self._make_mock_client()
+        mock_client.chat.completions.create.return_value = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=ChatCompletionMessage(role="assistant", content="answer")
+                )
+            ]
+        )
+        mock_get_client.return_value = mock_client
+        llm = Qwen3LLM(reasoning_mode="no-think", model="test-model")
+
+        result = llm.chat([{"role": "user", "content": "prompt"}])
+
+        self.assertEqual(result.content, "answer")
+        chat_kwargs = mock_client.chat.completions.create.call_args.kwargs
+        self.assertIs(
+            chat_kwargs["extra_body"]["chat_template_kwargs"]["enable_thinking"],
+            False,
+        )
+
+    @patch("llm_utils.lm.llm.get_base_client")
+    def test_chat_reasoning_mode_per_call_override_sends_override(
+        self, mock_get_client
+    ):
+        mock_client = self._make_mock_client()
+        mock_client.chat.completions.create.return_value = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=ChatCompletionMessage(role="assistant", content="answer")
+                )
+            ]
+        )
+        mock_get_client.return_value = mock_client
+        llm = Qwen3LLM(reasoning_mode="think", model="test-model")
+
+        result = llm.chat(
+            [{"role": "user", "content": "prompt"}],
+            reasoning_mode="no-think",
+        )
+
+        self.assertEqual(result.content, "answer")
+        chat_kwargs = mock_client.chat.completions.create.call_args.kwargs
+        self.assertIs(
+            chat_kwargs["extra_body"]["chat_template_kwargs"]["enable_thinking"],
+            False,
+        )
+
+    def test_chat_rejects_invalid_reasoning_mode(self):
+        with pytest.raises(ValueError, match="reasoning_mode"):
+            Qwen3LLM._reasoning_mode_to_enable_thinking("sometimes")
+
+    @patch("llm_utils.lm.llm.get_base_client")
     def test_complete_content_normalizes_string_prefix_when_thinking_disabled(
         self, mock_get_client
     ):
         mock_get_client.return_value = self._make_mock_client()
-        llm = Qwen3LLM()
+        llm = Qwen3LLM(reasoning_mode="no-think")
         content_choice = self._make_completion_choice("final answer")
 
         with patch.object(
@@ -519,11 +619,7 @@ class TestQwen3LLM(unittest.TestCase):
             "_generate_with_prefix_step",
             side_effect=[content_choice],
         ) as mock_generate_with_prefix_step:
-            result = llm.complete_content(
-                "prompt",
-                "<think>\nseed",
-                enable_thinking=False,
-            )
+            result = llm.complete_content("prompt", "<think>\nseed")
 
         self.assertEqual(result.content, "final answer")
         self.assertFalse(hasattr(result, "reasoning_content"))
@@ -579,7 +675,7 @@ class TestQwen3LLM(unittest.TestCase):
         self, mock_get_client
     ):
         mock_get_client.return_value = self._make_mock_client()
-        llm = Qwen3LLM(thinking_max_tokens=12, content_max_tokens=34)
+        llm = Qwen3LLM(reasoning_max_tokens=12, output_max_tokens=34)
         reasoning_choice = self._make_completion_choice(
             "reasoning step</think>",
             finish_reason="stop",

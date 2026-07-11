@@ -11,14 +11,14 @@ from llm_utils import Qwen3LLM
 
 llm = Qwen3LLM(client=8000)
 
-message = llm.chat_completion(
+message = llm.chat(
     [{"role": "user", "content": "Solve x^2 + 2x + 1 = 0"}],
-    thinking_max_tokens=32,
-    content_max_tokens=128,
+    max_reasoning_tokens=32,
+    max_output_tokens=128,
 )
 
 print(message.content)
-print(getattr(message, "reasoning_content", None))
+print(getattr(message, "reasoning", None))
 print(getattr(message, "call_count", None))
 ```
 

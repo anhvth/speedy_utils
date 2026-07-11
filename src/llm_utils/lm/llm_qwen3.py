@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import threading
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 
 from httpx import Timeout
 from loguru import logger
@@ -28,6 +28,7 @@ DEFAULT_CONTENT_MAX_TOKENS = 4096
 DEFAULT_EARLY_THINKING_STOP_MESSAGE = (
     "\n\n[SYSTEM] Thinking budget exhausted. Stopping now.\n\n"
 )
+ReasoningMode = Literal["think", "no-think"]
 TRANSFORMERS_NO_ADVISORY_WARNINGS_ENV = "TRANSFORMERS_NO_ADVISORY_WARNINGS"
 _TOKENIZER_CACHE_ROOT = Path("/tmp/tokenizers")
 _AUTO_TOKENIZER_CLS = None
@@ -288,18 +289,42 @@ class Qwen3LLM(LLM):
         verbose: bool = False,
         timeout: float | Timeout | None = None,
         *,
-        enable_thinking: bool = True,
+        reasoning_mode: ReasoningMode = "think",
         model: str | None = None,
         max_tokens: int | None = None,
+        reasoning_max_tokens: int | None = None,
+        output_max_tokens: int | None = None,
         temperature: float | None = None,
         top_p: float | None = None,
         stop: str | list[str] | tuple[str, ...] | None = None,
         presence_penalty: float | None = None,
         frequency_penalty: float | None = None,
-        thinking_max_tokens: int = DEFAULT_THINKING_MAX_TOKENS,
-        content_max_tokens: int = DEFAULT_CONTENT_MAX_TOKENS,
         **model_kwargs: Any,
     ) -> None:
+        deprecated_kwargs = {
+            "enable_thinking",
+            "thinking_max_tokens",
+            "content_max_tokens",
+        } & model_kwargs.keys()
+        if deprecated_kwargs:
+            names = ", ".join(sorted(deprecated_kwargs))
+            raise ValueError(f"Use reasoning-mode Qwen3LLM arguments instead of {names}")
+        resolved_enable_thinking = self._reasoning_mode_to_enable_thinking(
+            reasoning_mode,
+            default=True,
+        )
+        thinking_max_tokens = (
+            reasoning_max_tokens
+            if reasoning_max_tokens is not None
+            else DEFAULT_THINKING_MAX_TOKENS
+        )
+        content_max_tokens = (
+            output_max_tokens
+            if output_max_tokens is not None
+            else DEFAULT_CONTENT_MAX_TOKENS
+        )
+        if output_max_tokens is not None and max_tokens is None:
+            max_tokens = output_max_tokens
         self._validate_prefix_completion_kwargs(
             n=1,
             thinking_max_tokens=thinking_max_tokens,
@@ -314,7 +339,7 @@ class Qwen3LLM(LLM):
             cache=cache,
             verbose=verbose,
             timeout=timeout,
-            enable_thinking=enable_thinking,
+            enable_thinking=resolved_enable_thinking,
             model=model,
             max_tokens=max_tokens,
             temperature=temperature,
@@ -324,6 +349,20 @@ class Qwen3LLM(LLM):
             frequency_penalty=frequency_penalty,
             **model_kwargs,
         )
+
+    @staticmethod
+    def _reasoning_mode_to_enable_thinking(
+        reasoning_mode: ReasoningMode | str | None,
+        *,
+        default: bool | None = None,
+    ) -> bool | None:
+        if reasoning_mode is None:
+            return default
+        if reasoning_mode == "think":
+            return True
+        if reasoning_mode == "no-think":
+            return False
+        raise ValueError("reasoning_mode must be 'think' or 'no-think'")
 
     @classmethod
     def _get_tokenizer(cls):
@@ -368,6 +407,54 @@ class Qwen3LLM(LLM):
             self.enable_thinking if enable_thinking is None else enable_thinking
         )
         return effective_enable_thinking is not False
+
+    @clean_traceback
+    def chat(
+        self,
+        messages: str | BaseModel | list[dict],
+        *,
+        reasoning_mode: ReasoningMode | str | None = None,
+        max_reasoning_tokens: int | None = None,
+        max_output_tokens: int | None = None,
+        cache: bool | None = None,
+        **runtime_kwargs,
+    ) -> "ChatCompletionMessage":
+        """
+        Call Qwen3 chat completions with request-level thinking control.
+
+        This high-level path uses the server chat template's `enable_thinking`
+        flag instead of the staged prefix-completion helpers.
+        """
+        if "enable_thinking" in runtime_kwargs:
+            raise ValueError("Use reasoning_mode instead of enable_thinking")
+        if max_reasoning_tokens is not None and max_reasoning_tokens <= 0:
+            raise ValueError("max_reasoning_tokens must be > 0")
+        if max_output_tokens is not None and max_output_tokens <= 0:
+            raise ValueError("max_output_tokens must be > 0")
+
+        call_kwargs = dict(runtime_kwargs)
+        if max_output_tokens is not None:
+            if (
+                "max_tokens" in call_kwargs
+                and call_kwargs["max_tokens"] != max_output_tokens
+            ):
+                raise ValueError("Pass only one of max_output_tokens or max_tokens")
+            call_kwargs["max_tokens"] = max_output_tokens
+        if max_reasoning_tokens is not None:
+            extra_body = dict(call_kwargs.get("extra_body") or {})
+            extra_body["max_reasoning_tokens"] = max_reasoning_tokens
+            call_kwargs["extra_body"] = extra_body
+
+        enable_thinking = self._reasoning_mode_to_enable_thinking(
+            reasoning_mode,
+            default=self.enable_thinking,
+        )
+        return super().chat_completion(
+            messages,
+            cache=cache,
+            enable_thinking=enable_thinking,
+            **call_kwargs,
+        )
 
     def _normalize_assistant_prefix(
         self,

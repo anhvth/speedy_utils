@@ -73,13 +73,19 @@ class TestPublicApi(unittest.TestCase):
                 "cache",
                 "verbose",
                 "timeout",
-                "enable_thinking",
+                "reasoning_mode",
                 "model",
             ],
         )
-        self.assertIn("thinking_max_tokens", params)
-        self.assertIn("content_max_tokens", params)
+        self.assertIn("reasoning_max_tokens", params)
+        self.assertIn("output_max_tokens", params)
         self.assertEqual(params["model_kwargs"].kind, inspect.Parameter.VAR_KEYWORD)
+
+    def test_qwen3_constructor_rejects_deprecated_reasoning_aliases(self):
+        for name in ("enable_thinking", "thinking_max_tokens", "content_max_tokens"):
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(ValueError, name):
+                    Qwen3LLM(**{name: False})
 
     def test_mopenai_factories_surface_explicit_keyword_signatures(self):
         sync_params = inspect.signature(MOpenAI).parameters

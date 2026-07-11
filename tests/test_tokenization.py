@@ -121,7 +121,7 @@ def test_generate_with_prefix_step_uses_assistant_body_verbatim(
     mock_get_client,
 ):
     mock_get_client.return_value = _make_mock_client()
-    llm = Qwen3LLM(enable_thinking=False)
+    llm = Qwen3LLM(reasoning_mode="no-think")
 
     class FakeTokenizer:
         def apply_chat_template(self, messages, tokenize, add_generation_prompt):
@@ -156,7 +156,7 @@ def test_generate_with_prefix_step_uses_assistant_body_verbatim(
             max_tokens=1,
         )
 
-    # enable_thinking is consumed by caller; body is used verbatim
+    # reasoning_mode is consumed by caller; body is used verbatim
     assert mock_completion_create.call_args.kwargs == {
         "model": "test-model",
         "prompt": "TOK_PROMPT<|im_start|>assistant\n<think>\nseed",
