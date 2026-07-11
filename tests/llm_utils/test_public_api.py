@@ -1,5 +1,8 @@
 import inspect
+import sys
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import llm_utils
 from llm_utils.chat_format import display
@@ -8,6 +11,7 @@ from llm_utils.lm.llm_qwen3 import Qwen3LLM
 from llm_utils.lm.llm_signature import LLMSignature
 from llm_utils.lm.openai_memoize import MAsyncOpenAI, MOpenAI
 from llm_utils.utils import get_one_turn_conv as utils_get_one_turn_conv
+from llm_utils.utils import get_tok as utils_get_tok
 from llm_utils.utils import msgs_turns as utils_msgs_turns
 from llm_utils.utils import turn as utils_turn
 
@@ -15,12 +19,34 @@ from llm_utils.utils import turn as utils_turn
 class TestPublicApi(unittest.TestCase):
     def test_top_level_exports_include_light_helpers(self):
         self.assertIs(llm_utils.get_one_turn_conv, utils_get_one_turn_conv)
+        self.assertIs(llm_utils.get_tok, utils_get_tok)
         self.assertIs(llm_utils.turn, utils_turn)
         self.assertIs(llm_utils.msgs_turns, utils_msgs_turns)
         self.assertIs(llm_utils.LLM, llm_utils.lm.LLM)
         self.assertIs(llm_utils.Qwen3LLM, llm_utils.lm.Qwen3LLM)
         self.assertIs(llm_utils.MOpenAI, llm_utils.lm.MOpenAI)
         self.assertNotIn("__getattr__", llm_utils.__dict__)
+
+    def test_get_tok_loads_auto_tokenizer_from_pretrained(self):
+        calls = []
+
+        class FakeAutoTokenizer:
+            @classmethod
+            def from_pretrained(cls, tokenizer_name_or_path):
+                calls.append(tokenizer_name_or_path)
+                return "tokenizer"
+
+        fake_transformers = SimpleNamespace(AutoTokenizer=FakeAutoTokenizer)
+        with patch.dict(sys.modules, {"transformers": fake_transformers}):
+            tokenizer = llm_utils.get_tok("org/model")
+
+        self.assertEqual(tokenizer, "tokenizer")
+        self.assertEqual(calls, ["org/model"])
+
+    def test_get_tok_is_in_star_exports(self):
+        namespace = {}
+        exec("from llm_utils import *", namespace)
+        self.assertIs(namespace["get_tok"], utils_get_tok)
 
     def test_heavy_lm_exports_remain_available_from_lm_package(self):
         self.assertTrue(hasattr(llm_utils.lm, "LLM"))

@@ -8,6 +8,12 @@ from pathlib import Path
 ChatMessage = dict[str, object]
 
 
+def get_tok(tokenizer_name_or_path):
+    import transformers
+
+    return transformers.AutoTokenizer.from_pretrained(tokenizer_name_or_path)
+
+
 def _image_to_url(image: str) -> str:
     """Return a data-URI for local paths, or pass through public URLs unchanged."""
     path = Path(image)
@@ -76,6 +82,7 @@ def msgs_turns(*args: tuple[str, str]) -> list[ChatMessage]:
 
 
 __all__ = [
+    "get_tok",
     "get_one_turn_conv",
     "turn",
     "msgs_turns",
