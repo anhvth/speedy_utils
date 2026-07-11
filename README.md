@@ -466,10 +466,10 @@ Standard chat path:
 from llm_utils import Qwen3LLM
 
 llm = Qwen3LLM(client=8000)
-message = llm.chat(
+message = llm(
     [{"role": "user", "content": "Solve x^2 + 2x + 1 = 0"}],
-    max_reasoning_tokens=32,
-    max_output_tokens=128,
+    thinking_max_tokens=32,
+    content_max_tokens=128,
 )
 
 print(message.content)

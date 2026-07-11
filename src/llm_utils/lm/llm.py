@@ -634,12 +634,11 @@ class LLM:
         return model_name, api_kwargs
 
     @staticmethod
-    def _extract_reasoning_content(message: Any) -> str | None:
-        """Extract reasoning content from a response message when present."""
-        for attr_name in ("reasoning_content", "reasoning"):
-            reasoning = getattr(message, attr_name, None)
-            if isinstance(reasoning, str):
-                return reasoning
+    def _extract_reasoning(message: Any) -> str | None:
+        """Extract canonical reasoning from a response message when present."""
+        reasoning = getattr(message, "reasoning", None)
+        if isinstance(reasoning, str):
+            return reasoning
         return None
 
     @staticmethod
@@ -953,9 +952,9 @@ class LLM:
             raise ValueError("No message returned from completion.")
 
         assistant_message = [{"role": "assistant", "content": message.content}]
-        reasoning_content = self._extract_reasoning_content(message)
-        if reasoning_content:
-            assistant_message[0]["reasoning_content"] = reasoning_content
+        reasoning = self._extract_reasoning(message)
+        if reasoning:
+            assistant_message[0]["reasoning"] = reasoning
 
         conversation_messages = cast(Messages, messages + assistant_message)
         result = {
@@ -964,8 +963,8 @@ class LLM:
             "completion": completion,
             "message": message,
         }
-        if reasoning_content:
-            result["reasoning_content"] = reasoning_content
+        if reasoning:
+            result["reasoning"] = reasoning
 
         self._record_history(conversation_messages)
         return [result]
@@ -1086,9 +1085,9 @@ class LLM:
             # Fallback: ensure it's the correct type
             parsed_content = pydantic_model_to_use.model_validate(parsed_content)
 
-        reasoning_content = self._extract_reasoning_content(message)
-        if reasoning_content:
-            conversation_messages[-1]["reasoning_content"] = reasoning_content
+        reasoning = self._extract_reasoning(message)
+        if reasoning:
+            conversation_messages[-1]["reasoning"] = reasoning
         self._record_history(conversation_messages)
         result = {
             "parsed": cast(BaseModel, parsed_content),
@@ -1096,8 +1095,8 @@ class LLM:
             "completion": completion,
             "message": message,
         }
-        if reasoning_content:
-            result["reasoning_content"] = reasoning_content
+        if reasoning:
+            result["reasoning"] = reasoning
         return result
 
     @clean_traceback

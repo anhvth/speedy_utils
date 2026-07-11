@@ -38,7 +38,7 @@ The returned object is an OpenAI-style `ChatCompletionMessage`.
 It can include:
 
 - `content` for the visible answer
-- `reasoning_content` when the backend emits reasoning text
+- `reasoning` when the backend emits reasoning text
 - `usage` when the backend returns token accounting
 - `call_count` for how many staged prefix calls were needed internally
 

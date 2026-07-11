@@ -155,7 +155,7 @@ The wheel currently ships four packages from `src/`:
 - `LLM.pydantic_parse()` is the structured-output API.
 - `LLM(..., return_dict=True)` returns a normalized dict with `completion`, `message`, `messages`, and `parsed`.
 - `LLMSignature` defaults structured outputs to the signature's output model.
-- `Qwen3LLM.chat_completion()` returns an OpenAI-style `ChatCompletionMessage` with optional dynamic attrs such as `reasoning_content`, `usage`, and `call_count`.
+- `Qwen3LLM.chat_completion()` returns an OpenAI-style `ChatCompletionMessage` with optional dynamic attrs such as `reasoning`, `usage`, and `call_count`.
 - `Qwen3LLM.complete_until()` returns a continuation-state object, not a `ChatCompletionMessage`.
 
 ### `vision_utils`
@@ -201,7 +201,7 @@ Current notable suppressions:
 | Rule | Why suppressed |
 |------|----------------|
 | `reportMissingImports` | Optional GPU and backend dependencies are not always installed |
-| `reportAttributeAccessIssue` | OpenAI response models and runtime message objects gain dynamic attrs such as `usage`, `reasoning_content`, and `call_count` |
+| `reportAttributeAccessIssue` | OpenAI response models and runtime message objects gain dynamic attrs such as `usage`, `reasoning`, and `call_count` |
 | `reportUnsupportedDunderAll` | Some modules rely on broad export patterns that are noisy for pyright |
 
 ### Common annotation patterns in this repo

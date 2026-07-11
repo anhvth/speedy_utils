@@ -86,7 +86,7 @@ def _truncate_text(text: str, max_length: int, head_ratio: float = 0.3) -> str:
     return f'{text[:head_len]}\n...[SKIP {skip_len} chars]...\n{text[-tail_len:]}'
 
 
-def _format_reasoning_content(
+def _format_reasoning(
     reasoning: str, max_reasoning_length: int | None = None
 ) -> str:
     """
@@ -192,7 +192,7 @@ def _build_assistant_content_parts(
     content = _message_value(msg, 'content', '')
     if content is None:
         content = ''
-    reasoning = _message_value(msg, 'reasoning_content')
+    reasoning = _message_value(msg, 'reasoning')
 
     if reasoning is None and isinstance(content, str):
         embedded_reasoning, embedded_answer = _split_embedded_think(content)
@@ -201,7 +201,7 @@ def _build_assistant_content_parts(
             content = embedded_answer
 
     if reasoning:
-        formatted_reasoning = _format_reasoning_content(reasoning, max_reasoning_length)
+        formatted_reasoning = _format_reasoning(reasoning, max_reasoning_length)
         return formatted_reasoning, str(content)
 
     return None, str(content)
@@ -435,10 +435,10 @@ def show_chat(
     Display chat messages with colored formatting.
 
     Automatically detects notebook vs terminal environment and formats accordingly.
-    Handles reasoning_content in assistant messages, formatting it with <think> tags.
+    Handles reasoning in assistant messages, formatting it with <think> tags.
 
     Args:
-        messages: List of message dicts with 'role', 'content', and optionally 'reasoning_content'.
+        messages: List of message dicts with 'role', 'content', and optionally 'reasoning'.
             For multi-conversation modes, pass a list of conversations, where each
             conversation is a list of message dicts.
         max_reasoning_length: Max chars for reasoning before truncation (None = no limit)
@@ -450,7 +450,7 @@ def show_chat(
         >>> messages = [
         ...     {"role": "system", "content": "You are helpful."},
         ...     {"role": "user", "content": "Hello!"},
-        ...     {"role": "assistant", "content": "Hi!", "reasoning_content": "User greeted me..."},
+        ...     {"role": "assistant", "content": "Hi!", "reasoning": "User greeted me..."},
         ... ]
         >>> show_chat(messages)
     """

@@ -2,6 +2,7 @@ import inspect
 import unittest
 
 import llm_utils
+from llm_utils.chat_format import display
 from llm_utils.chat_format.display import display_chat_messages_as_html, show_chat
 from llm_utils.lm.llm_qwen3 import Qwen3LLM
 from llm_utils.lm.llm_signature import LLMSignature
@@ -41,6 +42,24 @@ class TestPublicApi(unittest.TestCase):
             inspect.signature(show_chat),
         )
 
+    def test_show_chat_uses_canonical_reasoning_field(self):
+        reasoning, answer = display._build_assistant_content_parts(
+            {"role": "assistant", "content": "hello", "reasoning": "chain"},
+            max_reasoning_length=None,
+        )
+
+        self.assertEqual(reasoning, "<think>\nchain\n</think>")
+        self.assertEqual(answer, "hello")
+
+    def test_show_chat_without_reasoning_uses_content_only(self):
+        reasoning, answer = display._build_assistant_content_parts(
+            {"role": "assistant", "content": "hello"},
+            max_reasoning_length=None,
+        )
+
+        self.assertIsNone(reasoning)
+        self.assertEqual(answer, "hello")
+
     def test_llm_signature_constructor_surfaces_main_llm_options(self):
         params = inspect.signature(LLMSignature.__init__).parameters
 
@@ -73,19 +92,13 @@ class TestPublicApi(unittest.TestCase):
                 "cache",
                 "verbose",
                 "timeout",
-                "reasoning_mode",
+                "enable_thinking",
                 "model",
             ],
         )
-        self.assertIn("reasoning_max_tokens", params)
-        self.assertIn("output_max_tokens", params)
+        self.assertIn("thinking_max_tokens", params)
+        self.assertIn("content_max_tokens", params)
         self.assertEqual(params["model_kwargs"].kind, inspect.Parameter.VAR_KEYWORD)
-
-    def test_qwen3_constructor_rejects_deprecated_reasoning_aliases(self):
-        for name in ("enable_thinking", "thinking_max_tokens", "content_max_tokens"):
-            with self.subTest(name=name):
-                with self.assertRaisesRegex(ValueError, name):
-                    Qwen3LLM(**{name: False})
 
     def test_mopenai_factories_surface_explicit_keyword_signatures(self):
         sync_params = inspect.signature(MOpenAI).parameters

@@ -367,6 +367,52 @@ class TestLLMCallContract(TestCase):
         )
 
     @patch("llm_utils.lm.llm.get_base_client")
+    def test_return_dict_uses_canonical_reasoning_field(self, mock_get_client):
+        mock_client = self._make_mock_client()
+        mock_get_client.return_value = mock_client
+        llm = LLM()
+
+        message = SimpleNamespace(content="hello", reasoning="chain of thought")
+        completion = self._make_completion(message)
+        mock_client.chat.completions.create.return_value = completion
+
+        result = llm("prompt", return_dict=True)
+
+        self.assertEqual(result["reasoning"], "chain of thought")
+        self.assertEqual(
+            result["messages"],
+            [
+                {"role": "user", "content": "prompt"},
+                {
+                    "role": "assistant",
+                    "content": "hello",
+                    "reasoning": "chain of thought",
+                },
+            ],
+        )
+
+    @patch("llm_utils.lm.llm.get_base_client")
+    def test_return_dict_without_reasoning_uses_content_only(self, mock_get_client):
+        mock_client = self._make_mock_client()
+        mock_get_client.return_value = mock_client
+        llm = LLM()
+
+        message = SimpleNamespace(content="hello")
+        completion = self._make_completion(message)
+        mock_client.chat.completions.create.return_value = completion
+
+        result = llm("prompt", return_dict=True)
+
+        self.assertNotIn("reasoning", result)
+        self.assertEqual(
+            result["messages"],
+            [
+                {"role": "user", "content": "prompt"},
+                {"role": "assistant", "content": "hello"},
+            ],
+        )
+
+    @patch("llm_utils.lm.llm.get_base_client")
     def test_call_can_return_dict_for_parsed_output(self, mock_get_client):
         mock_client = self._make_mock_client()
         mock_get_client.return_value = mock_client
@@ -399,6 +445,36 @@ class TestLLMCallContract(TestCase):
                 {"role": "user", "content": "prompt"},
                 {"role": "assistant", "content": '{"answer": "yes"}'},
             ],
+        )
+
+    @patch("llm_utils.lm.llm.get_base_client")
+    def test_parsed_return_dict_uses_canonical_reasoning_field(self, mock_get_client):
+        mock_client = self._make_mock_client()
+        mock_get_client.return_value = mock_client
+        llm = LLM()
+
+        parsed_message = SimpleNamespace(
+            content='{"answer": "yes"}',
+            parsed={"answer": "yes"},
+            reasoning="chain of thought",
+        )
+        completion = self._make_completion(parsed_message)
+        mock_client.chat.completions.parse.return_value = completion
+
+        result = llm(
+            "prompt",
+            response_model=self.ParsedOutput,
+            return_dict=True,
+        )
+
+        self.assertEqual(result["reasoning"], "chain of thought")
+        self.assertEqual(
+            result["messages"][-1],
+            {
+                "role": "assistant",
+                "content": '{"answer": "yes"}',
+                "reasoning": "chain of thought",
+            },
         )
 
     @patch("llm_utils.lm.llm.get_base_client")

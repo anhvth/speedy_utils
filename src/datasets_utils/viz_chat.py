@@ -776,7 +776,7 @@ def _build_message_panel(message: Mapping[str, Any], *, msg_index: int) -> Panel
     )
     body_parts: list[Any] = [role_header, Text(_format_content(message.get("content")))]
 
-    # Show extra fields (like reasoning_content)
+    # Show extra fields (like reasoning)
     extras = {
         key: value for key, value in message.items() if key not in {"role", "content"}
     }

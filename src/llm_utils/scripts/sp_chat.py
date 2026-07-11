@@ -628,9 +628,7 @@ def _setup_chainlit():
                         guard_fallback_text = content or guard_fallback_text
                         break
 
-                    reasoning = getattr(delta, "reasoning_content", None) or getattr(
-                        delta, "reasoning", None
-                    )
+                    reasoning = getattr(delta, "reasoning", None)
 
                     if reasoning and not thinking_completed:
                         await thinking_step.stream_token(reasoning)
