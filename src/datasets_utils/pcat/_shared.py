@@ -170,7 +170,9 @@ class JsonlGlobRowSource:
     def select_file(self, index: int) -> JsonlRowSource:
         """Select a file by index in the globbed file list."""
         if not 0 <= index < len(self.files):
-            raise ValueError(f"file index {index} out of range (0..{len(self.files) - 1})")
+            raise ValueError(
+                f"file index {index} out of range (0..{len(self.files) - 1})"
+            )
         self._active_idx = index
         self._active_source = JsonlRowSource.from_path(self.files[index])
         return self._active_source
@@ -1319,6 +1321,11 @@ def build_common_parser(
         help="render mode for --serve: auto, generic, raw, sdd (default: auto)",
     )
     parser.add_argument(
+        "--tokenizer",
+        default="Qwen/Qwen3.5-27B",
+        help="tokenizer name or path for tokenized SDD rows",
+    )
+    parser.add_argument(
         "--no-browser",
         action="store_true",
         help="do not open browser when --serve starts",
@@ -1337,6 +1344,7 @@ def run_source_cli(
     port: int = 8888,
     host: str = "127.0.0.1",
     mode: str = "auto",
+    tokenizer_name: str = "Qwen/Qwen3.5-27B",
     open_browser: bool = True,
 ) -> int:
     if source.total_rows <= 0:
@@ -1351,6 +1359,7 @@ def run_source_cli(
             host=host,
             port=port,
             mode=mode,
+            tokenizer_name=tokenizer_name,
             open_browser=open_browser,
         )
 
@@ -1421,6 +1430,7 @@ def _run_glob_serve(
         host=args.host,
         port=args.port,
         mode=args.mode,
+        tokenizer_name=args.tokenizer,
         open_browser=not args.no_browser,
         glob_source=glob_source,
     )
@@ -1471,6 +1481,7 @@ def main_jsonl(argv: Sequence[str] | None = None) -> int:
         port=args.port if hasattr(args, "port") else 8888,
         host=args.host if hasattr(args, "host") else "127.0.0.1",
         mode=args.mode if hasattr(args, "mode") else "auto",
+        tokenizer_name=args.tokenizer,
         open_browser=not args.no_browser if hasattr(args, "no_browser") else True,
     )
 
@@ -1512,5 +1523,6 @@ def main_hf_dataset(argv: Sequence[str] | None = None) -> int:
         port=args.port if hasattr(args, "port") else 8888,
         host=args.host if hasattr(args, "host") else "127.0.0.1",
         mode=args.mode if hasattr(args, "mode") else "auto",
+        tokenizer_name=args.tokenizer,
         open_browser=not args.no_browser if hasattr(args, "no_browser") else True,
     )

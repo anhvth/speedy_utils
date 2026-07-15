@@ -596,7 +596,10 @@ def _setup_chainlit():
             call_kwargs["extra_body"] = {
                 "chat_template_kwargs": {"enable_thinking": True}
             }
-
+        else:
+            call_kwargs["extra_body"] = {
+                "chat_template_kwargs": {"enable_thinking": False}
+            }
         start_time = time.time()
 
         try:

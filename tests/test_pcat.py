@@ -469,7 +469,7 @@ def test_serve_scalar_types_no_exceptions() -> None:
 
 
 def test_serve_page_template_well_formed(tmp_path: Path) -> None:
-    from datasets_utils.pcat.serve import _page, _build_header, _build_footer
+    from datasets_utils.pcat.serve import _JS, _page, _build_header, _build_footer
 
     jsonl_path = tmp_path / "data.jsonl"
     jsonl_path.write_text("{}\n")
@@ -477,13 +477,21 @@ def test_serve_page_template_well_formed(tmp_path: Path) -> None:
 
     header = _build_header(source, 0, "generic")
     assert "row 1" in header
+    assert 'onclick="sampleRow(1)"' in header
+    assert ">sample</button>" in header
 
     footer = _build_footer()
     assert "prev/next" in footer
+    assert "sample" in footer
 
-    full = _page("", header + footer)
+    full = _page(
+        "", header + footer, ' data-total-rows="1" data-mode="sdd"'
+    )
     assert "<!DOCTYPE html>" in full
     assert "<html" in full
+    assert 'data-total-rows="1"' in full
+    assert 'data-mode="sdd"' in full
+    assert "document.body.dataset.mode || 'generic'" in _JS
     assert "</html>" in full
 
 
@@ -504,6 +512,137 @@ def test_serve_sdd_side_by_side_structure() -> None:
     assert "Xin chào" in rendered
     assert "Chào bạn" in rendered
     assert res_mode == "sdd"
+
+
+def test_serve_messages_with_ref_derives_student_and_teacher_views() -> None:
+    from datasets_utils.pcat.serve import _detect_mode, render_row
+
+    value = {
+        "id": "sample",
+        "messages_with_ref": [
+            {"role": "user", "content": "Do the task."},
+            {
+                "role": "assistant",
+                "content": "Wrong answer",
+                "env_feedback": "Use the lookup tool instead.",
+                "tool_calls": [{"function": {"name": "wrong_tool"}}],
+            },
+        ],
+    }
+
+    assert _detect_mode(value) == "sdd"
+    rendered, res_mode = render_row(value, 0, mode="auto")
+
+    assert res_mode == "sdd"
+    assert "messages" in rendered
+    assert "teacher_messages" in rendered
+    assert "Wrong answer" in rendered
+    assert "&lt;reference_answer&gt;" in rendered
+    assert "Use the lookup tool instead." in rendered
+    assert "wrong_tool" in rendered
+    assert "env_feedback" not in rendered
+
+
+def test_serve_tokenized_sdd_decodes_all_three_token_arrays() -> None:
+    from datasets_utils.pcat.serve import _detect_mode, render_row
+
+    class FakeTokenizer:
+        def decode(self, token_ids, *, skip_special_tokens=False):
+            assert skip_special_tokens is False
+            return "decoded:" + ",".join(str(token_id) for token_id in token_ids)
+
+    value = {
+        "format": "sdd_prompt_response_v1",
+        "student_ids": [1, 2],
+        "teacher_ids": [3, 4],
+        "response_ids": [5, 6],
+    }
+
+    assert _detect_mode(value) == "sdd"
+    rendered, res_mode = render_row(
+        value, 0, mode="auto", tokenizer=FakeTokenizer()
+    )
+
+    assert res_mode == "sdd"
+    assert "student_ids" in rendered
+    assert "teacher_ids" in rendered
+    assert "response_ids" in rendered
+    assert "decoded:1,2" in rendered
+    assert 'decoded:<mark class="token-privileged">3</mark>' in rendered
+    assert '<mark class="token-privileged">4</mark>' in rendered
+    assert "decoded:5,6" in rendered
+    assert 'class="token-panel token-panel-student"' in rendered
+    assert 'class="token-panel token-panel-teacher"' in rendered
+    assert 'class="token-panel token-panel-response"' in rendered
+    assert 'class="token-privileged"' in rendered
+
+
+def test_teacher_sdd_diff_only_highlights_privileged_text() -> None:
+    from datasets_utils.pcat.serve import _highlight_teacher_privilege
+
+    rendered = _highlight_teacher_privilege(
+        "shared prompt\nanswer next",
+        "shared prompt\n<reference>private</reference>\nanswer next",
+    )
+
+    assert rendered.startswith("shared prompt\n")
+    assert rendered.endswith("</mark>answer next")
+    assert rendered.count('class="token-privileged"') == 1
+    assert "&lt;reference&gt;private&lt;/reference&gt;" in rendered
+
+
+def test_serve_tokenized_sdd_lazily_loads_configured_default(monkeypatch) -> None:
+    from datasets_utils.pcat import serve
+
+    class FakeTokenizer:
+        def decode(self, token_ids, *, skip_special_tokens=False):
+            return str(token_ids)
+
+    loaded = []
+    monkeypatch.setattr(
+        serve,
+        "_get_tokenizer",
+        lambda name: loaded.append(name) or FakeTokenizer(),
+    )
+
+    serve.render_row(
+        {
+            "format": "sdd_prompt_response_v1",
+            "student_ids": [1],
+            "teacher_ids": [2],
+            "response_ids": [3],
+        },
+        0,
+        mode="auto",
+    )
+
+    assert loaded == ["Qwen/Qwen3.5-27B"]
+
+
+def test_pcat_cli_forwards_tokenizer_to_jsonl_serve(tmp_path, monkeypatch) -> None:
+    from datasets_utils.pcat import cli
+
+    path = tmp_path / "tokenized.jsonl"
+    path.write_text("{}\n")
+    forwarded = []
+    monkeypatch.setattr(
+        cli,
+        "main_jsonl",
+        lambda argv: forwarded.extend(argv) or 0,
+    )
+
+    assert (
+        cli.main(
+            [str(path), "--serve", "--tokenizer", "/models/qwen35-tokenizer"]
+        )
+        == 0
+    )
+    assert forwarded == [
+        "--serve",
+        "--tokenizer",
+        "/models/qwen35-tokenizer",
+        str(path),
+    ]
 
 
 def test_serve_http_handler_error_page() -> None:

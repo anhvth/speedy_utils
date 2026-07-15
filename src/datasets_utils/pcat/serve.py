@@ -19,6 +19,7 @@ import threading
 import time
 import webbrowser
 from contextlib import suppress
+from difflib import SequenceMatcher
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
@@ -48,7 +49,9 @@ _FILE_PICKER_CSS = """
 # CSS  –  inline, zero-dependency, dark theme
 # ---------------------------------------------------------------------------
 
-_CSS = _FILE_PICKER_CSS + """
+_CSS = (
+    _FILE_PICKER_CSS
+    + """
 :root {
     --bg: #0a0e14; --surface: #121721; --elevated: #1a2030;
     --border: #252d3a; --border-active: #3b4455;
@@ -158,6 +161,55 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);
     line-height:1.6;color:var(--text);background:transparent;border:none;
     overflow-x:auto;min-width:0}
 
+/* tokenized sdd */
+.tokenized-sdd{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.token-panel{min-width:0;overflow:hidden;border:1px solid var(--border);
+    border-radius:8px;background:var(--surface)}
+.token-panel h3{font-size:13px;font-weight:700;padding:8px 12px;margin:0;
+    border-bottom:1px solid currentColor}
+.token-panel .msg-content{font-family:var(--mono)}
+.token-panel-student{border-color:#58a6ff;background:#0d2038}
+.token-panel-student h3{color:#79c0ff}
+.token-panel-student .msg-content,
+.token-panel-teacher .msg-content{color:#a5d6ff}
+.token-panel-teacher{border-color:#58a6ff;background:#0d2038}
+.token-panel-teacher h3{color:#79c0ff}
+.token-privileged{color:#e2c5ff;background:rgba(163,113,247,.3);
+    border:1px solid rgba(210,168,255,.55);border-radius:3px;padding:0 2px}
+.token-panel-response{grid-column:1/-1;border-color:#3fb950;background:#0d2818}
+.token-panel-response h3{color:#56d364}
+@media(max-width:800px){
+    .tokenized-sdd{grid-template-columns:1fr}
+    .token-panel-response{grid-column:auto}
+}
+
+/* tokenized training datasets */
+.token-preview{display:flex;flex-direction:column;gap:12px}
+.token-stats{display:flex;flex-wrap:wrap;gap:8px;position:sticky;top:55px;z-index:4;
+    padding:8px;border:1px solid var(--border);border-radius:8px;background:rgba(18,23,33,.96)}
+.stat-chip,.jump-link{padding:4px 9px;border:1px solid var(--border);border-radius:999px;
+    color:var(--muted);font-family:var(--mono);font-size:11px;text-decoration:none}
+.stat-chip strong{color:var(--text)} .jump-link{color:var(--accent);cursor:pointer}
+.jump-link:hover{background:var(--elevated)}
+.token-region{border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--surface)}
+.token-region>h3{display:flex;gap:8px;align-items:center;margin:0;padding:8px 12px;
+    border-bottom:1px solid var(--border);font-size:13px}
+.region-masked{border-color:#3b4455;background:#151a23}.region-masked>h3{color:#8b949e}
+.region-trainable,.region-chosen,.region-encourage{border-color:#238636;background:#0d2818}
+.region-trainable>h3,.region-chosen>h3,.region-encourage>h3{color:#56d364}
+.region-rejected,.region-discourage{border-color:#da3633;background:#2d1214}
+.region-rejected>h3,.region-discourage>h3{color:#ff7b72}
+.region-neutral{border-color:#9e6a03;background:#2b2108}.region-neutral>h3{color:#e3b341}
+.token-chunk{border-top:1px solid rgba(255,255,255,.05)}
+.token-chunk:first-of-type{border-top:0}.token-chunk summary{cursor:pointer;color:var(--muted);
+    padding:5px 12px;font:11px var(--mono);user-select:none}.token-chunk summary:hover{color:var(--text)}
+.token-text{margin:0;padding:10px 12px;white-space:pre-wrap;word-break:break-word;
+    overflow-wrap:anywhere;font:13px/1.6 var(--mono)}
+.region-masked .token-text{color:#8b949e}.region-trainable .token-text,.region-chosen .token-text,
+.region-encourage .token-text{color:#aff5b4}.region-rejected .token-text,
+.region-discourage .token-text{color:#ffa198}.region-neutral .token-text{color:#eac54f}
+.token-meta{color:var(--muted);font-weight:400;margin-left:auto;font-family:var(--mono);font-size:11px}
+
 .plain-dump{white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;
     font-family:var(--mono);font-size:13px;color:var(--text);min-width:0}
 
@@ -168,6 +220,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);
     border-radius:3px;padding:1px 5px;font-family:var(--mono);
     font-size:11px;color:var(--text)}
 """
+)
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +228,9 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);
 # ---------------------------------------------------------------------------
 
 
-def _file_picker_page(files: list[Path], selected_idx: int = 0, glob_mode: bool = False) -> str:
+def _file_picker_page(
+    files: list[Path], selected_idx: int = 0, glob_mode: bool = False
+) -> str:
     rows = []
     for i, f in enumerate(files):
         parts = str(f).replace("\\\\", "/").split("/")
@@ -185,7 +240,7 @@ def _file_picker_page(files: list[Path], selected_idx: int = 0, glob_mode: bool 
             '<span class="file-icon">{icon}</span>'
             '<span class="file-name">{name}</span>'
             '<span class="file-dir">{dir_part}</span>'
-            '</div>'.format(
+            "</div>".format(
                 selected=" selected" if i == selected_idx else "",
                 idx=i,
                 esc_path=_esc_attr(str(f)),
@@ -194,20 +249,18 @@ def _file_picker_page(files: list[Path], selected_idx: int = 0, glob_mode: bool 
                 dir_part=_esc(str(f.parent)) if len(parts) > 1 else "",
             )
         )
-    glob_script = '<script>var GLOB_MODE = 1;</script>' if glob_mode else ''
+    glob_script = "<script>var GLOB_MODE = 1;</script>" if glob_mode else ""
     return (
-        '<div class="file-picker">'
-        + glob_script +
-        '<div class="picker-header">'
+        '<div class="file-picker">' + glob_script + '<div class="picker-header">'
         '<input id="picker-filter" type="text" placeholder="type to filter files..."'
         ' autofocus oninput="filterFiles()"'
         ' onkeydown="pickerKeyDown(event)">'
         '<span class="match-count" id="match-count">{total} files</span>'
-        '</div>'
+        "</div>"
         '<div class="file-list" id="file-list">'
-        '{rows}'
-        '</div>'
-        '</div>'
+        "{rows}"
+        "</div>"
+        "</div>"
     ).format(total=len(files), rows="\n".join(rows))
 
 
@@ -470,20 +523,83 @@ def register_mode(name: str):
     return decorator
 
 
-def render_row(value: Any, row_idx: int, mode: str = "auto") -> tuple[str, str]:
+_DEFAULT_SDD_TOKENIZER = "Qwen/Qwen3.5-27B"
+_tokenizer_cache: dict[str, Any] = {}
+
+
+def _get_tokenizer(tokenizer_name: str) -> Any:
+    tokenizer = _tokenizer_cache.get(tokenizer_name)
+    if tokenizer is not None:
+        return tokenizer
+    try:
+        from transformers import AutoTokenizer
+    except ImportError as exc:
+        raise RuntimeError(
+            "transformers is required to decode tokenized SDD rows"
+        ) from exc
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, trust_remote_code=True)
+    _tokenizer_cache[tokenizer_name] = tokenizer
+    return tokenizer
+
+
+def _is_tokenized_sdd(value: Any) -> bool:
+    return (
+        isinstance(value, dict)
+        and value.get("format") == "sdd_prompt_response_v1"
+        and all(
+            isinstance(value.get(key), list)
+            for key in ("student_ids", "teacher_ids", "response_ids")
+        )
+    )
+
+
+def _highlight_teacher_privilege(student_text: str, teacher_text: str) -> str:
+    """Escape teacher text and highlight spans absent or changed from the student."""
+    parts: list[str] = []
+    matcher = SequenceMatcher(None, student_text, teacher_text, autojunk=False)
+    for (
+        tag,
+        _student_start,
+        _student_end,
+        teacher_start,
+        teacher_end,
+    ) in matcher.get_opcodes():
+        if teacher_start == teacher_end:
+            continue
+        escaped = html.escape(teacher_text[teacher_start:teacher_end])
+        if tag == "equal":
+            parts.append(escaped)
+        else:
+            parts.append('<mark class="token-privileged">{}</mark>'.format(escaped))
+    return "".join(parts)
+
+
+def render_row(
+    value: Any,
+    row_idx: int,
+    mode: str = "auto",
+    *,
+    tokenizer: Any = None,
+) -> tuple[str, str]:
     """Render a row value as HTML. Returns (html, resolved_mode)."""
     if mode == "auto":
         mode = _detect_mode(value)
     if mode in _MODE_REGISTRY:
+        if mode == "sdd":
+            return _render_sdd(value, row_idx, tokenizer=tokenizer), mode
         return _MODE_REGISTRY[mode](value, row_idx), mode
     return _render_generic(value, row_idx), "generic"
 
 
 def _detect_mode(value: Any) -> str:
-    if (
-        isinstance(value, dict)
-        and isinstance(value.get("messages"), list)
-        and isinstance(value.get("teacher_messages"), list)
+    if _is_tokenized_sdd(value):
+        return "sdd"
+    if isinstance(value, dict) and (
+        (
+            isinstance(value.get("messages"), list)
+            and isinstance(value.get("teacher_messages"), list)
+        )
+        or isinstance(value.get("messages_with_ref"), list)
     ):
         return "sdd"
     return "generic"
@@ -510,9 +626,60 @@ def _render_raw(value: Any, _row_idx: int = 0) -> str:
 
 
 @register_mode("sdd")
-def _render_sdd(value: Any, _row_idx: int = 0) -> str:
+def _render_sdd(value: Any, _row_idx: int = 0, *, tokenizer: Any = None) -> str:
+    if _is_tokenized_sdd(value):
+        if tokenizer is None:
+            tokenizer = _get_tokenizer(_DEFAULT_SDD_TOKENIZER)
+        decoded_text = {
+            key: tokenizer.decode(value[key], skip_special_tokens=False)
+            for key in ("student_ids", "teacher_ids", "response_ids")
+        }
+        panels = []
+        for key, panel_name in (
+            ("student_ids", "student"),
+            ("teacher_ids", "teacher"),
+            ("response_ids", "response"),
+        ):
+            if key == "teacher_ids":
+                content = _highlight_teacher_privilege(
+                    decoded_text["student_ids"], decoded_text[key]
+                )
+            else:
+                content = html.escape(decoded_text[key])
+            panels.append(
+                '<div class="token-panel token-panel-{}"><h3>{} ({} tokens)</h3>'
+                '<pre class="msg-content">{}</pre></div>'.format(
+                    panel_name, key, len(value[key]), content
+                )
+            )
+        return '<div class="tokenized-sdd">{}</div>'.format("".join(panels))
+
     messages = value.get("messages", [])
     teacher = value.get("teacher_messages", [])
+    messages_with_ref = value.get("messages_with_ref")
+    if isinstance(messages_with_ref, list):
+        messages = []
+        teacher = []
+        for message in messages_with_ref:
+            if not isinstance(message, dict):
+                continue
+            student_message = {
+                key: item for key, item in message.items() if key != "env_feedback"
+            }
+            teacher_message = dict(student_message)
+            reference = message.get("env_feedback")
+            if isinstance(reference, str) and reference.strip():
+                original = teacher_message.get("content") or ""
+                if not isinstance(original, str):
+                    original = json.dumps(original, ensure_ascii=False)
+                injection = "<reference_answer>\n{}\n</reference_answer>".format(
+                    reference.strip()
+                )
+                teacher_message["content"] = (
+                    original + "\n\n" + injection if original else injection
+                )
+            messages.append(student_message)
+            teacher.append(teacher_message)
 
     def _chat_bubble(msg: dict, i: int) -> str:
         role = str(msg.get("role", "?"))
@@ -523,11 +690,19 @@ def _render_sdd(value: Any, _row_idx: int = 0) -> str:
             )
         else:
             content_html = _scalar_html(content)
+        extras = {
+            key: item for key, item in msg.items() if key not in {"role", "content"}
+        }
+        extras_html = ""
+        if extras:
+            extras_html = '<pre class="msg-content">{}</pre>'.format(
+                html.escape(json.dumps(extras, ensure_ascii=False, indent=2))
+            )
         return (
             '<div class="chat-msg msg-{}">'
             '<div class="msg-role">[{}] <span class="badge-role">{}</span></div>'
-            "{}</div>"
-        ).format(role, i, _esc(role), content_html)
+            "{}{} </div>"
+        ).format(role, i, _esc(role), content_html, extras_html)
 
     def _render_msgs(msgs: list, title: str) -> str:
         parts = ["<h3>{} ({})</h3>".format(_esc(title), len(msgs))]
@@ -547,7 +722,7 @@ def _render_sdd(value: Any, _row_idx: int = 0) -> str:
 # ---------------------------------------------------------------------------
 
 _JS = r"""
-var currentMode = 'generic';
+var currentMode = document.body.dataset.mode || 'generic';
 var selectedFileIdx = -1;
 
 function selectFile(idx) {
@@ -715,6 +890,14 @@ function navigate(d){
     var n=c+d;if(n<1)return;
     navigateTo(n);
 }
+function sampleRow(total){
+    if(total<=1){navigateTo(1);return;}
+    var p=window.location.pathname.split('/');
+    var current=parseInt(p[p.length-1])||1;
+    var sampled=current;
+    while(sampled===current){sampled=Math.floor(Math.random()*total)+1;}
+    navigateTo(sampled);
+}
 function navigateTo(n) {
     window.location.href = '/row/' + n + '?mode=' + currentMode;
 }
@@ -725,6 +908,7 @@ document.addEventListener('keydown',function(e){
     else if(e.key==='g')navigateTo(1);
     else if(e.key==='G')navigateTo(9999999);
     else if(e.key==='r')location.reload();
+    else if(e.key==='s')sampleRow(parseInt(document.body.dataset.totalRows)||1);
     else if(e.key==='1')switchMode('generic');
     else if(e.key==='2')switchMode('sdd');
     else if(e.key==='3')switchMode('raw');
@@ -855,6 +1039,7 @@ def _build_header(source: RowSource, row_idx: int, mode: str) -> str:
         '<div class="nav">'
         '<button onclick="navigate(-1)" title="Previous row (&larr; or [)">&larr; prev</button>'
         '<button onclick="navigate(1)" title="Next row (&rarr; or ])">next &rarr;</button>'
+        '<button onclick="sampleRow({})" title="Show a random row (s)">sample</button>'
         '<span class="sep">|</span>'
         '<button onclick="gotoRow()" title="Go to row (g = first, G = last)">go to</button>'
         '<input id="goto-input" type="text" placeholder="{}"'
@@ -873,6 +1058,7 @@ def _build_header(source: RowSource, row_idx: int, mode: str) -> str:
         _esc(source.display_path),
         row_idx + 1,
         total,
+        total,
         row_idx + 1,
         total,
         generic_active,
@@ -888,6 +1074,7 @@ def _build_footer() -> str:
         "<kbd>&larr;</kbd><kbd>&rarr;</kbd> prev/next &nbsp;"
         "<kbd>g</kbd> first &nbsp;"
         "<kbd>G</kbd> last &nbsp;"
+        "<kbd>s</kbd> sample &nbsp;"
         "<kbd>r</kbd> reload &nbsp;"
         "<kbd>1</kbd> tree &nbsp;"
         "<kbd>2</kbd> sdd &nbsp;"
@@ -943,15 +1130,13 @@ class _GlobRefreshThread(threading.Thread):
     def get_files(self) -> list[dict[str, str]]:
         """Thread-safe current file list for the /files API."""
         with self._lock:
-            return [
-                {"path": str(p), "name": p.name}
-                for p in self.glob_source.files
-            ]
+            return [{"path": str(p), "name": p.name} for p in self.glob_source.files]
 
 
 class PcatHandler(BaseHTTPRequestHandler):
     source: RowSource = None  # type: ignore[assignment]
     mode: str = "auto"
+    tokenizer_name: str = _DEFAULT_SDD_TOKENIZER
     glob_source: Any = None  # JsonlGlobRowSource | None
     refresh_thread: _GlobRefreshThread | None = None
     server_version = "pcat-serve"
@@ -1019,13 +1204,21 @@ class PcatHandler(BaseHTTPRequestHandler):
     def _serve_file_pick(self, route: str):
         """Select a file from the glob source and redirect to its row view."""
         if self.glob_source is None:
-            self._send_html(_error_page("Not a glob source", "This endpoint is only for folder-based sources."), 400)
+            self._send_html(
+                _error_page(
+                    "Not a glob source",
+                    "This endpoint is only for folder-based sources.",
+                ),
+                400,
+            )
             return
-        slug = route[len("/file/"):]
+        slug = route[len("/file/") :]
         try:
             idx = int(slug)
         except ValueError:
-            self._send_html(_error_page("Bad file index", "Invalid file index: " + slug), 400)
+            self._send_html(
+                _error_page("Bad file index", "Invalid file index: " + slug), 400
+            )
             return
         try:
             file_source = self.glob_source.select_file(idx)
@@ -1121,14 +1314,29 @@ class PcatHandler(BaseHTTPRequestHandler):
             return
 
         header = _build_header(self.source, idx, mode)
-        rendered, resolved_mode = render_row(value, idx, mode)
+        tokenizer = None
+        if mode in {"auto", "sdd"} and _is_tokenized_sdd(value):
+            try:
+                tokenizer = _get_tokenizer(self.tokenizer_name)
+            except Exception as exc:
+                self._send_html(_error_page("Tokenizer error", str(exc)), 500)
+                return
+        rendered, resolved_mode = render_row(value, idx, mode, tokenizer=tokenizer)
         if resolved_mode != mode:
             # render_row auto-detected a different mode — rebuild header
             header = _build_header(self.source, idx, resolved_mode)
         body = "{}\n<div class='main'>{}</div>\n{}".format(
             header, rendered, _build_footer()
         )
-        self._send_html(_page("", body))
+        self._send_html(
+            _page(
+                "",
+                body,
+                ' data-total-rows="{}" data-mode="{}"'.format(
+                    total, _esc_attr(resolved_mode)
+                ),
+            )
+        )
 
     def _send_html(self, html_str: str, code: int = 200):
         data = html_str.encode()
@@ -1150,12 +1358,14 @@ def serve(
     host: str = "127.0.0.1",
     port: int = 8888,
     mode: str = "auto",
+    tokenizer_name: str = _DEFAULT_SDD_TOKENIZER,
     open_browser: bool = True,
     glob_source: Any = None,
     refresh_interval: float = 5.0,
 ) -> int:
     PcatHandler.source = source
     PcatHandler.mode = mode
+    PcatHandler.tokenizer_name = tokenizer_name
     PcatHandler.glob_source = glob_source
 
     # Start background file-refresh thread for glob sources

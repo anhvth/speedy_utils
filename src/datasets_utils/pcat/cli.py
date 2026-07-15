@@ -116,6 +116,11 @@ def _build_auto_parser() -> argparse.ArgumentParser:
         help="render mode for --serve: auto, generic, raw, sdd (default: auto)",
     )
     parser.add_argument(
+        "--tokenizer",
+        default="Qwen/Qwen3.5-27B",
+        help="tokenizer name or path for tokenized SDD rows",
+    )
+    parser.add_argument(
         "--no-browser",
         action="store_true",
         help="do not open browser when --serve starts",
@@ -150,7 +155,9 @@ def _serve_glob_dir(path: Path, args: argparse.Namespace) -> int:
         _build_auto_parser().error(str(exc))
         return 2
 
-    print(f"  Found {len(glob_source.files)} files in {path}/{args.ext}", file=sys.stderr)
+    print(
+        f"  Found {len(glob_source.files)} files in {path}/{args.ext}", file=sys.stderr
+    )
 
     # Pre-select first file as the initial source (the handler shows picker anyway)
     from ._shared import JsonlRowSource
@@ -162,6 +169,7 @@ def _serve_glob_dir(path: Path, args: argparse.Namespace) -> int:
         host=args.host,
         port=args.port,
         mode=args.mode,
+        tokenizer_name=args.tokenizer,
         open_browser=not args.no_browser,
         glob_source=glob_source,
     )
@@ -223,6 +231,8 @@ def main(argv: list[str] | None = None) -> int:
             sub_argv += ["--host", args.host]
         if args.mode != "auto":
             sub_argv += ["--mode", args.mode]
+        if args.tokenizer != "Qwen/Qwen3.5-27B":
+            sub_argv += ["--tokenizer", args.tokenizer]
         if args.no_browser:
             sub_argv.append("--no-browser")
         if args.ext != "**/*.jsonl":
@@ -249,6 +259,8 @@ def main(argv: list[str] | None = None) -> int:
         sub_argv += ["--host", args.host]
     if args.mode != "auto":
         sub_argv += ["--mode", args.mode]
+    if args.tokenizer != "Qwen/Qwen3.5-27B":
+        sub_argv += ["--tokenizer", args.tokenizer]
     if args.no_browser:
         sub_argv.append("--no-browser")
     if args.ext != "**/*.jsonl":
