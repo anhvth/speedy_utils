@@ -524,6 +524,12 @@ def register_mode(name: str):
 
 
 _DEFAULT_SDD_TOKENIZER = "Qwen/Qwen3.5-27B"
+_TOKEN_CHUNK_SIZE = 512
+_TOKENIZED_SCHEMAS = {
+    "sft": {"input_ids", "labels"},
+    "dpo": {"prompt_ids", "chosen_ids", "rejected_ids"},
+    "kto": {"prompt_ids", "completion_ids", "encourage_label"},
+}
 _tokenizer_cache: dict[str, Any] = {}
 
 
@@ -549,6 +555,123 @@ def _is_tokenized_sdd(value: Any) -> bool:
         and all(
             isinstance(value.get(key), list)
             for key in ("student_ids", "teacher_ids", "response_ids")
+        )
+    )
+
+
+def _training_schema(value: Any) -> str | None:
+    if not isinstance(value, dict):
+        return None
+    keys = set(value)
+    for name in ("kto", "dpo", "sft"):
+        if _TOKENIZED_SCHEMAS[name] <= keys:
+            return name
+    return None
+
+
+def _decode_tokens(tokenizer: Any, token_ids: list[int]) -> str:
+    try:
+        return str(tokenizer.decode(token_ids, skip_special_tokens=False))
+    except TypeError:
+        return str(tokenizer.decode(token_ids))
+
+
+def _token_segments(value: dict[str, Any], schema: str) -> list[tuple[str, list[int]]]:
+    if schema == "sft":
+        ids = list(value["input_ids"])
+        labels = list(value["labels"])
+        if len(ids) != len(labels):
+            raise ValueError("SFT input_ids and labels must have the same length")
+        segments: list[tuple[str, list[int]]] = []
+        for token_id, label in zip(ids, labels, strict=True):
+            region = "masked" if int(label) == -100 else "trainable"
+            if not segments or segments[-1][0] != region:
+                segments.append((region, []))
+            segments[-1][1].append(int(token_id))
+        return segments
+    if schema == "dpo":
+        return [
+            ("masked", list(value["prompt_ids"])),
+            ("chosen", list(value["chosen_ids"])),
+            ("rejected", list(value["rejected_ids"])),
+        ]
+    label = int(value["encourage_label"])
+    completion_region = {1: "encourage", 0: "neutral", -1: "discourage"}.get(label)
+    if completion_region is None:
+        raise ValueError("KTO encourage_label must be -1, 0, or 1")
+    return [
+        ("masked", list(value["prompt_ids"])),
+        (completion_region, list(value["completion_ids"])),
+    ]
+
+
+def _render_training(value: dict[str, Any], tokenizer: Any) -> str:
+    schema = _training_schema(value)
+    if schema is None:
+        return _render_generic(value, 0)
+    segments = [(region, ids) for region, ids in _token_segments(value, schema) if ids]
+    total = sum(len(ids) for _, ids in segments)
+    counts: dict[str, int] = {}
+    for region, ids in segments:
+        counts[region] = counts.get(region, 0) + len(ids)
+
+    chips = [
+        '<span class="stat-chip">type <strong>{}</strong></span>'.format(
+            schema.upper()
+        ),
+        '<span class="stat-chip">total <strong>{:,}</strong></span>'.format(total),
+    ]
+    for region, count in counts.items():
+        chips.append(
+            '<span class="stat-chip">{} <strong>{:,}</strong></span>'.format(
+                region, count
+            )
+        )
+    if value.get("id") is not None:
+        chips.append(
+            '<span class="stat-chip">id <strong>{}</strong></span>'.format(
+                _esc(str(value["id"]))
+            )
+        )
+
+    panels: list[str] = []
+    offset = 0
+    for segment_index, (region, ids) in enumerate(segments):
+        anchor = "boundary-{}".format(segment_index)
+        chips.append(
+            '<a class="jump-link" href="#{}">jump {}</a>'.format(anchor, region)
+        )
+        chunks = []
+        for chunk_start in range(0, len(ids), _TOKEN_CHUNK_SIZE):
+            chunk = ids[chunk_start : chunk_start + _TOKEN_CHUNK_SIZE]
+            absolute_start = offset + chunk_start
+            absolute_end = absolute_start + len(chunk)
+            opened = " open" if chunk_start == 0 else ""
+            chunks.append(
+                '<details class="token-chunk"{}><summary>tokens {:,}–{:,}</summary>'
+                '<pre class="token-text">{}</pre></details>'.format(
+                    opened,
+                    absolute_start,
+                    absolute_end - 1,
+                    _esc(_decode_tokens(tokenizer, chunk)),
+                )
+            )
+        panels.append(
+            '<section class="token-region region-{}" id="{}"><h3>{}'
+            '<span class="token-meta">{:,} tokens · offsets {:,}–{:,}</span></h3>{}</section>'.format(
+                region,
+                anchor,
+                region,
+                len(ids),
+                offset,
+                offset + len(ids) - 1,
+                "".join(chunks),
+            )
+        )
+        offset += len(ids)
+    return (
+        '<div class="token-preview"><div class="token-stats">{}</div>{}</div>'.format(
+            "".join(chips), "".join(panels)
         )
     )
 
@@ -587,6 +710,10 @@ def render_row(
     if mode in _MODE_REGISTRY:
         if mode == "sdd":
             return _render_sdd(value, row_idx, tokenizer=tokenizer), mode
+        if mode == "tokens":
+            if tokenizer is None:
+                tokenizer = _get_tokenizer(_DEFAULT_SDD_TOKENIZER)
+            return _render_training(value, tokenizer), mode
         return _MODE_REGISTRY[mode](value, row_idx), mode
     return _render_generic(value, row_idx), "generic"
 
@@ -602,6 +729,8 @@ def _detect_mode(value: Any) -> str:
         or isinstance(value.get("messages_with_ref"), list)
     ):
         return "sdd"
+    if _training_schema(value) is not None:
+        return "tokens"
     return "generic"
 
 
@@ -623,6 +752,12 @@ def _render_generic(value: Any, row_idx: int) -> str:
 def _render_raw(value: Any, _row_idx: int = 0) -> str:
     s = json.dumps(value, ensure_ascii=False, indent=2)
     return '<div class="plain-dump">{}</div>'.format(html.escape(s))
+
+
+@register_mode("tokens")
+def _render_tokens(value: Any, _row_idx: int = 0) -> str:
+    # Tokenizer injection is handled by render_row, mirroring the SDD renderer.
+    return _render_generic(value, _row_idx)
 
 
 @register_mode("sdd")
