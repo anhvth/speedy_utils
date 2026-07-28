@@ -125,5 +125,16 @@ dmypy.json
 edu_results.json
 .playwright-mcp
 .DS_Store
+.AppleDouble
+.LSOverride
+.Trash-*/
+Thumbs.db
+Desktop.ini
+.idea/
+*.swp
+*.swo
+*~
+*.tmp
+*.temp
 .chainlit
 chainlit.md
