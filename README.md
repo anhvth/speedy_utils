@@ -544,7 +544,16 @@ Then use the installed executable:
 
 ```bash
 pcat data/file.jsonl
+pcat data/tokenized-sdd --serve --no-browser
+pcat data/dataset-dict --split validation --serve --no-browser
 ```
+
+Hugging Face `Dataset` and `DatasetDict` directories saved with
+`save_to_disk()` are loaded with `datasets.load_from_disk()`. Arrow files stay
+memory-mapped and rows are read by index; `pcat` does not materialize the full
+dataset. `DatasetDict` defaults to its `train` split and accepts `--split` for
+another split. Tokenized SDD rows with `student_ids`, `teacher_ids`, and
+`response_ids` use the existing tokenizer-aware SDD view in `--serve` mode.
 
 ## Vision Utils
 

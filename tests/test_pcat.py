@@ -541,6 +541,7 @@ def test_serve_messages_with_ref_derives_student_and_teacher_views() -> None:
     assert "Use the lookup tool instead." in rendered
     assert "wrong_tool" in rendered
     assert "env_feedback" not in rendered
+    assert 'class="token-privileged"' in rendered
 
 
 def test_serve_tokenized_sdd_decodes_all_three_token_arrays() -> None:
@@ -645,6 +646,360 @@ def test_pcat_cli_forwards_tokenizer_to_jsonl_serve(tmp_path, monkeypatch) -> No
     ]
 
 
+def test_training_preview_detects_every_schema_and_reports_statistics() -> None:
+    from datasets_utils.pcat.serve import (
+        _detect_mode,
+        _training_schema,
+        _training_stats,
+    )
+
+    rows = {
+        "sft": {
+            "id": "sft-row",
+            "input_ids": [10, 11, 12, 13],
+            "labels": [-100, -100, 12, 13],
+            "attention_mask": [1, 1, 1, 1],
+            "prompt_length": 2,
+            "trainable_tokens": 2,
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+        "dpo": {
+            "id": "dpo-row",
+            "prompt_ids": [20, 21],
+            "chosen_ids": [22, 23, 24],
+            "rejected_ids": [25],
+        },
+        "kto": {
+            "id": "kto-row",
+            "prompt_ids": [30, 31],
+            "completion_ids": [32, 33, 34],
+            "encourage_label": -1,
+        },
+    }
+
+    expected_counts = {
+        "sft": {"masked": 2, "trainable": 2},
+        "dpo": {"masked": 2, "chosen": 3, "rejected": 1},
+        "kto": {"masked": 2, "discourage": 3},
+    }
+    for schema, row in rows.items():
+        assert _training_schema(row) == schema
+        assert _detect_mode(row) == "tokens"
+        stats = _training_stats(row, row_idx=7)
+        assert stats["schema"] == schema
+        assert stats["row_index"] == 7
+        assert stats["id"] == "{}-row".format(schema)
+        assert stats["counts"] == expected_counts[schema]
+        assert stats["total_tokens"] == sum(expected_counts[schema].values())
+        assert stats["boundaries"][0]["offset"] == 0
+
+
+def test_training_preview_assigns_regions_and_bounds_requested_window() -> None:
+    from datasets_utils.pcat.serve import _training_window
+
+    class FakeTokenizer:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def decode(self, token_ids, *, skip_special_tokens=False):
+            assert skip_special_tokens is False
+            self.calls.append(list(token_ids))
+            return "<{}>".format(",".join(str(item) for item in token_ids))
+
+    tokenizer = FakeTokenizer()
+    row = {
+        "input_ids": list(range(1000)),
+        "labels": [-100] * 500 + list(range(500, 1000)),
+    }
+    window = _training_window(row, tokenizer, offset=495, limit=12)
+
+    assert (window["offset"], window["end"], window["total_tokens"]) == (
+        495,
+        507,
+        1000,
+    )
+    assert [segment["region"] for segment in window["segments"]] == [
+        "masked",
+        "trainable",
+    ]
+    assert window["items"][0] == {
+        "index": 495,
+        "token_id": 495,
+        "label": -100,
+        "region": "masked",
+        "text": "<495>",
+    }
+    assert window["items"][-1]["index"] == 506
+    assert max(len(call) for call in tokenizer.calls) <= 12
+
+
+def test_training_preview_window_clamps_offsets_and_limits() -> None:
+    from datasets_utils.pcat.serve import _normalize_token_window
+
+    assert _normalize_token_window(100, -9, 0) == (0, 1)
+    assert _normalize_token_window(100, 98, 50) == (98, 100)
+    assert _normalize_token_window(100, 999, 50) == (99, 100)
+    assert _normalize_token_window(0, 12, 50) == (0, 0)
+    assert _normalize_token_window(5000, 0, 99999) == (0, 1024)
+
+
+def test_training_preview_html_has_colors_boundaries_metadata_and_escaping() -> None:
+    from datasets_utils.pcat.serve import render_row
+
+    class FakeTokenizer:
+        def decode(self, token_ids, *, skip_special_tokens=False):
+            if len(token_ids) == 1:
+                return '<script data-id="{}">&</script>'.format(token_ids[0])
+            return "decoded<{}>&".format(",".join(str(item) for item in token_ids))
+
+    rendered, mode = render_row(
+        {
+            "id": '<img src=x onerror="bad">',
+            "prompt_ids": [1, 2],
+            "chosen_ids": [3],
+            "rejected_ids": [4],
+        },
+        4,
+        mode="auto",
+        tokenizer=FakeTokenizer(),
+        token_offset=1,
+        token_limit=3,
+    )
+
+    assert mode == "tokens"
+    assert "row <strong>5</strong>" in rendered
+    assert "total <strong>4</strong>" in rendered
+    assert "masked <strong>2</strong>" in rendered
+    assert "chosen <strong>1</strong>" in rendered
+    assert "rejected <strong>1</strong>" in rendered
+    assert "region-masked" in rendered
+    assert "region-chosen" in rendered
+    assert "region-rejected" in rendered
+    assert "token-index" in rendered
+    assert "token-id" in rendered
+    assert "token-label" in rendered
+    assert "jumpToken(0)" in rendered
+    assert "jumpToken(2)" in rendered
+    assert "jumpToken(3)" in rendered
+    assert "&lt;img src=x onerror=&quot;bad&quot;&gt;" in rendered
+    assert "<img src=x" not in rendered
+    assert "<script data-id" not in rendered
+    assert "&lt;script data-id=" in rendered
+
+
+def test_training_mode_persists_across_navigation_and_supports_offset_jump() -> None:
+    from datasets_utils.pcat.serve import _JS, _build_header, _parse_render_query
+
+    header = _build_header(_InMemorySource([{}]), 0, "tokens")
+    assert 'data-mode="tokens"' in header
+    assert 'data-mode="tokens" onclick' in header
+    assert "'/row/' + n + '?mode=' + currentMode" in _JS
+    assert "searchParams.set('mode', currentMode)" in _JS
+    assert "searchParams.set('offset'" in _JS
+    assert "switchMode('tokens')" in header
+    assert _parse_render_query(
+        "offset=37&mode=tokens&limit=64", "auto"
+    ) == ("tokens", 37, 64)
+
+
+def test_training_preview_renders_all_schema_region_colors() -> None:
+    from datasets_utils.pcat.serve import render_row
+
+    class FakeTokenizer:
+        def decode(self, token_ids, *, skip_special_tokens=False):
+            return " ".join(str(item) for item in token_ids)
+
+    cases = [
+        (
+            {"input_ids": [1, 2], "labels": [-100, 2]},
+            ("region-masked", "region-trainable"),
+        ),
+        (
+            {"prompt_ids": [1], "chosen_ids": [2], "rejected_ids": [3]},
+            ("region-masked", "region-chosen", "region-rejected"),
+        ),
+        (
+            {"prompt_ids": [1], "completion_ids": [2], "encourage_label": 1},
+            ("region-masked", "region-encourage"),
+        ),
+        (
+            {"prompt_ids": [1], "completion_ids": [2], "encourage_label": 0},
+            ("region-masked", "region-neutral"),
+        ),
+        (
+            {"prompt_ids": [1], "completion_ids": [2], "encourage_label": -1},
+            ("region-masked", "region-discourage"),
+        ),
+    ]
+    for row, expected_classes in cases:
+        rendered, mode = render_row(row, 0, mode="auto", tokenizer=FakeTokenizer())
+        assert mode == "tokens"
+        for expected_class in expected_classes:
+            assert expected_class in rendered
+
+
+def test_tokenized_sdd_window_is_bounded_and_keeps_privilege_colors() -> None:
+    from datasets_utils.pcat.serve import _JS, render_row
+
+    class FakeTokenizer:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def decode(self, token_ids, *, skip_special_tokens=False):
+            self.calls.append(list(token_ids))
+            return " ".join(str(item) for item in token_ids)
+
+    tokenizer = FakeTokenizer()
+    rendered, mode = render_row(
+        {
+            "format": "sdd_prompt_response_v1",
+            "student_ids": list(range(2000)),
+            "teacher_ids": list(range(2000, 4000)),
+            "response_ids": list(range(4000, 6000)),
+        },
+        0,
+        mode="auto",
+        tokenizer=tokenizer,
+        token_offset=100,
+        token_limit=64,
+    )
+
+    assert mode == "sdd"
+    assert max(len(call) for call in tokenizer.calls) == 64
+    assert "tokens 100–163 of 2,000" in rendered
+    assert 'class="token-privileged"' in rendered
+    assert "token-panel-response" in rendered
+    assert 'id="token-window-stream"' in rendered
+    assert 'data-next-offset="164"' in rendered
+    assert 'data-total="2000"' in rendered
+    assert "IntersectionObserver" in _JS
+    assert "/token-window?" in _JS
+    assert "MAX_TOKEN_WINDOW_CHUNKS" in _JS
+
+
+def test_tokenized_sdd_infinite_scroll_endpoint_returns_next_bounded_chunk(
+    monkeypatch,
+) -> None:
+    import http.client
+    import threading
+    from http.server import HTTPServer
+
+    from datasets_utils.pcat import serve
+
+    class FakeTokenizer:
+        def decode(self, token_ids, *, skip_special_tokens=False):
+            return "ids:" + ",".join(str(item) for item in token_ids)
+
+    source = _InMemorySource(
+        [
+            {
+                "format": "sdd_prompt_response_v1",
+                "student_ids": [0, 1, 2, 3, 4],
+                "teacher_ids": [0, 1, 9, 3, 4],
+                "response_ids": [10, 11, 12, 13, 14],
+            }
+        ]
+    )
+    monkeypatch.setattr(serve.PcatHandler, "source", source)
+    monkeypatch.setattr(serve.PcatHandler, "tokenizer_name", "fake")
+    monkeypatch.setattr(serve, "_get_tokenizer", lambda _name: FakeTokenizer())
+    server = HTTPServer(("127.0.0.1", 0), serve.PcatHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        connection = http.client.HTTPConnection(
+            "127.0.0.1", server.server_address[1], timeout=2
+        )
+        connection.request("GET", "/row/1/token-window?offset=2&limit=2")
+        response = connection.getresponse()
+        body = response.read().decode()
+        connection.close()
+
+        assert response.status == 200
+        assert 'class="token-window-chunk"' in body
+        assert 'data-offset="2"' in body
+        assert 'data-next-offset="4"' in body
+        assert 'data-total="5"' in body
+        assert "ids:2,3" in body
+        assert "ids:10,11" not in body
+        assert "ids:12,13" in body
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_token_window_endpoint_supports_every_tokenized_method(monkeypatch) -> None:
+    import http.client
+    import threading
+    from http.server import HTTPServer
+
+    from datasets_utils.pcat import serve
+
+    class FakeTokenizer:
+        def decode(self, token_ids, *, skip_special_tokens=False):
+            return "ids:" + ",".join(str(item) for item in token_ids)
+
+    rows = [
+        {
+            "format": "sdd_prompt_response_v1",
+            "student_ids": [1, 2, 3],
+            "teacher_ids": [1, 9, 3],
+            "response_ids": [4, 5, 6],
+        },
+        {"input_ids": [10, 11, 12], "labels": [-100, 11, 12]},
+        {"prompt_ids": [20], "chosen_ids": [21], "rejected_ids": [22]},
+        {"prompt_ids": [30], "completion_ids": [31, 32], "encourage_label": 1},
+    ]
+    source = _InMemorySource(rows)
+    monkeypatch.setattr(serve.PcatHandler, "source", source)
+    monkeypatch.setattr(serve.PcatHandler, "tokenizer_name", "fake")
+    monkeypatch.setattr(serve, "_get_tokenizer", lambda _name: FakeTokenizer())
+    server = HTTPServer(("127.0.0.1", 0), serve.PcatHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        for row_number in range(1, len(rows) + 1):
+            connection = http.client.HTTPConnection(
+                "127.0.0.1", server.server_address[1], timeout=2
+            )
+            connection.request(
+                "GET", f"/row/{row_number}/token-window?offset=1&limit=1"
+            )
+            response = connection.getresponse()
+            body = response.read().decode()
+            connection.close()
+
+            assert response.status == 200
+            assert 'class="token-window-chunk"' in body
+            assert 'data-offset="1"' in body
+            assert 'data-next-offset="2"' in body
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_training_preview_uses_shared_infinite_token_stream() -> None:
+    from datasets_utils.pcat.serve import render_row
+
+    class FakeTokenizer:
+        def decode(self, token_ids, *, skip_special_tokens=False):
+            return " ".join(str(item) for item in token_ids)
+
+    for row in (
+        {"input_ids": [1, 2, 3], "labels": [-100, 2, 3]},
+        {"prompt_ids": [1], "chosen_ids": [2], "rejected_ids": [3]},
+        {"prompt_ids": [1], "completion_ids": [2, 3], "encourage_label": -1},
+    ):
+        rendered, mode = render_row(row, 0, tokenizer=FakeTokenizer(), token_limit=2)
+
+        assert mode == "tokens"
+        assert 'id="token-window-stream"' in rendered
+        assert 'id="token-window-sentinel"' in rendered
+        assert 'data-next-offset="2"' in rendered
+
+
 def test_serve_http_handler_error_page() -> None:
     from datasets_utils.pcat.serve import _error_page
 
@@ -703,6 +1058,51 @@ def test_serve_auto_detect_sdd_mode() -> None:
 # --------------------------------------------------------------------------
 # Glob refresh tests (--serve periodic file discovery)
 # ---------------------------------------------------------------------------
+
+
+def test_serve_starts_when_browser_opener_blocks(monkeypatch) -> None:
+    """A remote browser helper must not prevent the HTTP server from starting."""
+    import threading
+
+    from datasets_utils.pcat import serve as serve_module
+
+    browser_started = threading.Event()
+    release_browser = threading.Event()
+    server_started = threading.Event()
+
+    class Source:
+        display_path = "dataset"
+        total_rows = 0
+
+    class FakeServer:
+        def __init__(self, _address, _handler):
+            pass
+
+        def serve_forever(self):
+            server_started.set()
+
+        def server_close(self):
+            pass
+
+    def blocking_open(_url):
+        browser_started.set()
+        release_browser.wait(timeout=2)
+
+    monkeypatch.setattr(serve_module, "HTTPServer", FakeServer)
+    monkeypatch.setattr(serve_module.webbrowser, "open", blocking_open)
+
+    thread = threading.Thread(
+        target=serve_module.serve,
+        args=(Source(),),
+        kwargs={"open_browser": True},
+    )
+    thread.start()
+    try:
+        assert browser_started.wait(timeout=1)
+        assert server_started.wait(timeout=0.2)
+    finally:
+        release_browser.set()
+        thread.join(timeout=1)
 
 
 def test_glob_source_refresh_discovers_new_file(tmp_path: Path) -> None:

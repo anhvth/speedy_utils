@@ -12,7 +12,8 @@ _SUBCOMMANDS = {"jsonl", "hf-dataset"}
 
 def _looks_like_hf_dataset(path: Path) -> bool:
     """Check if a directory looks like a HuggingFace dataset."""
-    return path.is_dir() and (path / "dataset_info.json").exists()
+    markers = ("dataset_info.json", "dataset_dict.json")
+    return path.is_dir() and any((path / marker).exists() for marker in markers)
 
 
 def _build_subcommand_parser(mode: str) -> argparse.ArgumentParser:
@@ -23,7 +24,7 @@ def _build_subcommand_parser(mode: str) -> argparse.ArgumentParser:
         help=(
             "path to a .jsonl file or a directory of .json files"
             if mode == "jsonl"
-            else "path to a dataset saved via datasets.load_from_disk()"
+            else "path to a dataset directory created by datasets.save_to_disk()"
         ),
     )
     parser.add_argument(
@@ -51,7 +52,10 @@ def _build_subcommand_parser(mode: str) -> argparse.ArgumentParser:
     if mode == "hf-dataset":
         parser.add_argument(
             "--split",
-            help="dataset split to open when load_from_disk() returns a DatasetDict",
+            help=(
+                "dataset split to open when load_from_disk() returns a DatasetDict "
+                "(default: train)"
+            ),
         )
     return parser
 
@@ -90,7 +94,8 @@ def _build_auto_parser() -> argparse.ArgumentParser:
         help="pre-draw N random rows (default 1); press s in TUI to step through",
     )
     parser.add_argument(
-        "--split", help="dataset split (auto-detect mode, HF datasets only)"
+        "--split",
+        help="dataset split (HF DatasetDict only; default: train)",
     )
     parser.add_argument(
         "--serve",
@@ -113,12 +118,14 @@ def _build_auto_parser() -> argparse.ArgumentParser:
         "--mode",
         type=str,
         default="auto",
-        help="render mode for --serve: auto, generic, raw, sdd (default: auto)",
+        help=(
+            "render mode for --serve: auto, generic, raw, sdd, tokens (default: auto)"
+        ),
     )
     parser.add_argument(
         "--tokenizer",
         default="Qwen/Qwen3.5-27B",
-        help="tokenizer name or path for tokenized SDD rows",
+        help="tokenizer name or path for tokenized SDD/training rows",
     )
     parser.add_argument(
         "--no-browser",

@@ -216,17 +216,12 @@ class HFDatasetRowSource:
 
         if isinstance(loaded, DatasetDict):
             if split is None:
-                if len(loaded) == 1:
-                    split = str(next(iter(loaded)))
-                else:
-                    choices = ", ".join(str(k) for k in loaded)
-                    raise ValueError(
-                        f"dataset has multiple splits; use --split one of: {choices}"
-                    )
+                split = "train"
             if split not in loaded:
                 choices = ", ".join(str(k) for k in loaded)
                 raise ValueError(
-                    f"unknown split '{split}'; available splits: {choices}"
+                    f"split '{split}' not found; available splits: {choices}. "
+                    "Use --split to select one."
                 )
             dataset = loaded[split]
             display_path = f"{path}::{split}"
@@ -1318,12 +1313,14 @@ def build_common_parser(
         "--mode",
         type=str,
         default="auto",
-        help="render mode for --serve: auto, generic, raw, sdd (default: auto)",
+        help=(
+            "render mode for --serve: auto, generic, raw, sdd, tokens (default: auto)"
+        ),
     )
     parser.add_argument(
         "--tokenizer",
         default="Qwen/Qwen3.5-27B",
-        help="tokenizer name or path for tokenized SDD rows",
+        help="tokenizer name or path for tokenized SDD/training rows",
     )
     parser.add_argument(
         "--no-browser",
@@ -1489,12 +1486,15 @@ def main_jsonl(argv: Sequence[str] | None = None) -> int:
 def main_hf_dataset(argv: Sequence[str] | None = None) -> int:
     parser = build_common_parser(
         prog="pcat-hf-dataset",
-        description="Pretty interactive viewer for Hugging Face datasets saved with load_from_disk().",
-        path_help="path to a dataset saved via datasets.load_from_disk()",
+        description="Pretty interactive viewer for Hugging Face datasets saved with save_to_disk().",
+        path_help="path to a dataset directory created by datasets.save_to_disk()",
     )
     parser.add_argument(
         "--split",
-        help="dataset split to open when load_from_disk() returns a DatasetDict",
+        help=(
+            "dataset split to open when load_from_disk() returns a DatasetDict "
+            "(default: train)"
+        ),
     )
     args = parser.parse_args(argv)
     if args.path is None:

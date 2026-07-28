@@ -8,6 +8,7 @@ Modes:
   generic  – lazy foldable KV-card tree (works for any JSON dict)
   raw      – plain pretty-printed JSON dump
   sdd      – side-by-side messages | teacher_messages chat view
+  tokens   – bounded SFT/DPO/KTO decoded text and token metadata
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ from difflib import SequenceMatcher
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from ._shared import JsonlGlobRowSource, RowSource
 
@@ -160,6 +161,8 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);
     margin:0;padding:10px 12px;font-family:var(--font);font-size:13px;
     line-height:1.6;color:var(--text);background:transparent;border:none;
     overflow-x:auto;min-width:0}
+.side-by-side .msg-content{color:#a5d6ff}
+.side-by-side .chat-msg.msg-assistant .msg-content{color:#aff5b4}
 
 /* tokenized sdd */
 .tokenized-sdd{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
@@ -178,6 +181,10 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);
     border:1px solid rgba(210,168,255,.55);border-radius:3px;padding:0 2px}
 .token-panel-response{grid-column:1/-1;border-color:#3fb950;background:#0d2818}
 .token-panel-response h3{color:#56d364}
+.token-panel-response .msg-content{color:#aff5b4}
+.token-window-chunk{padding:0 0 14px;margin:0 0 14px;border-bottom:1px solid var(--border)}
+.token-window-sentinel{padding:12px;text-align:center;color:var(--muted);font:11px var(--mono)}
+.token-window-sentinel.loading{color:var(--accent)}.token-window-sentinel.done{display:none}
 @media(max-width:800px){
     .tokenized-sdd{grid-template-columns:1fr}
     .token-panel-response{grid-column:auto}
@@ -187,28 +194,32 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);
 .token-preview{display:flex;flex-direction:column;gap:12px}
 .token-stats{display:flex;flex-wrap:wrap;gap:8px;position:sticky;top:55px;z-index:4;
     padding:8px;border:1px solid var(--border);border-radius:8px;background:rgba(18,23,33,.96)}
-.stat-chip,.jump-link{padding:4px 9px;border:1px solid var(--border);border-radius:999px;
-    color:var(--muted);font-family:var(--mono);font-size:11px;text-decoration:none}
-.stat-chip strong{color:var(--text)} .jump-link{color:var(--accent);cursor:pointer}
-.jump-link:hover{background:var(--elevated)}
-.token-region{border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--surface)}
-.token-region>h3{display:flex;gap:8px;align-items:center;margin:0;padding:8px 12px;
-    border-bottom:1px solid var(--border);font-size:13px}
-.region-masked{border-color:#3b4455;background:#151a23}.region-masked>h3{color:#8b949e}
-.region-trainable,.region-chosen,.region-encourage{border-color:#238636;background:#0d2818}
-.region-trainable>h3,.region-chosen>h3,.region-encourage>h3{color:#56d364}
-.region-rejected,.region-discourage{border-color:#da3633;background:#2d1214}
-.region-rejected>h3,.region-discourage>h3{color:#ff7b72}
-.region-neutral{border-color:#9e6a03;background:#2b2108}.region-neutral>h3{color:#e3b341}
-.token-chunk{border-top:1px solid rgba(255,255,255,.05)}
-.token-chunk:first-of-type{border-top:0}.token-chunk summary{cursor:pointer;color:var(--muted);
-    padding:5px 12px;font:11px var(--mono);user-select:none}.token-chunk summary:hover{color:var(--text)}
-.token-text{margin:0;padding:10px 12px;white-space:pre-wrap;word-break:break-word;
-    overflow-wrap:anywhere;font:13px/1.6 var(--mono)}
-.region-masked .token-text{color:#8b949e}.region-trainable .token-text,.region-chosen .token-text,
-.region-encourage .token-text{color:#aff5b4}.region-rejected .token-text,
-.region-discourage .token-text{color:#ffa198}.region-neutral .token-text{color:#eac54f}
-.token-meta{color:var(--muted);font-weight:400;margin-left:auto;font-family:var(--mono);font-size:11px}
+.stat-chip{padding:4px 9px;border:1px solid var(--border);border-radius:999px;
+    color:var(--muted);font-family:var(--mono);font-size:11px}
+.stat-chip strong{color:var(--text)}
+.window-controls{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:8px;
+    border:1px solid var(--border);border-radius:8px;background:var(--surface)}
+.window-controls button,.window-controls input{background:var(--elevated);border:1px solid var(--border);
+    color:var(--text);padding:5px 8px;border-radius:6px;font:11px var(--mono)}
+.window-controls button{cursor:pointer}.window-controls button:hover{background:var(--border-active)}
+.window-controls button.primary{background:var(--accent);color:#fff}.window-controls label{color:var(--muted);
+    font:11px var(--mono)}.window-controls input{width:86px;margin-left:3px}
+.window-status{margin-left:auto;color:var(--muted);font:11px var(--mono)}
+.decoded-window,.token-table-wrap{border:1px solid var(--border);border-radius:8px;
+    overflow:auto;background:var(--surface)}.decoded-window h3{margin:0;padding:7px 10px;
+    border-bottom:1px solid var(--border);font-size:12px;color:var(--muted)}
+.decoded-window pre{margin:0;padding:12px;white-space:pre-wrap;word-break:break-word;
+    font:13px/1.6 var(--mono)}.token-decoded{border-radius:2px}
+.region-masked{color:#8b949e}.region-trainable,.region-chosen,.region-encourage{color:#aff5b4}
+.region-rejected,.region-discourage{color:#ffa198}.region-neutral{color:#aeb6c2}
+.token-table{width:100%;border-collapse:collapse;font:11px var(--mono)}
+.token-table th{position:sticky;top:0;background:var(--elevated);color:var(--muted);text-align:left}
+.token-table th,.token-table td{padding:5px 8px;border-bottom:1px solid var(--border)}
+.token-table .token-index,.token-table .token-id,.token-table .token-label{white-space:nowrap;
+    color:var(--muted)}.token-table .token-piece{white-space:pre-wrap;word-break:break-all}
+.token-table tr.region-trainable,.token-table tr.region-chosen,.token-table tr.region-encourage{
+    background:rgba(35,134,54,.12)}.token-table tr.region-rejected,
+.token-table tr.region-discourage{background:rgba(218,54,51,.12)}
 
 .plain-dump{white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;
     font-family:var(--mono);font-size:13px;color:var(--text);min-width:0}
@@ -408,12 +419,12 @@ def _dict_rows_shallow(d: dict, row_idx: int, parent_path: str) -> str:
             rows.append(
                 '<div class="kv-row">'
                 '<span class="kv-key">{}</span><span class="kv-colon">:</span>'
-                '<span class="kv-value container" onclick="expandNode(event,{},{})" '
+                "<span class=\"kv-value container\" onclick='expandNode(event,{},{})' "
                 'title="click to expand">{}</span>'
                 "</div>".format(
                     _esc(str(k)),
                     row_idx,
-                    _esc_js(json.dumps(child_path)),
+                    _esc_attr(json.dumps(child_path)),
                     summary,
                 )
             )
@@ -437,9 +448,9 @@ def _list_rows_shallow(lst: list, row_idx: int, parent_path: str) -> str:
             rows.append(
                 '<div class="kv-row">'
                 '<span class="kv-key">[{}]</span><span class="kv-colon">:</span>'
-                '<span class="kv-value container" onclick="expandNode(event,{},{})" '
+                "<span class=\"kv-value container\" onclick='expandNode(event,{},{})' "
                 'title="click to expand">{}</span>'
-                "</div>".format(i, row_idx, _esc_js(json.dumps(child_path)), summary)
+                "</div>".format(i, row_idx, _esc_attr(json.dumps(child_path)), summary)
             )
         else:
             rows.append(
@@ -524,7 +535,8 @@ def register_mode(name: str):
 
 
 _DEFAULT_SDD_TOKENIZER = "Qwen/Qwen3.5-27B"
-_TOKEN_CHUNK_SIZE = 512
+_DEFAULT_TOKEN_WINDOW = 256
+_MAX_TOKEN_WINDOW = 1024
 _TOKENIZED_SCHEMAS = {
     "sft": {"input_ids", "labels"},
     "dpo": {"prompt_ids", "chosen_ids", "rejected_ids"},
@@ -541,7 +553,8 @@ def _get_tokenizer(tokenizer_name: str) -> Any:
         from transformers import AutoTokenizer
     except ImportError as exc:
         raise RuntimeError(
-            "transformers is required to decode tokenized SDD rows"
+            "transformers is required to decode tokenized PCAT rows; install "
+            "transformers or select generic/raw mode"
         ) from exc
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, trust_remote_code=True)
     _tokenizer_cache[tokenizer_name] = tokenizer
@@ -576,52 +589,211 @@ def _decode_tokens(tokenizer: Any, token_ids: list[int]) -> str:
         return str(tokenizer.decode(token_ids))
 
 
-def _token_segments(value: dict[str, Any], schema: str) -> list[tuple[str, list[int]]]:
+def _training_token_data(
+    value: dict[str, Any], schema: str
+) -> tuple[list[int], list[int | None], list[str]]:
     if schema == "sft":
-        ids = list(value["input_ids"])
-        labels = list(value["labels"])
+        ids = [int(token_id) for token_id in value["input_ids"]]
+        labels: list[int | None] = [int(label) for label in value["labels"]]
         if len(ids) != len(labels):
             raise ValueError("SFT input_ids and labels must have the same length")
-        segments: list[tuple[str, list[int]]] = []
-        for token_id, label in zip(ids, labels, strict=True):
-            region = "masked" if int(label) == -100 else "trainable"
-            if not segments or segments[-1][0] != region:
-                segments.append((region, []))
-            segments[-1][1].append(int(token_id))
-        return segments
+        regions = ["masked" if label == -100 else "trainable" for label in labels]
+        return ids, labels, regions
     if schema == "dpo":
-        return [
-            ("masked", list(value["prompt_ids"])),
-            ("chosen", list(value["chosen_ids"])),
-            ("rejected", list(value["rejected_ids"])),
-        ]
+        prompt = [int(token_id) for token_id in value["prompt_ids"]]
+        chosen = [int(token_id) for token_id in value["chosen_ids"]]
+        rejected = [int(token_id) for token_id in value["rejected_ids"]]
+        ids = prompt + chosen + rejected
+        regions = (
+            ["masked"] * len(prompt)
+            + ["chosen"] * len(chosen)
+            + ["rejected"] * len(rejected)
+        )
+        return ids, [None] * len(ids), regions
     label = int(value["encourage_label"])
     completion_region = {1: "encourage", 0: "neutral", -1: "discourage"}.get(label)
     if completion_region is None:
-        raise ValueError("KTO encourage_label must be -1, 0, or 1")
-    return [
-        ("masked", list(value["prompt_ids"])),
-        (completion_region, list(value["completion_ids"])),
+        raise ValueError(
+            "KTO encourage_label must be -1, 0, or 1; got {}".format(label)
+        )
+    prompt = [int(token_id) for token_id in value["prompt_ids"]]
+    completion = [int(token_id) for token_id in value["completion_ids"]]
+    ids = prompt + completion
+    regions = ["masked"] * len(prompt) + [completion_region] * len(completion)
+    return ids, [None] * len(ids), regions
+
+
+def _region_boundaries(regions: list[str]) -> list[dict[str, Any]]:
+    boundaries = []
+    previous = None
+    for offset, region in enumerate(regions):
+        if region == previous:
+            continue
+        boundaries.append({"offset": offset, "region": region})
+        previous = region
+    return boundaries
+
+
+def _training_stats(
+    value: dict[str, Any], row_idx: int, schema: str | None = None
+) -> dict[str, Any]:
+    schema = schema or _training_schema(value)
+    if schema is None:
+        raise ValueError("row is not a recognized tokenized training schema")
+    token_ids, _labels, regions = _training_token_data(value, schema)
+    counts: dict[str, int] = {}
+    for region in regions:
+        counts[region] = counts.get(region, 0) + 1
+    return {
+        "schema": schema,
+        "row_index": row_idx,
+        "id": value.get("id"),
+        "total_tokens": len(token_ids),
+        "counts": counts,
+        "boundaries": _region_boundaries(regions),
+    }
+
+
+def _normalize_token_window(total: int, offset: int, limit: int) -> tuple[int, int]:
+    if total <= 0:
+        return 0, 0
+    offset = max(0, min(int(offset), total - 1))
+    limit = max(1, min(int(limit), _MAX_TOKEN_WINDOW))
+    return offset, min(total, offset + limit)
+
+
+def _parse_render_query(query: str, default_mode: str) -> tuple[str, int, int]:
+    params = parse_qs(query)
+    requested_mode = params.get("mode", [default_mode])[0]
+    allowed_modes = {"auto", "generic", "raw", "sdd", "tokens"}
+    mode = requested_mode if requested_mode in allowed_modes else "generic"
+    try:
+        offset = int(params.get("offset", ["0"])[0])
+        limit = int(params.get("limit", [str(_DEFAULT_TOKEN_WINDOW)])[0])
+    except ValueError as exc:
+        raise ValueError("offset and limit must be integers") from exc
+    return mode, offset, limit
+
+
+def _training_window(
+    value: dict[str, Any],
+    tokenizer: Any,
+    *,
+    offset: int = 0,
+    limit: int = _DEFAULT_TOKEN_WINDOW,
+) -> dict[str, Any]:
+    schema = _training_schema(value)
+    if schema is None:
+        raise ValueError("row is not a recognized tokenized training schema")
+    token_ids, labels, regions = _training_token_data(value, schema)
+    start, end = _normalize_token_window(len(token_ids), offset, limit)
+    segments = []
+    if start < end:
+        segment_start = start
+        current_region = regions[start]
+        for index in range(start + 1, end):
+            if regions[index] == current_region:
+                continue
+            segments.append(
+                {
+                    "start": segment_start,
+                    "end": index,
+                    "region": current_region,
+                    "text": _decode_tokens(tokenizer, token_ids[segment_start:index]),
+                }
+            )
+            segment_start = index
+            current_region = regions[index]
+        segments.append(
+            {
+                "start": segment_start,
+                "end": end,
+                "region": current_region,
+                "text": _decode_tokens(tokenizer, token_ids[segment_start:end]),
+            }
+        )
+    items = [
+        {
+            "index": index,
+            "token_id": token_ids[index],
+            "label": labels[index],
+            "region": regions[index],
+            "text": _decode_tokens(tokenizer, [token_ids[index]]).replace("\n", "\\n"),
+        }
+        for index in range(start, end)
     ]
+    return {
+        "schema": schema,
+        "offset": start,
+        "end": end,
+        "total_tokens": len(token_ids),
+        "segments": segments,
+        "items": items,
+    }
 
 
-def _render_training(value: dict[str, Any], tokenizer: Any) -> str:
+def _render_window_controls(
+    total: int,
+    offset: int,
+    end: int,
+    limit: int,
+    boundaries: list[dict[str, Any]],
+) -> str:
+    buttons = ['<button onclick="jumpToken(0)">start</button>']
+    for boundary in boundaries[1:]:
+        boundary_offset = int(boundary["offset"])
+        buttons.append(
+            '<button onclick="jumpToken({})">{} start · {:,}</button>'.format(
+                boundary_offset,
+                _esc(str(boundary["region"])),
+                boundary_offset,
+            )
+        )
+    end_offset = max(0, total - max(1, min(limit, _MAX_TOKEN_WINDOW)))
+    buttons.append('<button onclick="jumpToken({})">end</button>'.format(end_offset))
+    return (
+        '<div class="window-controls">{}'
+        '<label>offset <input id="token-offset" type="number" min="0" max="{}" '
+        'value="{}"></label>'
+        '<label>window <input id="token-limit" type="number" min="1" max="{}" '
+        'value="{}"></label>'
+        '<button class="primary" onclick="jumpTokenFromInput()">jump</button>'
+        '<span class="window-status">showing {:,}–{:,} of {:,}</span></div>'
+    ).format(
+        "".join(buttons),
+        max(0, total - 1),
+        offset,
+        _MAX_TOKEN_WINDOW,
+        min(max(1, limit), _MAX_TOKEN_WINDOW),
+        offset,
+        max(offset, end - 1),
+        total,
+    )
+
+
+def _render_training(
+    value: dict[str, Any],
+    tokenizer: Any,
+    *,
+    row_idx: int,
+    offset: int,
+    limit: int,
+) -> str:
     schema = _training_schema(value)
     if schema is None:
         return _render_generic(value, 0)
-    segments = [(region, ids) for region, ids in _token_segments(value, schema) if ids]
-    total = sum(len(ids) for _, ids in segments)
-    counts: dict[str, int] = {}
-    for region, ids in segments:
-        counts[region] = counts.get(region, 0) + len(ids)
+    stats = _training_stats(value, row_idx, schema)
 
     chips = [
         '<span class="stat-chip">type <strong>{}</strong></span>'.format(
             schema.upper()
         ),
-        '<span class="stat-chip">total <strong>{:,}</strong></span>'.format(total),
+        '<span class="stat-chip">row <strong>{:,}</strong></span>'.format(row_idx + 1),
+        '<span class="stat-chip">total <strong>{:,}</strong></span>'.format(
+            stats["total_tokens"]
+        ),
     ]
-    for region, count in counts.items():
+    for region, count in stats["counts"].items():
         chips.append(
             '<span class="stat-chip">{} <strong>{:,}</strong></span>'.format(
                 region, count
@@ -633,47 +805,78 @@ def _render_training(value: dict[str, Any], tokenizer: Any) -> str:
                 _esc(str(value["id"]))
             )
         )
-
-    panels: list[str] = []
-    offset = 0
-    for segment_index, (region, ids) in enumerate(segments):
-        anchor = "boundary-{}".format(segment_index)
-        chips.append(
-            '<a class="jump-link" href="#{}">jump {}</a>'.format(anchor, region)
-        )
-        chunks = []
-        for chunk_start in range(0, len(ids), _TOKEN_CHUNK_SIZE):
-            chunk = ids[chunk_start : chunk_start + _TOKEN_CHUNK_SIZE]
-            absolute_start = offset + chunk_start
-            absolute_end = absolute_start + len(chunk)
-            opened = " open" if chunk_start == 0 else ""
-            chunks.append(
-                '<details class="token-chunk"{}><summary>tokens {:,}–{:,}</summary>'
-                '<pre class="token-text">{}</pre></details>'.format(
-                    opened,
-                    absolute_start,
-                    absolute_end - 1,
-                    _esc(_decode_tokens(tokenizer, chunk)),
-                )
-            )
-        panels.append(
-            '<section class="token-region region-{}" id="{}"><h3>{}'
-            '<span class="token-meta">{:,} tokens · offsets {:,}–{:,}</span></h3>{}</section>'.format(
-                region,
-                anchor,
-                region,
-                len(ids),
-                offset,
-                offset + len(ids) - 1,
-                "".join(chunks),
-            )
-        )
-        offset += len(ids)
+    chunk, start, end, total = _render_training_chunk(
+        value, tokenizer, offset=offset, limit=limit
+    )
+    controls = _render_window_controls(
+        total,
+        start,
+        end,
+        limit,
+        stats["boundaries"],
+    )
     return (
-        '<div class="token-preview"><div class="token-stats">{}</div>{}</div>'.format(
-            "".join(chips), "".join(panels)
+        '<div class="token-preview"><div class="token-stats">{}</div>{}'
+        '<div id="token-window-stream" data-row="{}" data-next-offset="{}" '
+        'data-total="{}" data-limit="{}">{}</div>'
+        '<div id="token-window-sentinel" class="token-window-sentinel">'
+        "scroll to load more</div></div>"
+    ).format(
+        "".join(chips),
+        controls,
+        row_idx + 1,
+        end,
+        total,
+        min(max(1, limit), _MAX_TOKEN_WINDOW),
+        chunk,
+    )
+
+
+def _render_training_chunk(
+    value: dict[str, Any],
+    tokenizer: Any,
+    *,
+    offset: int,
+    limit: int,
+) -> tuple[str, int, int, int]:
+    window = _training_window(value, tokenizer, offset=offset, limit=limit)
+    decoded = "".join(
+        '<span class="token-decoded region-{}" data-start="{}" data-end="{}">{}</span>'.format(
+            _esc_attr(segment["region"]),
+            segment["start"],
+            segment["end"],
+            _esc(segment["text"]),
+        )
+        for segment in window["segments"]
+    )
+    rows = "".join(
+        '<tr class="region-{}"><td class="token-index">{:,}</td>'
+        '<td class="token-id">{}</td><td class="token-label">{}</td>'
+        '<td class="token-region-name">{}</td><td class="token-piece">{}</td></tr>'.format(
+            _esc_attr(item["region"]),
+            item["index"],
+            item["token_id"],
+            "—" if item["label"] is None else item["label"],
+            _esc(item["region"]),
+            _esc(item["text"]),
+        )
+        for item in window["items"]
+    )
+    chunk = (
+        '<section class="token-window-chunk" data-offset="{}" '
+        'data-next-offset="{}" data-total="{}">'
+        '<section class="decoded-window"><h3>decoded text</h3><pre>{}</pre></section>'
+        '<div class="token-table-wrap"><table class="token-table"><thead><tr>'
+        "<th>index</th><th>token ID</th><th>label</th><th>region</th><th>piece</th>"
+        "</tr></thead><tbody>{}</tbody></table></div></section>".format(
+            window["offset"],
+            window["end"],
+            window["total_tokens"],
+            decoded,
+            rows,
         )
     )
+    return chunk, window["offset"], window["end"], window["total_tokens"]
 
 
 def _highlight_teacher_privilege(student_text: str, teacher_text: str) -> str:
@@ -703,17 +906,39 @@ def render_row(
     mode: str = "auto",
     *,
     tokenizer: Any = None,
+    token_offset: int = 0,
+    token_limit: int = _DEFAULT_TOKEN_WINDOW,
 ) -> tuple[str, str]:
     """Render a row value as HTML. Returns (html, resolved_mode)."""
     if mode == "auto":
         mode = _detect_mode(value)
     if mode in _MODE_REGISTRY:
         if mode == "sdd":
-            return _render_sdd(value, row_idx, tokenizer=tokenizer), mode
+            return (
+                _render_sdd(
+                    value,
+                    row_idx,
+                    tokenizer=tokenizer,
+                    offset=token_offset,
+                    limit=token_limit,
+                ),
+                mode,
+            )
         if mode == "tokens":
+            if _training_schema(value) is None:
+                return _render_generic(value, row_idx), "generic"
             if tokenizer is None:
                 tokenizer = _get_tokenizer(_DEFAULT_SDD_TOKENIZER)
-            return _render_training(value, tokenizer), mode
+            return (
+                _render_training(
+                    value,
+                    tokenizer,
+                    row_idx=row_idx,
+                    offset=token_offset,
+                    limit=token_limit,
+                ),
+                mode,
+            )
         return _MODE_REGISTRY[mode](value, row_idx), mode
     return _render_generic(value, row_idx), "generic"
 
@@ -761,33 +986,34 @@ def _render_tokens(value: Any, _row_idx: int = 0) -> str:
 
 
 @register_mode("sdd")
-def _render_sdd(value: Any, _row_idx: int = 0, *, tokenizer: Any = None) -> str:
+def _render_sdd(
+    value: Any,
+    _row_idx: int = 0,
+    *,
+    tokenizer: Any = None,
+    offset: int = 0,
+    limit: int = _DEFAULT_TOKEN_WINDOW,
+) -> str:
     if _is_tokenized_sdd(value):
         if tokenizer is None:
             tokenizer = _get_tokenizer(_DEFAULT_SDD_TOKENIZER)
-        decoded_text = {
-            key: tokenizer.decode(value[key], skip_special_tokens=False)
-            for key in ("student_ids", "teacher_ids", "response_ids")
-        }
-        panels = []
-        for key, panel_name in (
-            ("student_ids", "student"),
-            ("teacher_ids", "teacher"),
-            ("response_ids", "response"),
-        ):
-            if key == "teacher_ids":
-                content = _highlight_teacher_privilege(
-                    decoded_text["student_ids"], decoded_text[key]
-                )
-            else:
-                content = html.escape(decoded_text[key])
-            panels.append(
-                '<div class="token-panel token-panel-{}"><h3>{} ({} tokens)</h3>'
-                '<pre class="msg-content">{}</pre></div>'.format(
-                    panel_name, key, len(value[key]), content
-                )
-            )
-        return '<div class="tokenized-sdd">{}</div>'.format("".join(panels))
+        chunk, start, end, total = _render_token_window_chunk(
+            value, tokenizer, offset=offset, limit=limit
+        )
+        controls = _render_window_controls(total, start, end, limit, [])
+        return (
+            '{}<div id="token-window-stream" data-row="{}" data-next-offset="{}" '
+            'data-total="{}" data-limit="{}">{}</div>'
+            '<div id="token-window-sentinel" class="token-window-sentinel">'
+            "scroll to load more</div>"
+        ).format(
+            controls,
+            _row_idx + 1,
+            end,
+            total,
+            min(max(1, limit), _MAX_TOKEN_WINDOW),
+            chunk,
+        )
 
     messages = value.get("messages", [])
     teacher = value.get("teacher_messages", [])
@@ -816,13 +1042,19 @@ def _render_sdd(value: Any, _row_idx: int = 0, *, tokenizer: Any = None) -> str:
             messages.append(student_message)
             teacher.append(teacher_message)
 
-    def _chat_bubble(msg: dict, i: int) -> str:
+    def _chat_bubble(msg: dict, i: int, compare_msg: Any = None) -> str:
         role = str(msg.get("role", "?"))
         content = msg.get("content", "")
         if isinstance(content, str):
-            content_html = '<pre class="msg-content">{}</pre>'.format(
-                html.escape(str(content))
+            compare_content = (
+                compare_msg.get("content") if isinstance(compare_msg, dict) else None
             )
+            rendered_content = (
+                _highlight_teacher_privilege(compare_content, content)
+                if isinstance(compare_content, str)
+                else html.escape(content)
+            )
+            content_html = '<pre class="msg-content">{}</pre>'.format(rendered_content)
         else:
             content_html = _scalar_html(content)
         extras = {
@@ -839,17 +1071,92 @@ def _render_sdd(value: Any, _row_idx: int = 0, *, tokenizer: Any = None) -> str:
             "{}{} </div>"
         ).format(role, i, _esc(role), content_html, extras_html)
 
-    def _render_msgs(msgs: list, title: str) -> str:
+    def _render_msgs(msgs: list, title: str, compare_msgs: list | None = None) -> str:
         parts = ["<h3>{} ({})</h3>".format(_esc(title), len(msgs))]
         for i, msg in enumerate(msgs):
             if isinstance(msg, dict):
-                parts.append(_chat_bubble(msg, i))
+                compare_msg = (
+                    compare_msgs[i]
+                    if compare_msgs is not None and i < len(compare_msgs)
+                    else None
+                )
+                parts.append(_chat_bubble(msg, i, compare_msg))
         return "".join(parts)
 
     return '<div class="side-by-side"><div>{}</div><div>{}</div></div>'.format(
         _render_msgs(messages, "messages"),
-        _render_msgs(teacher, "teacher_messages"),
+        _render_msgs(
+            teacher,
+            "teacher_messages",
+            messages if len(messages) == len(teacher) else None,
+        ),
     )
+
+
+def _render_tokenized_sdd_chunk(
+    value: dict[str, Any],
+    tokenizer: Any,
+    *,
+    offset: int,
+    limit: int,
+) -> tuple[str, int, int, int]:
+    keys = ("student_ids", "teacher_ids", "response_ids")
+    token_data = {key: [int(token_id) for token_id in value[key]] for key in keys}
+    total = max((len(token_data[key]) for key in keys), default=0)
+    chunk_start, chunk_end = _normalize_token_window(total, offset, limit)
+    windows = {}
+    decoded_text = {}
+    for key in keys:
+        token_ids = token_data[key]
+        start = min(chunk_start, len(token_ids))
+        end = min(chunk_end, len(token_ids))
+        windows[key] = (start, end, len(token_ids))
+        decoded_text[key] = _decode_tokens(tokenizer, token_ids[start:end])
+    panels = []
+    for key, panel_name in (
+        ("student_ids", "student"),
+        ("teacher_ids", "teacher"),
+        ("response_ids", "response"),
+    ):
+        if key == "teacher_ids":
+            content = _highlight_teacher_privilege(
+                decoded_text["student_ids"], decoded_text[key]
+            )
+        else:
+            content = html.escape(decoded_text[key])
+        panels.append(
+            '<div class="token-panel token-panel-{}"><h3>{} '
+            "(tokens {:,}–{:,} of {:,})</h3>"
+            '<pre class="msg-content">{}</pre></div>'.format(
+                panel_name,
+                key,
+                windows[key][0],
+                max(windows[key][0], windows[key][1] - 1),
+                windows[key][2],
+                content,
+            )
+        )
+    chunk = (
+        '<section class="token-window-chunk" data-offset="{}" '
+        'data-next-offset="{}" data-total="{}">'
+        '<div class="tokenized-sdd">{}</div></section>'
+    ).format(chunk_start, chunk_end, total, "".join(panels))
+    return chunk, chunk_start, chunk_end, total
+
+
+def _render_token_window_chunk(
+    value: dict[str, Any],
+    tokenizer: Any,
+    *,
+    offset: int,
+    limit: int,
+) -> tuple[str, int, int, int]:
+    """Render the shared infinite-scroll chunk contract for any tokenized row."""
+    if _is_tokenized_sdd(value):
+        return _render_tokenized_sdd_chunk(value, tokenizer, offset=offset, limit=limit)
+    if _training_schema(value) is not None:
+        return _render_training_chunk(value, tokenizer, offset=offset, limit=limit)
+    raise ValueError("row is not a recognized tokenized schema")
 
 
 # ---------------------------------------------------------------------------
@@ -859,6 +1166,9 @@ def _render_sdd(value: Any, _row_idx: int = 0, *, tokenizer: Any = None) -> str:
 _JS = r"""
 var currentMode = document.body.dataset.mode || 'generic';
 var selectedFileIdx = -1;
+var tokenWindowObserver = null;
+var tokenWindowLoading = false;
+var MAX_TOKEN_WINDOW_CHUNKS = 8;
 
 function selectFile(idx) {
     var rows = document.querySelectorAll('.file-row');
@@ -1009,6 +1319,7 @@ function reloadContent(mode) {
             btns.forEach(function(b) {
                 b.classList.toggle('active', b.dataset.mode === (mode || currentMode));
             });
+            initTokenWindowScroll();
         }
     };
     xhr.send();
@@ -1036,6 +1347,76 @@ function sampleRow(total){
 function navigateTo(n) {
     window.location.href = '/row/' + n + '?mode=' + currentMode;
 }
+function jumpToken(offset) {
+    var url = new URL(window.location.href);
+    url.searchParams.set('mode', currentMode);
+    url.searchParams.set('offset', String(Math.max(0, Number(offset) || 0)));
+    var limit = document.getElementById('token-limit');
+    if (limit) url.searchParams.set('limit', limit.value);
+    window.location.href = url.pathname + '?' + url.searchParams.toString();
+}
+function jumpTokenFromInput() {
+    var input = document.getElementById('token-offset');
+    if (input) jumpToken(input.value);
+}
+function initTokenWindowScroll() {
+    if (tokenWindowObserver) tokenWindowObserver.disconnect();
+    tokenWindowObserver = null;
+    tokenWindowLoading = false;
+    var stream = document.getElementById('token-window-stream');
+    var sentinel = document.getElementById('token-window-sentinel');
+    if (!stream || !sentinel) return;
+    function updateDone() {
+        var done = Number(stream.dataset.nextOffset) >= Number(stream.dataset.total);
+        sentinel.classList.toggle('done', done);
+        return done;
+    }
+    async function loadNextTokenWindow() {
+        if (tokenWindowLoading || updateDone()) return;
+        tokenWindowLoading = true;
+        sentinel.classList.add('loading');
+        sentinel.textContent = 'loading next token window…';
+        var params = new URLSearchParams({
+            offset: stream.dataset.nextOffset,
+            limit: stream.dataset.limit
+        });
+        try {
+            var response = await fetch('/row/' + stream.dataset.row + '/token-window?' + params.toString());
+            if (!response.ok) throw new Error('HTTP ' + response.status);
+            var holder = document.createElement('div');
+            holder.innerHTML = await response.text();
+            var chunk = holder.firstElementChild;
+            if (!chunk || !chunk.classList.contains('token-window-chunk')) {
+                throw new Error('invalid token window response');
+            }
+            stream.appendChild(chunk);
+            stream.dataset.nextOffset = chunk.dataset.nextOffset;
+            var chunks = stream.querySelectorAll('.token-window-chunk');
+            while (chunks.length > MAX_TOKEN_WINDOW_CHUNKS) {
+                var first = chunks[0];
+                var removedHeight = first.getBoundingClientRect().height;
+                first.remove();
+                window.scrollBy(0, -removedHeight);
+                chunks = stream.querySelectorAll('.token-window-chunk');
+            }
+            sentinel.textContent = 'scroll to load more';
+            updateDone();
+        } catch (error) {
+            sentinel.textContent = 'load failed; scroll or click to retry';
+        } finally {
+            sentinel.classList.remove('loading');
+            tokenWindowLoading = false;
+        }
+    }
+    sentinel.onclick = loadNextTokenWindow;
+    tokenWindowObserver = new IntersectionObserver(function(entries) {
+        if (entries.some(function(entry) { return entry.isIntersecting; })) {
+            loadNextTokenWindow();
+        }
+    }, {rootMargin: '600px 0px'});
+    tokenWindowObserver.observe(sentinel);
+    updateDone();
+}
 document.addEventListener('keydown',function(e){
     if(e.target.tagName==='INPUT')return;
     if(e.key==='ArrowLeft'||e.key==='[')navigate(-1);
@@ -1047,6 +1428,7 @@ document.addEventListener('keydown',function(e){
     else if(e.key==='1')switchMode('generic');
     else if(e.key==='2')switchMode('sdd');
     else if(e.key==='3')switchMode('raw');
+    else if(e.key==='4')switchMode('tokens');
 });
 
 // Auto-refresh file list for glob sources (poll /files every 5s)
@@ -1128,6 +1510,7 @@ window.addEventListener('DOMContentLoaded', function() {
     btns.forEach(function(b) {
         b.classList.toggle('active', b.dataset.mode === currentMode);
     });
+    initTokenWindowScroll();
     startFileRefresh();
 });
 """
@@ -1166,6 +1549,7 @@ def _build_header(source: RowSource, row_idx: int, mode: str) -> str:
     total = source.total_rows
     generic_active = " active" if mode in ("generic", "auto") else ""
     sdd_active = " active" if mode == "sdd" else ""
+    tokens_active = " active" if mode == "tokens" else ""
     raw_active = " active" if mode == "raw" else ""
     return (
         '<div class="header">'
@@ -1185,6 +1569,8 @@ def _build_header(source: RowSource, row_idx: int, mode: str) -> str:
         'title="Interactive tree (key 1)">tree</button>'
         '<button class="mode-btn{}" data-mode="sdd" onclick="switchMode(\'sdd\')" '
         'title="Side-by-side chat (key 2)">sdd</button>'
+        '<button class="mode-btn{}" data-mode="tokens" onclick="switchMode(\'tokens\')" '
+        'title="Bounded token preview (key 4)">tokens</button>'
         '<button class="mode-btn{}" data-mode="raw" onclick="switchMode(\'raw\')" '
         'title="Plain JSON (key 3)">raw</button>'
         "</div>"
@@ -1198,6 +1584,7 @@ def _build_header(source: RowSource, row_idx: int, mode: str) -> str:
         total,
         generic_active,
         sdd_active,
+        tokens_active,
         raw_active,
     )
 
@@ -1213,7 +1600,8 @@ def _build_footer() -> str:
         "<kbd>r</kbd> reload &nbsp;"
         "<kbd>1</kbd> tree &nbsp;"
         "<kbd>2</kbd> sdd &nbsp;"
-        "<kbd>3</kbd> raw"
+        "<kbd>3</kbd> raw &nbsp;"
+        "<kbd>4</kbd> tokens"
         "</span>"
         "</div>"
     )
@@ -1289,6 +1677,10 @@ class PcatHandler(BaseHTTPRequestHandler):
 
         if route == "/files":
             self._serve_files_json()
+            return
+
+        if route.startswith("/row/") and route.endswith("/token-window"):
+            self._serve_token_window(route, parsed)
             return
 
         if route.startswith("/row/") and "/node" in route:
@@ -1404,6 +1796,46 @@ class PcatHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _serve_token_window(self, path: str, parsed) -> None:
+        slug = path[len("/row/") : -len("/token-window")]
+        try:
+            idx = int(slug) - 1
+            _mode, offset, limit = _parse_render_query(parsed.query, "sdd")
+        except ValueError:
+            self._send_html(
+                _error_page(
+                    "Bad token window", "row, offset, and limit must be integers"
+                ),
+                400,
+            )
+            return
+        if idx < 0 or idx >= self.source.total_rows:
+            self._send_html(_error_page("Out of range", "Row is out of range"), 404)
+            return
+        try:
+            value = self.source.load_row(idx)
+        except Exception as exc:
+            self._send_html(_error_page("Load error", str(exc)), 500)
+            return
+        if not (_is_tokenized_sdd(value) or _training_schema(value) is not None):
+            self._send_html(
+                _error_page(
+                    "Unsupported row",
+                    "Infinite token scrolling requires a recognized tokenized row",
+                ),
+                400,
+            )
+            return
+        try:
+            tokenizer = _get_tokenizer(self.tokenizer_name)
+            chunk, _start, _end, _total = _render_token_window_chunk(
+                value, tokenizer, offset=offset, limit=limit
+            )
+        except Exception as exc:
+            self._send_html(_error_page("Tokenizer error", str(exc)), 500)
+            return
+        self._send_html(chunk)
+
     def _serve_row(self, path: str, parsed):
         total = self.source.total_rows
         if total <= 0:
@@ -1430,17 +1862,17 @@ class PcatHandler(BaseHTTPRequestHandler):
             )
             return
 
-        # Allow ?mode= query param to override on the fly
-        qs = parsed.query
-        mode = self.mode
-        if qs.startswith("mode="):
-            mode = qs[5:].split("&")[0]
-            if mode == "sdd":
-                mode = "sdd"
-            elif mode == "raw":
-                mode = "raw"
-            else:
-                mode = "generic"
+        # Allow render mode and bounded token window to be changed on the fly.
+        try:
+            mode, token_offset, token_limit = _parse_render_query(
+                parsed.query, self.mode
+            )
+        except ValueError:
+            self._send_html(
+                _error_page("Bad token window", "offset and limit must be integers"),
+                400,
+            )
+            return
 
         try:
             value = self.source.load_row(idx)
@@ -1450,13 +1882,28 @@ class PcatHandler(BaseHTTPRequestHandler):
 
         header = _build_header(self.source, idx, mode)
         tokenizer = None
-        if mode in {"auto", "sdd"} and _is_tokenized_sdd(value):
+        resolved_hint = _detect_mode(value) if mode == "auto" else mode
+        needs_tokenizer = (resolved_hint == "sdd" and _is_tokenized_sdd(value)) or (
+            resolved_hint == "tokens" and _training_schema(value) is not None
+        )
+        if needs_tokenizer:
             try:
                 tokenizer = _get_tokenizer(self.tokenizer_name)
             except Exception as exc:
                 self._send_html(_error_page("Tokenizer error", str(exc)), 500)
                 return
-        rendered, resolved_mode = render_row(value, idx, mode, tokenizer=tokenizer)
+        try:
+            rendered, resolved_mode = render_row(
+                value,
+                idx,
+                mode,
+                tokenizer=tokenizer,
+                token_offset=token_offset,
+                token_limit=token_limit,
+            )
+        except (TypeError, ValueError) as exc:
+            self._send_html(_error_page("Preview error", str(exc)), 400)
+            return
         if resolved_mode != mode:
             # render_row auto-detected a different mode — rebuild header
             header = _build_header(self.source, idx, resolved_mode)
@@ -1533,11 +1980,20 @@ def serve(
         print("  refresh: every {:.0f}s".format(refresh_interval), file=sys.stderr)
     print("  " + "\u2500" * 49, file=sys.stderr)
 
-    if open_browser:
-        with suppress(Exception):
-            webbrowser.open(url)
-
     server = HTTPServer((host, port), PcatHandler)
+    if open_browser:
+        # Remote-editor browser helpers can wait indefinitely for their child
+        # process.  Browser launch is best-effort and must never gate serving.
+        def open_browser_in_background() -> None:
+            with suppress(Exception):
+                webbrowser.open(url)
+
+        threading.Thread(
+            target=open_browser_in_background,
+            name="pcat-browser-open",
+            daemon=True,
+        ).start()
+
     try:
         print("  Serving at {} ...  (Ctrl+C to stop)".format(url), file=sys.stderr)
         server.serve_forever()
