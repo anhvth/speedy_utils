@@ -44,7 +44,7 @@ def _unset_proxy_env_for_localhost(base_url: Any) -> list[str]:
             removed_vars.append(var_name)
 
     if removed_vars and not _localhost_proxy_notice_shown:
-        logger.warning(
+        logger.debug(
             "Localhost base_url detected ({}). Unset proxy env vars for local LLM "
             "connectivity: {}",
             base_url_str,
