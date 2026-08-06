@@ -20,6 +20,7 @@ from speedy_utils.common.exceptions import (
 # Function decorators / logging
 from speedy_utils.common.function_decorator import retry_runtime
 from speedy_utils.common.logger import log, setup_logger
+from speedy_utils.common.mirror_path import MirrowPath
 
 # Notebook helpers
 from speedy_utils.common.notebook_utils import (
@@ -119,4 +120,5 @@ __all__ = [
     "multi_process_dataset",
     # Notebook utilities
     "change_dir",
+    "MirrowPath",
 ]
