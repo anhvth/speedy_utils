@@ -275,9 +275,12 @@ def _run_batch(
     return [_worker(item, func, fixed_kwargs, caller_frame) for item in items]
 
 
-def _attach_metadata(fut: Future[Any], idx: int, logical_size: int) -> None:
+def _attach_metadata(
+    fut: Future[Any], idx: int, logical_size: int, items: Sequence[Any]
+) -> None:
     fut._speedy_idx = idx
     fut._speedy_size = logical_size
+    fut._speedy_items = items
 
 
 def _future_meta(fut: Future[Any]) -> tuple[int, int, int]:
@@ -585,6 +588,21 @@ def _build_caller_context() -> traceback.FrameSummary | None:
     )
 
 
+def _multi_thread_process_entry(payload: bytes, output_path: str) -> None:
+    """Spawn-safe entrypoint for the compatibility ``n_proc`` fan-out."""
+    import dill
+
+    func, chunk, options, fixed_kwargs = dill.loads(payload)
+    multi_thread(
+        func,
+        chunk,
+        n_proc=0,
+        store_output_pkl_file=output_path,
+        **options,
+        **fixed_kwargs,
+    )
+
+
 def _run_multi_process_fanout(
     func: Callable[[T], R],
     inputs: Iterable[T],
@@ -600,10 +618,15 @@ def _run_multi_process_fanout(
     max_error_files: int,
     n_proc: int,
     fixed_kwargs: Mapping[str, Any],
-) -> list[R | None]:
+    on_result: Callable[[int, T, R], None] | None,
+    on_error: Callable[[int, T, Exception], None] | None,
+    on_progress: Callable[[int, int | None, int, int], None] | None,
+    collect: bool,
+) -> list[R | None] | None:
+    import multiprocessing as mp
     import tempfile
 
-    from fastcore.all import threaded
+    import dill
 
     from speedy_utils import load_by_ext
 
@@ -617,30 +640,29 @@ def _run_multi_process_fanout(
         items[i : i + process_chunk_size]
         for i in range(0, len(items), process_chunk_size)
     ]
-    in_process_multi_thread = threaded(process=True)(multi_thread)
     results: list[R | None] = []
-    processes: list[tuple[int, Any, str, int]] = []
+    completed = succeeded = failed = 0
 
     def start_process(proc_idx: int, chunk: list[T]) -> tuple[int, Any, str, int]:
         with tempfile.NamedTemporaryFile(delete=False, suffix='multi_thread.pkl') as fh:
             file_pkl = fh.name
-        assert isinstance(in_process_multi_thread, Callable)
-        proc = in_process_multi_thread(
-            func,
-            chunk,
-            workers=workers,
-            batch=batch,
-            ordered=ordered,
-            progress=False,
-            progress_update=progress_update,
-            prefetch_factor=prefetch_factor,
-            timeout=timeout,
-            error_handler=error_handler,
-            max_error_files=max_error_files,
-            n_proc=0,
-            store_output_pkl_file=file_pkl,
-            **fixed_kwargs,
+        options = {
+            'workers': workers,
+            'batch': batch,
+            'ordered': ordered,
+            'progress': False,
+            'progress_update': progress_update,
+            'prefetch_factor': prefetch_factor,
+            'timeout': timeout,
+            'error_handler': error_handler,
+            'max_error_files': max_error_files,
+        }
+        payload = dill.dumps((func, chunk, options, dict(fixed_kwargs)))
+        proc = mp.get_context('spawn').Process(
+            target=_multi_thread_process_entry,
+            args=(payload, file_pkl),
         )
+        proc.start()
         return proc_idx, proc, file_pkl, len(chunk)
 
     proc_results: dict[int, list[R | None]] = {}
@@ -669,7 +691,7 @@ def _run_multi_process_fanout(
                 proc.join()
                 logger.trace('process finished: {}', proc)
                 try:
-                    proc_results[proc_idx] = load_by_ext(file_pkl)
+                    chunk_results = load_by_ext(file_pkl)
                 finally:
                     try:
                         os.unlink(file_pkl)
@@ -677,6 +699,23 @@ def _run_multi_process_fanout(
                         logger.warning(
                             'failed to remove temp file {}: {}', file_pkl, exc
                         )
+                chunk = chunks[proc_idx]
+                start_index = proc_idx * process_chunk_size
+                for offset, (item, value) in enumerate(zip(chunk, chunk_results, strict=True)):
+                    if value is None:
+                        failed += 1
+                        if on_error is not None:
+                            on_error(start_index + offset, item,
+                                     RuntimeError('worker process returned no result'))
+                    else:
+                        succeeded += 1
+                        if on_result is not None:
+                            on_result(start_index + offset, item, value)
+                completed += logical_size
+                if on_progress is not None:
+                    on_progress(completed, len(items), succeeded, failed)
+                if collect:
+                    proc_results[proc_idx] = chunk_results
                 if progress_bar is not None:
                     progress_bar.update(logical_size)
                 finished_order.append(proc_idx)
@@ -695,6 +734,8 @@ def _run_multi_process_fanout(
         if progress_bar is not None:
             progress_bar.close()
 
+    if not collect:
+        return None
     result_order = range(len(chunks)) if ordered else finished_order
     for proc_idx in result_order:
         results.extend(proc_results.get(proc_idx, []))
@@ -815,6 +856,10 @@ if TYPE_CHECKING:
         max_error_files: int = ...,
         n_proc: int = ...,
         store_output_pkl_file: str | None = ...,
+        on_result: Callable[[int, T, R], None] | None = ...,
+        on_error: Callable[[int, T, Exception], None] | None = ...,
+        on_progress: Callable[[int, int | None, int, int], None] | None = ...,
+        collect: Literal[True] = ...,
         **fixed_kwargs: Any,
     ) -> list[R]: ...
 
@@ -837,8 +882,24 @@ if TYPE_CHECKING:
         max_error_files: int = ...,
         n_proc: int = ...,
         store_output_pkl_file: str | None = ...,
+        on_result: Callable[[int, T, R], None] | None = ...,
+        on_error: Callable[[int, T, Exception], None] | None = ...,
+        on_progress: Callable[[int, int | None, int, int], None] | None = ...,
+        collect: Literal[True] = ...,
         **fixed_kwargs: Any,
     ) -> list[R | None]: ...
+
+    @overload
+    def multi_thread(
+        func: Callable[[T], R],
+        inputs: Iterable[T],
+        *,
+        on_result: Callable[[int, T, R], None] | None = ...,
+        on_error: Callable[[int, T, Exception], None] | None = ...,
+        on_progress: Callable[[int, int | None, int, int], None] | None = ...,
+        collect: Literal[False],
+        **kwargs: Any,
+    ) -> None: ...
 
 
 def multi_thread(  # type: ignore[misc]
@@ -859,8 +920,12 @@ def multi_thread(  # type: ignore[misc]
     max_error_files: int = 100,
     n_proc: int = 0,
     store_output_pkl_file: str | None = None,
+    on_result: Callable[[int, T, R], None] | None = None,
+    on_error: Callable[[int, T, Exception], None] | None = None,
+    on_progress: Callable[[int, int | None, int, int], None] | None = None,
+    collect: bool = True,
     **fixed_kwargs: Any,
-) -> list[R | None]:
+) -> list[R | None] | None:
     """Execute ``func`` over ``inputs`` using a managed thread pool.
 
     The scheduler supports batching, ordered result delivery, progress
@@ -908,12 +973,24 @@ def multi_thread(  # type: ignore[misc]
         Optional process-level fan-out; ``>1`` shards work across processes.
     store_output_pkl_file : str | None, optional
         When provided, persist the results to disk via speedy_utils helpers.
+    on_result : callable | None, optional
+        Called as ``on_result(index, item, result)`` in the coordinator thread
+        immediately after each successful logical item completes.
+    on_error : callable | None, optional
+        Called as ``on_error(index, item, exception)`` in the coordinator thread
+        for each failed logical item.
+    on_progress : callable | None, optional
+        Called as ``on_progress(completed, total, succeeded, failed)`` after
+        each completed future.
+    collect : bool, optional
+        Return collected results when true (default). When false, hooks still
+        run but results are not retained and the function returns ``None``.
     fixed_kwargs : dict[str, Any]
         Extra kwargs forwarded to every invocation of ``func``.
 
     Returns
     -------
-    list[R | None]
+    list[R | None] | None
         Collected results, preserving order when requested. Failed tasks yield
         ``None`` entries if ``error_handler`` is not 'raise'.
     """
@@ -923,6 +1000,8 @@ def multi_thread(  # type: ignore[misc]
         stop_on_error=stop_on_error,
         error_handler=error_handler,
     )
+    if not collect and store_output_pkl_file:
+        raise ValueError('store_output_pkl_file requires collect=True')
     if n_proc > 1:
         return _run_multi_process_fanout(
             func,
@@ -938,6 +1017,10 @@ def multi_thread(  # type: ignore[misc]
             max_error_files=max_error_files,
             n_proc=n_proc,
             fixed_kwargs=fixed_kwargs,
+            on_result=on_result,
+            on_error=on_error,
+            on_progress=on_progress,
+            collect=collect,
         )
 
     inputs = _coerce_dataframe_inputs(inputs)
@@ -975,7 +1058,10 @@ def multi_thread(  # type: ignore[misc]
     if batch > 1:
         src_iter = iter(_group_iter(src_iter, batch))
 
-    collector: _ResultCollector[Any] = _ResultCollector(ordered, logical_total)
+    collector: _ResultCollector[Any] = _ResultCollector(
+        ordered if collect else False,
+        logical_total if collect else None,
+    )
 
     # Initialize error stats for error handling
     func_name = getattr(func, '__name__', repr(func))
@@ -1024,13 +1110,17 @@ def multi_thread(  # type: ignore[misc]
                     _run_batch, batch_items, func, fixed_kwargs_map, caller_context
                 )
                 logical_size = len(batch_items)
+                submitted_items = batch_items
             else:
                 progress_units = _progress_units_for_item(
                     arg, progress_weight=progress_weight
                 )
                 fut = pool.submit(_worker, arg, func, fixed_kwargs_map, caller_context)
                 logical_size = 1
-            _attach_metadata(fut, state.next_logical_idx, logical_size)
+                submitted_items = [arg]
+            _attach_metadata(
+                fut, state.next_logical_idx, logical_size, submitted_items
+            )
             fut._speedy_progress_units = progress_units
             state.next_logical_idx += logical_size
             state.inflight.add(fut)
@@ -1068,6 +1158,7 @@ def multi_thread(  # type: ignore[misc]
             for fut in done:
                 state.inflight.remove(fut)
                 idx, logical_size, progress_units = _future_meta(fut)
+                submitted_items = fut._speedy_items
                 try:
                     result = fut.result()
                     # Record success for each item in the batch
@@ -1075,6 +1166,9 @@ def multi_thread(  # type: ignore[misc]
                         error_stats.record_success()
                 except UserFunctionError as exc:
                     # User function error
+                    if on_error is not None:
+                        for offset, item in enumerate(submitted_items):
+                            on_error(idx + offset, item, exc.original_exception)
                     if error_handler == 'raise':
                         sys.stderr.flush()
                         sys.stdout.flush()
@@ -1095,6 +1189,9 @@ def multi_thread(  # type: ignore[misc]
                     out_items = [None] * logical_size
                 except Exception as exc:
                     # Other errors (infrastructure, batching, etc.)
+                    if on_error is not None:
+                        for offset, item in enumerate(submitted_items):
+                            on_error(idx + offset, item, exc)
                     if error_handler == 'raise':
                         _cancel_futures(state.inflight)
                         raise SpeedyWorkerError(
@@ -1111,14 +1208,31 @@ def multi_thread(  # type: ignore[misc]
                     try:
                         out_items = _normalize_batch_result(result, logical_size)
                     except Exception as exc:
+                        if on_error is not None:
+                            for offset, item in enumerate(submitted_items):
+                                on_error(idx + offset, item, exc)
                         _cancel_futures(state.inflight)
                         raise RuntimeError(
                             'batched callable returned an unexpected shape',
                         ) from exc
 
-                state.collector.add(idx, out_items)
+                    if on_result is not None:
+                        for offset, (item, value) in enumerate(
+                            zip(submitted_items, out_items, strict=True)
+                        ):
+                            on_result(idx + offset, item, value)
+
+                if collect:
+                    state.collector.add(idx, out_items)
                 state.completed_items += len(out_items)
                 reporter.advance(progress_units)
+                if on_progress is not None:
+                    on_progress(
+                        state.completed_items,
+                        logical_total,
+                        error_stats.success_count,
+                        error_stats.error_count,
+                    )
 
             try:
                 while state.items_inflight() < max_inflight:
@@ -1144,7 +1258,7 @@ def multi_thread(  # type: ignore[misc]
     if store_output_pkl_file:
         dump_json_or_pickle(results, store_output_pkl_file)
     _prune_dead_threads()
-    return results
+    return results if collect else None
 
 
 def multi_thread_standard(

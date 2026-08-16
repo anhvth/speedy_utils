@@ -65,6 +65,11 @@ from speedy_utils.common.utils_print import flatten_dict, fprint
 from speedy_utils.multi_worker.dataset_sharding import multi_process_dataset
 from speedy_utils.multi_worker.process import multi_process
 from speedy_utils.multi_worker.thread import kill_all_thread, multi_thread
+from speedy_utils.parallel_llm_job import (
+    JobSummary,
+    ParallelLLMJob,
+    TargetNotReachedError,
+)
 
 
 __all__ = [
@@ -121,4 +126,7 @@ __all__ = [
     # Notebook utilities
     "change_dir",
     "MirrowPath",
+    "JobSummary",
+    "ParallelLLMJob",
+    "TargetNotReachedError",
 ]

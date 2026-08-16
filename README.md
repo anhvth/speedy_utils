@@ -420,7 +420,19 @@ llm = LLM(
 llm = LLM(client=8000, model="llama-3")
 llm = LLM(client="http://localhost:8000/v1", model="llama-3")
 llm = LLM(client=[8000, 8001, 8002], model="llama-3")
+llm = LLM(client="h1-31:8000", model="llama-3")
+llm = LLM(client=["h1-31:8000", "h2-14:8100"], model="llama-3")
 ```
+
+An integer means a local port. An HTTP(S) URL is used directly. A bare
+`HOST:PORT` string is treated as an SSH host or alias plus its remote service
+port; Speedy Utils creates a loopback-only SSH forward and reuses it for the
+life of the Python process. Lists may mix all three forms.
+
+For large checkpointed jobs, subclass `ParallelLLMJob` and implement only the
+per-item domain logic. It provides persistent process/thread workers, lazy LLM
+pools, exact-size JSONL output, and atomic resume state; see
+[`docs/PARALLEL_LLM_JOB.md`](docs/PARALLEL_LLM_JOB.md).
 
 ### Caching and history inspection
 

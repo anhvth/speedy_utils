@@ -30,9 +30,9 @@ class TestRequireSingleChoice(TestCase):
 
 class TestBuildApiKwargs(TestCase):
     @staticmethod
-    def _make_llm():
+    def _make_llm(model_id="m"):
         client = MagicMock()
-        client.models.list.return_value = MagicMock(data=[MagicMock(id="m")])
+        client.models.list.return_value = MagicMock(data=[MagicMock(id=model_id)])
         with patch("llm_utils.lm.llm.get_base_client", return_value=client):
             return LLM()
 
@@ -41,6 +41,29 @@ class TestBuildApiKwargs(TestCase):
         _, api_kwargs = llm._build_api_kwargs({}, enable_thinking=True)
         chat_kwargs = api_kwargs["extra_body"]["chat_template_kwargs"]
         assert chat_kwargs["enable_thinking"] is True
+
+    def test_deepseek_v4_uses_thinking_chat_template_key(self):
+        llm = self._make_llm("deepseek-ai/DeepSeek-V4-Flash-0731")
+        _, api_kwargs = llm._build_api_kwargs({}, enable_thinking=False)
+        chat_kwargs = api_kwargs["extra_body"]["chat_template_kwargs"]
+        assert chat_kwargs == {"thinking": False}
+
+    def test_runtime_model_selects_thinking_chat_template_key(self):
+        llm = self._make_llm()
+        _, api_kwargs = llm._build_api_kwargs(
+            {"model": "DeepSeek-V4-Flash-0731"}, enable_thinking=True
+        )
+        chat_kwargs = api_kwargs["extra_body"]["chat_template_kwargs"]
+        assert chat_kwargs == {"thinking": True}
+
+    def test_explicit_model_specific_thinking_setting_wins(self):
+        llm = self._make_llm("DeepSeek-V4-Flash-0731")
+        _, api_kwargs = llm._build_api_kwargs(
+            {"extra_body": {"chat_template_kwargs": {"thinking": True}}},
+            enable_thinking=False,
+        )
+        chat_kwargs = api_kwargs["extra_body"]["chat_template_kwargs"]
+        assert chat_kwargs == {"thinking": True}
 
     def test_enable_thinking_does_not_mutate_caller_extra_body(self):
         llm = self._make_llm()

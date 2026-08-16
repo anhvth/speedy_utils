@@ -208,6 +208,69 @@ def test_unordered():
     assert sorted(val for val in out if val is not None) == [i * i for i in inp]
 
 
+def test_result_hook_runs_in_completion_order_while_results_stay_ordered():
+    hook_calls = []
+
+    def f(item):
+        delay, value = item
+        time.sleep(delay)
+        return value
+
+    items = [(0.05, 1), (0.0, 2)]
+    out = multi_thread(
+        f,
+        items,
+        workers=2,
+        progress=False,
+        on_result=lambda index, item, result: hook_calls.append(
+            (index, item, result)
+        ),
+    )
+
+    assert out == [1, 2]
+    assert hook_calls == [(1, items[1], 2), (0, items[0], 1)]
+
+
+def test_collect_false_uses_hooks_without_returning_results():
+    seen = []
+
+    out = multi_thread(
+        lambda value: value * 2,
+        [1, 2, 3],
+        workers=2,
+        progress=False,
+        ordered=False,
+        collect=False,
+        on_result=lambda index, item, result: seen.append((index, item, result)),
+    )
+
+    assert out is None
+    assert sorted(seen) == [(0, 1, 2), (1, 2, 4), (2, 3, 6)]
+
+
+def test_error_hook_receives_original_input_and_exception():
+    errors = []
+
+    def f(value):
+        if value == 2:
+            raise ValueError('boom')
+        return value
+
+    out = multi_thread(
+        f,
+        [1, 2, 3],
+        workers=2,
+        progress=False,
+        error_handler='ignore',
+        on_error=lambda index, item, error: errors.append(
+            (index, item, type(error), str(error))
+        ),
+    )
+
+    assert out == [1, None, 3]
+    assert errors == [(1, 2, ValueError, 'boom')]
+
+
 # ────────────────────────────────────────────────────────────
 # 10. stop_on_error=False lets the map continue
 #     (failed inputs become None)

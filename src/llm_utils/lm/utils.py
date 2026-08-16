@@ -17,6 +17,13 @@ def _create_single_client(url: str, api_key: str, cache: bool) -> Any:
     return MOpenAI(base_url=url, api_key=api_key, cache=cache)
 
 
+def _client_url(client: str) -> str:
+    """Turn a direct URL or bare SSH target into an OpenAI base URL."""
+    from .ssh_tunnel import resolve_ssh_endpoint
+
+    return resolve_ssh_endpoint(client)
+
+
 def get_base_client(
     client=None,
     cache: bool = True,
@@ -27,6 +34,7 @@ def get_base_client(
     When client is a list, returns a list of clients for load balancing.
     """
     from openai import OpenAI
+
     from .openai_memoize import MOpenAI
 
     if client is None:
@@ -42,7 +50,7 @@ def get_base_client(
             cache=cache,
         )
     if isinstance(client, str):
-        return MOpenAI(base_url=client, api_key=api_key, cache=cache)
+        return MOpenAI(base_url=_client_url(client), api_key=api_key, cache=cache)
     if isinstance(client, OpenAI):
         return MOpenAI(base_url=client.base_url, api_key=api_key, cache=cache)
     if isinstance(client, list):
@@ -57,7 +65,9 @@ def get_base_client(
                     )
                 )
             elif isinstance(item, str):
-                clients.append(MOpenAI(base_url=item, api_key=api_key, cache=cache))
+                clients.append(
+                    MOpenAI(base_url=_client_url(item), api_key=api_key, cache=cache)
+                )
             elif isinstance(item, OpenAI):
                 clients.append(
                     MOpenAI(base_url=item.base_url, api_key=api_key, cache=cache)

@@ -41,6 +41,7 @@ Messages = list[dict]  # Simplified type, actual type validated at runtime
 _CLIENT_BOOTSTRAP_TTL_SECONDS = 60.0
 _client_bootstrap_cache_lock = threading.Lock()
 _client_bootstrap_cache: dict[tuple[Any, ...], tuple[float, tuple[int, ...], Any]] = {}
+_endpoint_default_models: dict[str, str] = {}
 
 
 def _normalize_client_bootstrap_key(client: Any) -> tuple[Any, ...]:
@@ -267,6 +268,19 @@ class LLM:
         "response_model",
         "is_reasoning_model",
     }
+    _THINKING_TEMPLATE_KEYS = {
+        "deepseek-v4": "thinking",
+    }
+
+    @classmethod
+    def _thinking_template_key(cls, model_name: str) -> str:
+        """Return the chat-template switch used by the model family."""
+
+        normalized = model_name.casefold().replace("_", "-")
+        for model_family, template_key in cls._THINKING_TEMPLATE_KEYS.items():
+            if model_family in normalized:
+                return template_key
+        return "enable_thinking"
 
     def __init__(
         self,
@@ -311,6 +325,7 @@ class LLM:
             if value is not None:
                 model_kwargs[key] = value
         self.model_kwargs = model_kwargs
+        self._model_was_explicit = bool(model)
         self.timeout = timeout
         self.enable_thinking = enable_thinking
         self.cache = cache
@@ -365,6 +380,9 @@ class LLM:
                 try:
                     models_response = raw_clients.models.list()
                     self._alive_clients = [raw_clients]
+                    _endpoint_default_models[str(raw_clients.base_url)] = (
+                        _select_default_model_id(models_response)
+                    )
                     return [0], models_response
                 except Exception as e:
                     # While the constructor is intentionally waiting for the
@@ -428,6 +446,9 @@ class LLM:
                 models_response = client.models.list()
                 self._alive_clients.append(client)
                 alive_indices.append(idx)
+                _endpoint_default_models[str(client.base_url)] = (
+                    _select_default_model_id(models_response)
+                )
                 if primary_models_response is None:
                     primary_models_response = models_response
             except Exception as e:
@@ -604,11 +625,14 @@ class LLM:
         self,
         effective_kwargs: dict[str, Any],
         *,
+        model_name: str | None = None,
         enable_thinking: bool | None = None,
         drop_keys: tuple[str, ...] = (),
     ) -> tuple[str, dict[str, Any]]:
         """Normalize API kwargs shared by sync completion paths."""
-        model_name = effective_kwargs.get("model", self.model_kwargs["model"])
+        model_name = model_name or effective_kwargs.get(
+            "model", self.model_kwargs["model"]
+        )
         filtered_drop_keys = {"model", "enable_thinking", *drop_keys}
         api_kwargs = {
             k: v for k, v in effective_kwargs.items() if k not in filtered_drop_keys
@@ -622,9 +646,10 @@ class LLM:
             chat_template_kwargs = deepcopy(
                 extra_body.get("chat_template_kwargs") or {}
             )
-            chat_template_kwargs.setdefault(
-                "enable_thinking", effective_enable_thinking
-            )
+            template_key = self._thinking_template_key(model_name)
+            # A caller's explicit model-native switch always takes precedence.
+            if not ({"thinking", "enable_thinking"} & chat_template_kwargs.keys()):
+                chat_template_kwargs[template_key] = effective_enable_thinking
             extra_body["chat_template_kwargs"] = chat_template_kwargs
             api_kwargs["extra_body"] = extra_body
 
@@ -632,6 +657,15 @@ class LLM:
             api_kwargs["timeout"] = self.timeout
 
         return model_name, api_kwargs
+
+    def _model_for_client(self, client: Any, runtime_kwargs: dict[str, Any]) -> str:
+        """Return an explicit model or the default discovered for ``client``."""
+        runtime_model = runtime_kwargs.get("model")
+        if runtime_model:
+            return cast(str, runtime_model)
+        if self._model_was_explicit:
+            return self.model
+        return _endpoint_default_models.get(str(client.base_url), self.model)
 
     @staticmethod
     def _extract_reasoning(message: Any) -> str | None:
@@ -878,20 +912,20 @@ class LLM:
         effective_kwargs = {**self.model_kwargs, **call_kwargs}
         if effective_kwargs.get("max_tokens") is None:
             effective_kwargs["max_tokens"] = 1
-        model_name, api_kwargs = self._build_api_kwargs(
-            effective_kwargs,
-            enable_thinking=enable_thinking,
-            drop_keys=drop_keys,
-        )
-        for key in drop_keys:
-            api_kwargs.pop(key, None)
-
         borrow_client = (
             self._borrow_client()
             if client_idx is None
             else self._borrow_client_by_index(client_idx)
         )
         with borrow_client as client:
+            model_name, api_kwargs = self._build_api_kwargs(
+                effective_kwargs,
+                model_name=self._model_for_client(client, call_kwargs),
+                enable_thinking=enable_thinking,
+                drop_keys=drop_keys,
+            )
+            for key in drop_keys:
+                api_kwargs.pop(key, None)
             self._set_cache(cache, client=client)
             completion = LLM._call_with_retry(
                 lambda: client.completions.create(
@@ -927,12 +961,12 @@ class LLM:
 
         # Merge runtime kwargs with default model kwargs (runtime takes precedence)
         effective_kwargs = {**self.model_kwargs, **runtime_kwargs}
-        model_name, api_kwargs = self._build_api_kwargs(
-            effective_kwargs,
-            enable_thinking=enable_thinking,
-        )
-
         with self._borrow_client() as client:
+            model_name, api_kwargs = self._build_api_kwargs(
+                effective_kwargs,
+                model_name=self._model_for_client(client, runtime_kwargs),
+                enable_thinking=enable_thinking,
+            )
             self._set_cache(cache, client=client)
             completion = LLM._call_with_retry(
                 lambda: client.chat.completions.create(
@@ -1046,13 +1080,13 @@ class LLM:
 
         # Merge runtime kwargs with default model kwargs (runtime takes precedence)
         effective_kwargs = {**self.model_kwargs, **runtime_kwargs}
-        model_name, api_kwargs = self._build_api_kwargs(
-            effective_kwargs,
-            enable_thinking=enable_thinking,
-        )
-
         pydantic_model_to_use: type[BaseModel] = cast(type[BaseModel], response_model)
         with self._borrow_client() as client:
+            model_name, api_kwargs = self._build_api_kwargs(
+                effective_kwargs,
+                model_name=self._model_for_client(client, runtime_kwargs),
+                enable_thinking=enable_thinking,
+            )
             self._set_cache(cache, client=client)
             completion = LLM._call_with_retry(
                 lambda: _parse_with_warnings(
@@ -1147,12 +1181,13 @@ class LLM:
 
         messages = self._prepare_input(input_data)
         effective_kwargs = {**self.model_kwargs, **runtime_kwargs}
-        model_name, api_kwargs = self._build_api_kwargs(
-            effective_kwargs,
-            enable_thinking=enable_thinking,
-            drop_keys=("stream",),
-        )
         with self._borrow_client() as client:
+            model_name, api_kwargs = self._build_api_kwargs(
+                effective_kwargs,
+                model_name=self._model_for_client(client, runtime_kwargs),
+                enable_thinking=enable_thinking,
+                drop_keys=("stream",),
+            )
             # Disable caching on the selected client to prevent pickle errors.
             self._set_cache(False, client=client)
             return client.chat.completions.create(

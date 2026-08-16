@@ -185,6 +185,22 @@ class TestLLMCallContract(TestCase):
         self.assertEqual(llm_third.model, "test-model-2-0")
 
     @patch("llm_utils.lm.llm.get_base_client")
+    def test_uses_the_selected_clients_discovered_default_model(self, mock_get_client):
+        client_a = self._make_mock_client_with_model_id("model-a", "http://a/v1")
+        client_b = self._make_mock_client_with_model_id("model-b", "http://b/v1")
+        mock_get_client.return_value = [client_a, client_b]
+        llm = LLM(client=["http://a/v1", "http://b/v1"])
+        client_a.completions.create.return_value = self._make_text_completion("a")
+        client_b.completions.create.return_value = self._make_text_completion("b")
+
+        with patch.object(llm, "_select_client", side_effect=[client_a, client_b]):
+            llm.generate("first")
+            llm.generate("second")
+
+        self.assertEqual(client_a.completions.create.call_args.kwargs["model"], "model-a")
+        self.assertEqual(client_b.completions.create.call_args.kwargs["model"], "model-b")
+
+    @patch("llm_utils.lm.llm.get_base_client")
     def test_generate_preserves_vllm_completion_metadata(self, mock_get_client):
         mock_client = self._make_mock_client()
         mock_get_client.return_value = mock_client
