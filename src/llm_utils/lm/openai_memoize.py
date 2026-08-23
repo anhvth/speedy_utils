@@ -19,7 +19,6 @@ _LOCAL_PROXY_VARS = (
     "http_proxy",
     "HTTP_PROXY",
 )
-_localhost_proxy_notice_shown = False
 
 
 __all__ = ["MOpenAI", "MAsyncOpenAI"]
@@ -27,13 +26,10 @@ __all__ = ["MOpenAI", "MAsyncOpenAI"]
 
 def _unset_proxy_env_for_localhost(base_url: Any) -> list[str]:
     """Unset proxy env vars when base_url points to localhost/loopback."""
-    global _localhost_proxy_notice_shown
-
     if not base_url:
         return []
 
-    base_url_str = str(base_url)
-    parsed = urlparse(base_url_str)
+    parsed = urlparse(str(base_url))
     host = parsed.hostname
     if host not in {"localhost", "127.0.0.1", "::1"}:
         return []
@@ -42,15 +38,6 @@ def _unset_proxy_env_for_localhost(base_url: Any) -> list[str]:
     for var_name in _LOCAL_PROXY_VARS:
         if os.environ.pop(var_name, None) is not None:
             removed_vars.append(var_name)
-
-    if removed_vars and not _localhost_proxy_notice_shown:
-        logger.debug(
-            "Localhost base_url detected ({}). Unset proxy env vars for local LLM "
-            "connectivity: {}",
-            base_url_str,
-            ", ".join(removed_vars),
-        )
-        _localhost_proxy_notice_shown = True
 
     return removed_vars
 
