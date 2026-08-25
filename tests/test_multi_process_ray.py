@@ -21,6 +21,11 @@ def fail_on_two(value: int) -> int:
     return value
 
 
+def noisy_identity(value: int) -> int:
+    print(f"worker output: {value}")
+    return value
+
+
 @dataclass(frozen=True)
 class _Ref:
     value: object
@@ -35,6 +40,7 @@ class _FakeRay:
         self.cancelled: list[_Ref] = []
         self.resource_requests: list[dict[str, object]] = []
         self.wait_queue_sizes: list[int] = []
+        self.timeout_once = False
 
     def is_initialized(self) -> bool:
         return self.initialized
@@ -62,9 +68,15 @@ class _FakeRay:
 
         return decorate
 
-    def wait(self, refs: list[_Ref], *, num_returns: int) -> tuple[list[_Ref], list[_Ref]]:
+    def wait(
+        self, refs: list[_Ref], *, num_returns: int, timeout: float | None = None
+    ) -> tuple[list[_Ref], list[_Ref]]:
         assert num_returns == 1
+        assert timeout is None or timeout > 0
         self.wait_queue_sizes.append(len(refs))
+        if self.timeout_once and timeout is not None:
+            self.timeout_once = False
+            return [], refs
         return refs[:1], refs[1:]
 
     @staticmethod
@@ -123,3 +135,38 @@ def test_invalid_progress_increment_cancels_pending(fake_ray: _FakeRay) -> None:
             progress_increment=lambda _item, _result: -1,
         )
     assert len(fake_ray.cancelled) == 2
+
+
+def test_non_tty_progress_is_append_only_and_worker_output_is_quiet(
+    fake_ray: _FakeRay, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert multi_process_ray(
+        noisy_identity,
+        [1, 2],
+        desc="Audio rows",
+        progress_total=20,
+        progress_increment=lambda _item, _result: 10,
+    ) == [1, 2]
+
+    captured = capsys.readouterr()
+    assert "worker output" not in captured.out
+    assert "START Audio rows tasks=2 units=20" in captured.err
+    assert "COMPLETE Audio rows tasks=2/2 units=20/20" in captured.err
+    assert "\r" not in captured.err
+
+
+def test_worker_output_can_be_forwarded(
+    fake_ray: _FakeRay, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert multi_process_ray(
+        noisy_identity, [7], progress=False, forward_worker_output=True
+    ) == [7]
+    assert "worker output: 7" in capsys.readouterr().out
+
+
+def test_non_tty_progress_emits_running_heartbeat(
+    fake_ray: _FakeRay, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake_ray.timeout_once = True
+    assert multi_process_ray(square, [2], desc="Ray work") == [4]
+    assert "RUNNING Ray work tasks=0/1 units=0/1 active=1" in capsys.readouterr().err
