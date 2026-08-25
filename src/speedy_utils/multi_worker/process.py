@@ -5,6 +5,7 @@ from __future__ import annotations
 from tqdm import tqdm
 
 from ._multi_process import multi_process
+from .multi_process_ray import multi_process_ray
 from .common import (
     SPEEDY_RUNNING_PROCESSES,
     ErrorHandlerType,
@@ -18,6 +19,7 @@ __all__ = [
     "ErrorStats",
     "ErrorHandlerType",
     "multi_process",
+    "multi_process_ray",
     "cleanup_phantom_workers",
     "tqdm",
 ]

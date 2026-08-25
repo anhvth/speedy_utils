@@ -86,6 +86,21 @@ class TestPublicApi(unittest.TestCase):
         self.assertIsNone(reasoning)
         self.assertEqual(answer, "hello")
 
+    def test_chat_html_renders_every_turn_audio_control(self):
+        class FakeAudio:
+            def __init__(self, name):
+                self.name = name
+
+            def _repr_html_(self):
+                return f"<audio>{self.name}</audio>"
+
+        rendered = display._chat_html(
+            [{"role": "assistant", "content": "reply", "audio": [FakeAudio("a"), FakeAudio("b")]}],
+            max_reasoning_length=None,
+        )
+        self.assertIn("<audio>a</audio>", rendered)
+        self.assertIn("<audio>b</audio>", rendered)
+
     def test_llm_signature_constructor_surfaces_main_llm_options(self):
         params = inspect.signature(LLMSignature.__init__).parameters
 

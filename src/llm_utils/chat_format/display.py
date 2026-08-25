@@ -207,6 +207,22 @@ def _build_assistant_content_parts(
     return None, str(content)
 
 
+def _message_audio_html(msg: Any) -> str:
+    """Render one or more notebook audio display objects under a chat turn."""
+    audio = _message_value(msg, "audio")
+    if audio is None:
+        return ""
+    items = audio if isinstance(audio, (list, tuple)) else [audio]
+    html_parts: list[str] = []
+    for item in items:
+        render = getattr(item, "_repr_html_", None)
+        if callable(render):
+            html_parts.append(str(render()))
+    if not html_parts:
+        return ""
+    return "<div style='margin-top:0.4em'>" + "".join(html_parts) + "</div>"
+
+
 def _chat_html(messages: list[dict[str, Any]], max_reasoning_length: int | None) -> str:
     """Build chat messages HTML."""
     html_parts = [
@@ -236,6 +252,7 @@ def _chat_html(messages: list[dict[str, Any]], max_reasoning_length: int | None)
                 html_parts.append(
                     f"<span style='color:{color}'>{escaped_answer}</span>"
                 )
+            html_parts.append(_message_audio_html(msg))
             html_parts.append('</div>')
         else:
             content = _message_value(msg, 'content', '') or ''
@@ -243,6 +260,7 @@ def _chat_html(messages: list[dict[str, Any]], max_reasoning_length: int | None)
             html_parts.append(
                 f"<div style='color:{color}'><strong>{label}</strong><br>{escaped_content}</div>"
             )
+            html_parts.append(_message_audio_html(msg))
 
         if i < len(messages) - 1:
             html_parts.append(separator)
