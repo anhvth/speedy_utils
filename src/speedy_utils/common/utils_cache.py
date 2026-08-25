@@ -7,7 +7,7 @@ from .utils_misc import mkdir_or_exist
 # Defaults / Globals
 # --------------------------------------------------------------------------------------
 
-SPEED_CACHE_DIR = osp.join(osp.expanduser('~'), '.cache/speedy_cache')
+SPEED_CACHE_DIR = osp.join(osp.expanduser('~'), '/tmp/speedy_cache')
 
 # Thread locks for safety
 disk_lock = Lock()
