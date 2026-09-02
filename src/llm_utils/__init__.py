@@ -11,6 +11,7 @@ from .lm import (
     Output,
     OutputField,
     Qwen3LLM,
+    Qwen38LLM,
     Signature,
 )
 from .utils import get_one_turn_conv, get_tok, msgs_turns, turn
@@ -19,6 +20,7 @@ from .utils import get_one_turn_conv, get_tok, msgs_turns, turn
 __all__ = [
     "LLM",
     "Qwen3LLM",
+    "Qwen38LLM",
     "MOpenAI",
     "LMBase",
     "LLMSignature",

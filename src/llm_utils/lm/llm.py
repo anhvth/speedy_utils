@@ -1268,6 +1268,7 @@ class LLM:
 
 
 from .llm_qwen3 import Qwen3LLM
+from .llm_qwen38 import Qwen38LLM
 
 
-__all__ = ["LLM", "Qwen3LLM"]
+__all__ = ["LLM", "Qwen3LLM", "Qwen38LLM"]

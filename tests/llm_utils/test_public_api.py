@@ -8,6 +8,7 @@ import llm_utils
 from llm_utils.chat_format import display
 from llm_utils.chat_format.display import display_chat_messages_as_html, show_chat
 from llm_utils.lm.llm_qwen3 import Qwen3LLM
+from llm_utils.lm.llm_qwen38 import Qwen38LLM
 from llm_utils.lm.llm_signature import LLMSignature
 from llm_utils.lm.openai_memoize import MAsyncOpenAI, MOpenAI
 from llm_utils.utils import get_one_turn_conv as utils_get_one_turn_conv
@@ -24,6 +25,7 @@ class TestPublicApi(unittest.TestCase):
         self.assertIs(llm_utils.msgs_turns, utils_msgs_turns)
         self.assertIs(llm_utils.LLM, llm_utils.lm.LLM)
         self.assertIs(llm_utils.Qwen3LLM, llm_utils.lm.Qwen3LLM)
+        self.assertIs(llm_utils.Qwen38LLM, llm_utils.lm.Qwen38LLM)
         self.assertIs(llm_utils.MOpenAI, llm_utils.lm.MOpenAI)
         self.assertNotIn("__getattr__", llm_utils.__dict__)
 
@@ -139,6 +141,25 @@ class TestPublicApi(unittest.TestCase):
         )
         self.assertIn("thinking_max_tokens", params)
         self.assertIn("content_max_tokens", params)
+        self.assertEqual(params["model_kwargs"].kind, inspect.Parameter.VAR_KEYWORD)
+
+    def test_qwen38_constructor_surfaces_reasoning_effort(self):
+        params = inspect.signature(Qwen38LLM.__init__).parameters
+
+        self.assertEqual(
+            list(params.keys())[:7],
+            [
+                "self",
+                "client",
+                "cache",
+                "verbose",
+                "timeout",
+                "enable_thinking",
+                "model",
+            ],
+        )
+        self.assertIn("reasoning_effort", params)
+        self.assertIn("model_kwargs", params)
         self.assertEqual(params["model_kwargs"].kind, inspect.Parameter.VAR_KEYWORD)
 
     def test_mopenai_factories_surface_explicit_keyword_signatures(self):
