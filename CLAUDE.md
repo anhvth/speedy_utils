@@ -157,6 +157,7 @@ The wheel currently ships four packages from `src/`:
 - `LLMSignature` defaults structured outputs to the signature's output model.
 - `Qwen3LLM.chat_completion()` returns an OpenAI-style `ChatCompletionMessage` with optional dynamic attrs such as `reasoning`, `usage`, and `call_count`.
 - `Qwen3LLM.complete_until()` returns a continuation-state object, not a `ChatCompletionMessage`.
+- When adding model-specific `LLM` subclasses, keep them as thin shims unless behavior needs to change (no extra method overrides by default).
 
 ### `vision_utils`
 
