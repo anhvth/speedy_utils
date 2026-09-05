@@ -69,6 +69,18 @@ def _client_bootstrap_cache_key(client: Any, api_key: str) -> tuple[Any, ...]:
     return (_normalize_client_bootstrap_key(client), api_key)
 
 
+def _client_spec_label(client: Any) -> str:
+    """Describe the endpoint as the caller specified it."""
+    if isinstance(client, int):
+        return f"http://localhost:{client}/v1"
+    if isinstance(client, str):
+        return client
+    base_url = getattr(client, "base_url", None)
+    if base_url is not None:
+        return str(base_url)
+    return getattr(client, "__class__", type(client)).__name__
+
+
 def _get_or_create_client_bootstrap(
     cache_key: tuple[Any, ...],
     bootstrap_fn: Callable[[], tuple[list[int], Any | None]],
@@ -348,6 +360,13 @@ class LLM:
             cache=cache,
             api_key=self.api_key,
         )
+        client_specs = client if isinstance(client, list) else [client]
+        resolved_clients = raw_clients if isinstance(raw_clients, list) else [raw_clients]
+        self._client_labels_by_id = {
+            id(resolved): _client_spec_label(spec)
+            for resolved, spec in zip(resolved_clients, client_specs, strict=True)
+            if spec is not None
+        }
         primary_models_response: Any | None = None
         bootstrap_cache_key = _client_bootstrap_cache_key(raw_clients, self.api_key)
 
@@ -452,9 +471,9 @@ class LLM:
                 if primary_models_response is None:
                     primary_models_response = models_response
             except Exception as e:
-                url = getattr(client, "base_url", str(client))
-                dead_urls.append(url)
-                logger.debug(f"Client {url} is not alive: {e}")
+                label = self._client_label(client)
+                dead_urls.append(label)
+                logger.debug(f"Client {label} is not alive: {e}")
 
         if dead_urls:
             logger.warning(
@@ -480,6 +499,9 @@ class LLM:
 
     def _client_label(self, client: Any) -> str:
         """Return a compact label for a client in load-balance logs."""
+        configured_label = self._client_labels_by_id.get(id(client))
+        if configured_label is not None:
+            return configured_label
         base_url = getattr(client, "base_url", None)
         if base_url is not None:
             return str(base_url)

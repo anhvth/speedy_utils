@@ -8,6 +8,7 @@ import shlex  # To properly escape command line arguments
 import shutil
 import subprocess
 import sys
+import time
 
 
 try:
@@ -23,26 +24,26 @@ except ImportError:
     Syntax = None
 
 
-taskset_path = shutil.which('taskset')
+taskset_path = shutil.which("taskset")
 
 
 def get_existing_tmux_sessions():
     """Get list of existing tmux session names."""
     try:
         result = subprocess.run(
-            ['tmux', 'list-sessions', '-F', '#{session_name}'],
+            ["tmux", "list-sessions", "-F", "#{session_name}"],
             capture_output=True,
             text=True,
         )
         if result.returncode == 0:
-            return result.stdout.strip().split('\n')
+            return result.stdout.strip().split("\n")
         return []
     except FileNotFoundError:
         # tmux not installed
         return []
 
 
-def get_next_session_name(base_name='mpython'):
+def get_next_session_name(base_name="mpython"):
     """Get next available session name.
 
     If 'mpython' doesn't exist, return 'mpython'.
@@ -54,7 +55,7 @@ def get_next_session_name(base_name='mpython'):
         return base_name
 
     # Find all existing mpython-N sessions
-    pattern = re.compile(rf'^{re.escape(base_name)}-(\d+)$')
+    pattern = re.compile(rf"^{re.escape(base_name)}-(\d+)$")
     existing_numbers = []
 
     for session in existing_sessions:
@@ -67,10 +68,10 @@ def get_next_session_name(base_name='mpython'):
     if existing_numbers:
         next_num = max(existing_numbers) + 1
 
-    return f'{base_name}-{next_num}'
+    return f"{base_name}-{next_num}"
 
 
-def _prompt_collision_action(base_name='mpython'):
+def _prompt_collision_action(base_name="mpython"):
     """Prompt for how to handle existing base tmux session.
 
     Returns:
@@ -90,28 +91,28 @@ def _prompt_collision_action(base_name='mpython'):
         else:
             choice = input(prompt_text).strip()
 
-        if choice == '1':
-            return 'overwrite'
-        if choice == '2':
-            return 'increment'
+        if choice == "1":
+            return "overwrite"
+        if choice == "2":
+            return "increment"
         print("Invalid choice. Please enter 1 or 2.", file=sys.stderr)
 
 
 def _kill_tmux_session(session_name):
     """Kill one tmux session by exact name."""
     result = subprocess.run(
-        ['tmux', 'kill-session', '-t', session_name],
+        ["tmux", "kill-session", "-t", session_name],
         capture_output=True,
         text=True,
     )
     if result.returncode != 0:
-        stderr = (result.stderr or '').strip()
+        stderr = (result.stderr or "").strip()
         raise RuntimeError(
             f"Failed to kill tmux session '{session_name}'. {stderr}".strip()
         )
 
 
-def resolve_session_name(base_name='mpython'):
+def resolve_session_name(base_name="mpython"):
     """Resolve tmux session name with collision handling policy."""
     existing_sessions = get_existing_tmux_sessions()
     if base_name not in existing_sessions:
@@ -126,7 +127,7 @@ def resolve_session_name(base_name='mpython'):
         raise SystemExit(2)
 
     action = _prompt_collision_action(base_name=base_name)
-    if action == 'overwrite':
+    if action == "overwrite":
         _kill_tmux_session(base_name)
         return base_name
     return get_next_session_name(base_name)
@@ -135,128 +136,180 @@ def resolve_session_name(base_name='mpython'):
 def assert_script(python_path):
     with open(python_path) as f:
         code_str = f.read()
-    if 'MP_ID' not in code_str or 'MP_TOTAL' not in code_str:
+    if "MP_ID" not in code_str or "MP_TOTAL" not in code_str:
         helper_code = (
-            'import os\n'
+            "import os\n"
             'MP_ID = int(os.getenv("MP_ID", "0"))\n'
             'MP_TOTAL = int(os.getenv("MP_TOTAL", "1"))\n'
-            'inputs = list(inputs[MP_ID::MP_TOTAL])'
+            "inputs = list(inputs[MP_ID::MP_TOTAL])"
         )
         if Console and Panel and Text and Syntax and Group:
             console = Console(stderr=True, force_terminal=True)
-            syntax = Syntax(helper_code, 'python', theme='monokai', line_numbers=False)
+            syntax = Syntax(helper_code, "python", theme="monokai", line_numbers=False)
             console.print()
             console.print(
                 Panel(
-                    f'Your script {python_path} is missing MP_ID and/or MP_TOTAL variables.\n\n'
-                    f'Add the following code to enable multi-process sharding:',
-                    title='[bold yellow]Warning: Missing Multi-Process Variables[/bold yellow]',
-                    border_style='yellow',
+                    f"Your script {python_path} is missing MP_ID and/or MP_TOTAL variables.\n\n"
+                    f"Add the following code to enable multi-process sharding:",
+                    title="[bold yellow]Warning: Missing Multi-Process Variables[/bold yellow]",
+                    border_style="yellow",
                     expand=False,
                 )
             )
             console.print()
-            console.print('```python')
+            console.print("```python")
             console.print(syntax)
-            console.print('```')
-            console.print('-' * 80)
+            console.print("```")
+            console.print("-" * 80)
         else:
             # Fallback to plain text
             print(
-                f'Warning: MP_ID and MP_TOTAL not found in {python_path}, please add them.',
+                f"Warning: MP_ID and MP_TOTAL not found in {python_path}, please add them.",
                 file=sys.stderr,
             )
-            print(f'Example:\n{helper_code}', file=sys.stderr)
+            print(f"Example:\n{helper_code}", file=sys.stderr)
+
+
+def parse_gpu_ids(value):
+    """Parse comma-separated GPU ids and inclusive ranges such as ``0-7``."""
+    ids = []
+    for item in value.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        if "-" in item:
+            start, end = (int(part) for part in item.split("-", 1))
+            if end < start:
+                raise ValueError(f"invalid GPU range: {item}")
+            ids.extend(str(index) for index in range(start, end + 1))
+        else:
+            ids.append(str(int(item)))
+    if not ids:
+        raise ValueError("at least one GPU is required")
+    if len(ids) != len(set(ids)):
+        raise ValueError(f"duplicate GPU ids: {value}")
+    return ids
 
 
 def run_in_tmux(commands_to_run, tmux_name, num_windows):
-    with open('/tmp/start_multirun_tmux.sh', 'w') as script_file:
-        script_file.write('#!/bin/bash\n\n')
+    with open("/tmp/start_multirun_tmux.sh", "w") as script_file:
+        script_file.write("#!/bin/bash\n\n")
         # Use -n to name the first window explicitly (avoids base-index issues)
-        script_file.write(f'tmux new-session -d -s {tmux_name} -n w0\n')
+        script_file.write(f"tmux new-session -d -s {tmux_name} -n w0\n")
         for i, cmd in enumerate(itertools.cycle(commands_to_run)):
             if i >= num_windows:
                 break
-            window_name = f'w{i}'
-            target = f'{tmux_name}:{window_name}'
+            window_name = f"w{i}"
+            target = f"{tmux_name}:{window_name}"
             if i == 0:
-                script_file.write(f"tmux send-keys -t {target} '{cmd}' C-m\n")
+                script_file.write(
+                    f"tmux send-keys -t {target} {shlex.quote(cmd)} C-m\n"
+                )
             else:
                 # Create window with explicit name, then send keys to it
-                script_file.write(f'tmux new-window -t {tmux_name} -n {window_name}\n')
-                script_file.write(f"tmux send-keys -t {target} '{cmd}' C-m\n")
+                script_file.write(f"tmux new-window -t {tmux_name} -n {window_name}\n")
+                script_file.write(
+                    f"tmux send-keys -t {target} {shlex.quote(cmd)} C-m\n"
+                )
 
         # Make the script executable
-        script_file.write('chmod +x /tmp/start_multirun_tmux.sh\n')
-        print('Run /tmp/start_multirun_tmux.sh')
+        script_file.write("chmod +x /tmp/start_multirun_tmux.sh\n")
+        print("Run /tmp/start_multirun_tmux.sh")
 
 
 def main():
     # Assert that MP_ID and MP_TOTAL are not already set
 
     helper_code = (
-        'import os\n'
+        "import os\n"
         'MP_ID = int(os.getenv("MP_ID", "0"))\n'
         'MP_TOTAL = int(os.getenv("MP_TOTAL", "1"))\n'
-        'inputs = list(inputs[MP_ID::MP_TOTAL])'
+        "inputs = list(inputs[MP_ID::MP_TOTAL])"
     )
 
     parser = argparse.ArgumentParser(
-        description='Process fold arguments',
-        epilog=f'Helper code for multi-process sharding:\n{helper_code}',
+        description="Process fold arguments",
+        epilog=f"Helper code for multi-process sharding:\n{helper_code}",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
-        '--total_fold', '-t', default=16, type=int, help='total number of folds'
+        "--total_fold", "-t", default=None, type=int, help="total number of folds"
     )
-    parser.add_argument('--gpus', type=str, default='0,1,2,3,4,5,6,7')
-    parser.add_argument('--ignore_gpus', '-ig', type=str, default='')
+    parser.add_argument("--gpus", type=str, default="0,1,2,3,4,5,6,7")
     parser.add_argument(
-        '--total_cpu',
+        "--nodes", type=str, default="", help="comma-separated SSH nodes"
+    )
+    parser.add_argument(
+        "--python", dest="python_path", help="absolute Python used on every node"
+    )
+    parser.add_argument("--ignore_gpus", "-ig", type=str, default="")
+    parser.add_argument(
+        "--total_cpu",
         type=int,
         default=multiprocessing.cpu_count(),
-        help='total number of cpu cores available',
+        help="total number of cpu cores available",
     )
     parser.add_argument(
-        'cmd', nargs=argparse.REMAINDER
+        "cmd", nargs=argparse.REMAINDER
     )  # This will gather the remaining unparsed arguments
 
     args = parser.parse_args()
-    if not args.cmd or (args.cmd[0] == '--' and len(args.cmd) == 1):
-        parser.error('Invalid command provided')
-    assert_script(args.cmd[0])
+    if not args.cmd or (args.cmd[0] == "--" and len(args.cmd) == 1):
+        parser.error("Invalid command provided")
+    command = args.cmd[1:] if args.cmd[0] == "--" else args.cmd
+    if not command:
+        parser.error("Invalid command provided")
+    assert_script(command[0])
+    cmd_str = shlex.join(command)
 
-    cmd_str = None
-    if args.cmd[0] == '--':
-        cmd_str = shlex.join(args.cmd[1:])
-    else:
-        cmd_str = shlex.join(args.cmd)
-
-    gpus = args.gpus.split(',')
-    gpus = [gpu for gpu in gpus if gpu not in args.ignore_gpus.split(',')]
+    gpus = parse_gpu_ids(args.gpus)
+    gpus = [gpu for gpu in gpus if gpu not in args.ignore_gpus.split(",")]
     num_gpus = len(gpus)
-
-    cpu_per_process = max(args.total_cpu // args.total_fold, 1)
+    nodes = [node.strip() for node in args.nodes.split(",") if node.strip()]
+    total_fold = args.total_fold or (len(nodes) * num_gpus if nodes else 16)
+    if nodes and total_fold != len(nodes) * num_gpus:
+        parser.error("--total_fold must equal nodes × selected GPUs")
+    cpu_divisor = num_gpus if nodes else total_fold
+    cpu_per_process = max(args.total_cpu // cpu_divisor, 1)
     cmds = []
-    path_python = shutil.which('python')
-    for i in range(args.total_fold):
+    path_python = args.python_path or shutil.which("python")
+    if not path_python or not os.path.isabs(path_python):
+        parser.error("--python must resolve to an absolute executable path")
+    if args.python_path and (
+        not os.path.isfile(path_python) or not os.access(path_python, os.X_OK)
+    ):
+        parser.error(f"Python interpreter is not executable: {path_python}")
+    run_id = f"{os.getpid()}-{time.time_ns()}"
+    for i in range(total_fold):
         gpu = gpus[i % num_gpus]
-        cpu_start = (i * cpu_per_process) % args.total_cpu
-        cpu_end = ((i + 1) * cpu_per_process - 1) % args.total_cpu
-        ENV = f'CUDA_VISIBLE_DEVICES={gpu} MP_ID={i} MP_TOTAL={args.total_fold}'
+        local_id = i % num_gpus
+        cpu_start = (local_id * cpu_per_process) % args.total_cpu
+        cpu_end = ((local_id + 1) * cpu_per_process - 1) % args.total_cpu
+        node = nodes[i // num_gpus] if nodes else ""
+        identity = f"MP_ID={i} MP_TOTAL={total_fold}"
+        if node:
+            identity += (
+                f" MP_NODE={node} MP_LOCAL_ID={local_id} MP_LOCAL_TOTAL={num_gpus}"
+            )
+        identity += f" MP_RUN_ID={run_id}"
+        ENV = f"{identity} CUDA_VISIBLE_DEVICES={gpu}"
         if taskset_path:
-            fold_cmd = f'{ENV} {taskset_path} -c {cpu_start}-{cpu_end}  {path_python} {cmd_str}'
+            fold_cmd = f"{ENV} {taskset_path} -c {cpu_start}-{cpu_end}  {path_python} {cmd_str}"
         else:
-            fold_cmd = f'{ENV} {path_python} {cmd_str}'
+            fold_cmd = f"{ENV} {path_python} {cmd_str}"
+
+        if node:
+            remote = f"cd {shlex.quote(os.getcwd())} && {fold_cmd}"
+            fold_cmd = f"ssh {shlex.quote(node)} {shlex.quote(remote)}"
 
         cmds.append(fold_cmd)
 
-    session_name = resolve_session_name('mpython')
-    run_in_tmux(cmds, session_name, args.total_fold)
-    os.chmod('/tmp/start_multirun_tmux.sh', 0o755)  # Make the script executable
-    os.system('/tmp/start_multirun_tmux.sh')
-    print(f'Started tmux session: {session_name}')
+    session_name = resolve_session_name("mpython")
+    run_in_tmux(cmds, session_name, total_fold)
+    os.chmod("/tmp/start_multirun_tmux.sh", 0o755)  # Make the script executable
+    os.system("/tmp/start_multirun_tmux.sh")
+    print(f"Started tmux session: {session_name}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

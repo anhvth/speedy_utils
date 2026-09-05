@@ -716,6 +716,15 @@ def _run_mp_chunk(
     event_queue: mp.queues.Queue,
 ) -> None:
     """Execute one process chunk, optionally with a per-process thread pool."""
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+    if worker_ctx.num_threads > 1:
+        # Each task applies its own log policy.  A process-local thread pool
+        # must therefore route streams per thread; contextlib redirects mutate
+        # process-global state and one task can otherwise close a sibling's
+        # active stdout/stderr stream.
+        sys.stdout = _ThreadLocalStream(original_stdout)
+        sys.stderr = _ThreadLocalStream(original_stderr)
     try:
         func = worker_ctx.func
         if worker_ctx.serialized_func is not None:
@@ -802,6 +811,8 @@ def _run_mp_chunk(
                             pending.cancel()
                         return
     finally:
+        sys.stdout = original_stdout
+        sys.stderr = original_stderr
         event_queue.put(("process_done", os.getpid()))
 
 

@@ -11,6 +11,8 @@ import contextlib
 import multiprocessing as mp
 import os
 import ssl
+import sys
+import time
 import warnings
 
 import pytest
@@ -47,6 +49,21 @@ def passthrough_with_client(item, client=None):
     return item
 
 
+def overlapping_worker_prints(item):
+    """Keep one thread printing after a sibling has returned."""
+    if item % 2 == 0:
+        time.sleep(0.05)
+    print(f"worker item {item}")
+    if item % 2 == 0:
+        time.sleep(0.05)
+        print(f"worker item {item} done")
+    return item
+
+
+def worker_uses_thread_local_stream(_item):
+    return type(sys.stdout).__name__ == "_ThreadLocalStream"
+
+
 def _cleanup_paths(paths: list[str]) -> None:
     for path in paths:
         if os.path.exists(path):
@@ -70,6 +87,33 @@ def test_spawn_backend_basic_square(num_threads):
         backend="spawn",
     )
     assert result == [0, 1, 4, 9]
+
+
+def test_spawn_threaded_worker_output_streams_do_not_close_each_other():
+    result = multi_process(
+        overlapping_worker_prints,
+        list(range(4)),
+        num_procs=2,
+        num_threads=2,
+        progress=False,
+        backend="spawn",
+        log_worker="zero",
+        error_handler="raise",
+    )
+    assert result == list(range(4))
+
+
+def test_spawn_threaded_workers_route_output_per_thread():
+    result = multi_process(
+        worker_uses_thread_local_stream,
+        list(range(4)),
+        num_procs=2,
+        num_threads=2,
+        progress=False,
+        backend="spawn",
+        log_worker="zero",
+    )
+    assert result == [True] * 4
 
 
 def test_sequential_backend_error_handler_ignore():

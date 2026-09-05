@@ -275,6 +275,10 @@ Examples:
 
 ```bash
 mpython -t 8 script.py
+
+# Infer 24 workers from three nodes and eight GPUs per node. Each worker gets
+# MP_ID/MP_TOTAL plus its node-local identity and CUDA_VISIBLE_DEVICES.
+mpython --nodes h2-14,h2-15,h2-17 --gpus 0-7 --python /abs/venv/bin/python -- script.py
 kill-mpython
 
 sp_chat client=8000

@@ -34,6 +34,19 @@ class TestLLMWaitForEndpoint(TestCase):
         _client_bootstrap_cache.clear()
 
     @patch("llm_utils.lm.llm.get_base_client")
+    def test_dead_ssh_client_warning_uses_original_host(self, mock_get_client):
+        alive = _make_alive_client(base_url="http://127.0.0.1:43121/v1")
+        dead = _make_dead_client(base_url="http://127.0.0.1:43813/v1")
+        mock_get_client.return_value = [alive, dead]
+
+        with patch("llm_utils.lm.llm.logger") as mock_logger:
+            LLM(client=["h2-14:8000", "h1-31:8000"], wait_for_endpoint=0)
+
+        warning = str(mock_logger.warning.call_args.args[0])
+        self.assertIn("h1-31:8000", warning)
+        self.assertNotIn("43813", warning)
+
+    @patch("llm_utils.lm.llm.get_base_client")
     def test_waits_for_endpoint_with_progress_logging(self, mock_get_client):
         """Bootstrap fails twice then succeeds; we observe wait progress logs."""
         attempts = count()
