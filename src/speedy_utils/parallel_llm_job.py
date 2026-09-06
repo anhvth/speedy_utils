@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import multiprocessing as mp
 import os
@@ -16,6 +17,8 @@ from dataclasses import dataclass
 from itertools import islice
 from pathlib import Path
 from typing import Any, Generic, Literal, TypeVar, cast
+
+from .job_context import JobContext, RejectItem, atomic_write, monitor
 
 
 ItemT = TypeVar("ItemT")
@@ -78,7 +81,14 @@ def _process_item(
     job: "ParallelLLMJob[Any, Any]", sequence: int, item: Any
 ) -> _Outcome:
     try:
-        result = job.process(item)
+        if getattr(job, "_use_context", False):
+            ctx = JobContext(job._context_root, item, job._semantic_config,
+                             job._metrics_dir)
+            result = job.process(item, ctx)
+        else:
+            result = job.process(item)
+    except RejectItem as exc:
+        return _Outcome(sequence, "rejected", _error_payload(job.item_id(item), exc))
     except Exception as exc:
         return _Outcome(sequence, "error", _error_payload(job.item_id(item), exc))
     if result is None:
@@ -217,8 +227,13 @@ class _ProcessJobExecutor:
         for process in self.processes:
             process.join(timeout=5)
             if process.is_alive():
+                cancel = True
                 process.terminate()
                 process.join(timeout=1)
+        if cancel:
+            # Workers can no longer drain prefetched tasks. Joining the parent
+            # feeder at interpreter exit would wait forever on a full pipe.
+            self.task_queue.cancel_join_thread()
         self.task_queue.close()
         self.result_queue.close()
 
@@ -410,6 +425,9 @@ class ParallelLLMJob(Generic[ItemT, OutputT], ABC):
         error_log: str | Path | None = None,
         progress: bool = True,
         progress_total: int | None = None,
+        context_root: str | Path | None = None,
+        semantic_config: dict | None = None,
+        status_interval: float = 15,
     ) -> JobSummary:
         """Run until the iterable ends or exactly ``target_rows`` are committed."""
         if target_rows is not None and target_rows < 0:
@@ -420,6 +438,17 @@ class ParallelLLMJob(Generic[ItemT, OutputT], ABC):
             raise ValueError("progress_total must be non-negative")
 
         started = time.monotonic()
+        self._use_context = len(inspect.signature(self.process).parameters) == 2
+        self._context_root = Path(context_root or Path(output).parent).resolve()
+        self._semantic_config = semantic_config or {}
+        self._metrics_dir = None
+        if self._use_context:
+            config_path = Path(str(output) + ".config.json")
+            if config_path.exists() and json.loads(config_path.read_text()) != self._semantic_config:
+                raise ValueError("Semantic configuration changed; use a new output")
+            atomic_write(config_path, json.dumps(self._semantic_config, sort_keys=True).encode())
+            self._metrics_dir = self._context_root / ".status" / str(time.time_ns())
+            self._metrics_dir.mkdir(parents=True)
         output_path, state_path, error_path = self._paths(output, error_log)
         for path in (output_path, state_path, error_path):
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -515,6 +544,12 @@ class ParallelLLMJob(Generic[ItemT, OutputT], ABC):
             )
 
         start_index = int(state["next_input_index"])
+        stop_monitor = threading.Event()
+        reporter = None
+        if self._use_context and progress and status_interval > 0:
+            reporter = threading.Thread(target=monitor, args=(stop_monitor, state_path,
+                                         self._metrics_dir, status_interval), daemon=True)
+            reporter.start()
         source: Iterator[ItemT] = islice(iter(items), start_index, None)
         concurrency = self.processes * self.threads_per_process
         max_inflight = max(1, concurrency * self.prefetch_factor)
@@ -608,6 +643,9 @@ class ParallelLLMJob(Generic[ItemT, OutputT], ABC):
                             )
                         elif current.kind == "rejected":
                             state["rejected"] += 1
+                            if current.payload is not None:
+                                error_handle.write(json.dumps({"input_index": commit_sequence,
+                                                   **current.payload}).encode() + b"\n")
                         else:
                             rows = list(
                                 self.iter_outputs(item, cast(OutputT, current.payload))
@@ -655,6 +693,9 @@ class ParallelLLMJob(Generic[ItemT, OutputT], ABC):
                 commit_state(output_handle, error_handle, complete)
                 run_finished = True
         finally:
+            stop_monitor.set()
+            if reporter is not None:
+                reporter.join()
             executor.close(cancel=target_reached or not run_finished)
             if progress_bar is not None:
                 progress_bar.close()

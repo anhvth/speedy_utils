@@ -1,5 +1,8 @@
 import json
 import os
+import subprocess
+import sys
+import threading
 import time
 from pathlib import Path
 
@@ -45,6 +48,39 @@ class _PidJob(ParallelLLMJob[dict, dict]):
     def process(self, item):
         time.sleep(0.01)
         return {"id": item["id"], "pid": os.getpid()}
+
+
+class _BufferedJob(ParallelLLMJob[dict, dict]):
+    def process(self, item):
+        if item["id"]:
+            threading.Event().wait()
+        return {"id": item["id"]}
+
+
+def test_process_target_exits_with_unconsumed_prefetched_tasks(tmp_path):
+    script = """
+from test_parallel_llm_job import _BufferedJob
+if __name__ == '__main__':
+    job = _BufferedJob(1, processes=2, threads_per_process=1,
+                       prefetch_factor=4)
+    result = job.run_jsonl(
+        ({'id': i, 'payload': b'x' * 1_000_000} for i in range(8)),
+        'rows.jsonl', target_rows=1, progress=False,
+    )
+    assert result.complete
+    print('completed', flush=True)
+"""
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(Path(__file__).parent), str(Path(speedy_utils.__file__).parent.parent)]
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script], cwd=tmp_path, env=env,
+        capture_output=True, text=True, timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "completed"
+    assert _rows(tmp_path / "rows.jsonl") == [{"id": 0}]
 
 
 class _StopRun(BaseException):

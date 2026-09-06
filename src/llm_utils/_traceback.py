@@ -188,6 +188,13 @@ def clean_traceback(func: F) -> F:
         try:
             return func(*args, **kwargs)
         except Exception as exc:
+            from openai import LengthFinishReasonError
+            from pydantic import ValidationError
+
+            # Invalid/truncated structured responses are recoverable item errors.
+            # Preserve their types for callers; batch jobs record them themselves.
+            if isinstance(exc, (LengthFinishReasonError, ValidationError)):
+                raise
             exc_tb = sys.exc_info()[2]
             if exc_tb is not None:
                 tb_list = traceback.extract_tb(exc_tb)
