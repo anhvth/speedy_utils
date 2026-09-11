@@ -143,3 +143,18 @@ A fresh run with `resume=False` uses a new materialization namespace.
 Existing checkpoints upgrade automatically; results lost from an older process's
 memory cannot be recovered. Thread cancellation still waits for running calls;
 already materialized work survives a subsequent forced termination.
+
+### Indexed snapshots for finite collection
+
+Use `run_jsonl(items, output, indexed=True, checkpoint_every=100,
+flush_interval=10)` for one nonempty JSON object per input. The output starts
+with one `{}` slot per input. Completions update slots in memory; atomic snapshots
+flush by completion count or elapsed time without waiting for earlier rows.
+Cancellation flushes received results. Forced termination can lose the unflushed
+batch. Resume fills empty slots; increasing the input count appends empty slots.
+Keep input order fixed. Existing compact output is imported by matching row IDs.
+
+This mode holds inputs and results in memory and rewrites the JSONL snapshot
+because rows have variable lengths. New runs avoid per-result files. Errors and
+rejections leave empty slots for rerun. Fan-out outputs, exact-size replacement,
+and stage-context jobs continue to use the existing ordered mode.

@@ -484,6 +484,8 @@ class ParallelLLMJob(Generic[ItemT, OutputT], ABC):
         context_root: str | Path | None = None,
         semantic_config: dict | None = None,
         status_interval: float = 15,
+        indexed: bool = False,
+        flush_interval: float = 10,
     ) -> JobSummary:
         """Run until the iterable ends or exactly ``target_rows`` are committed."""
         if target_rows is not None and target_rows < 0:
@@ -492,6 +494,20 @@ class ParallelLLMJob(Generic[ItemT, OutputT], ABC):
             raise ValueError("checkpoint_every must be a positive integer")
         if progress_total is not None and progress_total < 0:
             raise ValueError("progress_total must be non-negative")
+
+        if indexed:
+            if target_rows is not None or context_root is not None or semantic_config is not None:
+                raise ValueError("Indexed mode uses finite items without target_rows or stage context")
+            if flush_interval <= 0:
+                raise ValueError("flush_interval must be positive")
+            if len(inspect.signature(self.process).parameters) != 1:
+                raise ValueError("Indexed mode requires process(item)")
+            from ._indexed_llm_job import run_indexed
+
+            return run_indexed(
+                self, items, output, resume=resume, checkpoint_every=checkpoint_every,
+                error_log=error_log, progress=progress, flush_interval=flush_interval,
+            )
 
         started = time.monotonic()
         self._use_context = len(inspect.signature(self.process).parameters) == 2

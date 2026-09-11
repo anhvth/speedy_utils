@@ -366,3 +366,36 @@ def test_resume_reuses_materialized_result_behind_interrupted_first_item(tmp_pat
     assert _rows(output) == items
     assert calls.count(0) == 2
     assert calls.count(1) == 1
+
+
+def test_indexed_flush_saves_later_row_before_first_and_resumes(tmp_path):
+    output = tmp_path / "indexed.jsonl"
+    calls = []
+
+    class Job(ParallelLLMJob):
+        def process(self, item):
+            calls.append(item["id"])
+            if item["id"] == 0:
+                deadline = time.monotonic() + 5
+                while _rows(output)[1] == {}:
+                    assert time.monotonic() < deadline
+                    time.sleep(0.01)
+                raise _StopRun()
+            return item
+
+    items = [{"id": 0}, {"id": 1}]
+    with pytest.raises(_StopRun):
+        Job("unused", threads_per_process=2).run_jsonl(
+            items, output, indexed=True, checkpoint_every=1, progress=False)
+    assert _rows(output) == [{}, {"id": 1}]
+
+    class ResumeJob(ParallelLLMJob):
+        def process(self, item):
+            calls.append(item["id"])
+            return item
+
+    summary = ResumeJob("unused").run_jsonl(
+        [*items, {"id": 2}], output, indexed=True, progress=False)
+    assert summary.complete
+    assert _rows(output) == [*items, {"id": 2}]
+    assert calls.count(1) == 1
