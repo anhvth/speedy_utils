@@ -307,7 +307,7 @@ def main():
     session_name = resolve_session_name("mpython")
     run_in_tmux(cmds, session_name, total_fold)
     os.chmod("/tmp/start_multirun_tmux.sh", 0o755)  # Make the script executable
-    os.system("/tmp/start_multirun_tmux.sh")
+    subprocess.run(["/tmp/start_multirun_tmux.sh"], check=True)
     print(f"Started tmux session: {session_name}")
 
 
