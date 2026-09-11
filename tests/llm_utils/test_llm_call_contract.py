@@ -201,6 +201,26 @@ class TestLLMCallContract(TestCase):
         self.assertEqual(client_b.completions.create.call_args.kwargs["model"], "model-b")
 
     @patch("llm_utils.lm.llm.get_base_client")
+    def test_pooled_client_avoids_an_endpoint_with_more_inflight_work(
+        self, mock_get_client
+    ):
+        client_a = self._make_mock_client_with_model_id("model-a", "http://a/v1")
+        client_b = self._make_mock_client_with_model_id("model-b", "http://b/v1")
+        mock_get_client.return_value = [client_a, client_b]
+        llm = LLM(client=["http://a/v1", "http://b/v1"], model="test-model")
+        client_b.completions.create.return_value = self._make_text_completion("b")
+
+        with llm._borrow_specific_client(client_a):
+            with patch(
+                "llm_utils.lm.llm.random.choice", side_effect=lambda clients: clients[0]
+            ):
+                result = llm.generate("route around the busy endpoint")
+
+        self.assertEqual(result.text, "b")
+        client_a.completions.create.assert_not_called()
+        client_b.completions.create.assert_called_once()
+
+    @patch("llm_utils.lm.llm.get_base_client")
     def test_generate_preserves_vllm_completion_metadata(self, mock_get_client):
         mock_client = self._make_mock_client()
         mock_get_client.return_value = mock_client

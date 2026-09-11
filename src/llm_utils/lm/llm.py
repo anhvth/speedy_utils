@@ -490,12 +490,23 @@ class LLM:
         return self._select_client()
 
     def _select_client(self) -> Any:
-        """Pick one alive client without modifying in-flight accounting."""
+        """Pick a least-loaded alive client without changing its accounting."""
         if not self._alive_clients:
             raise RuntimeError("No alive clients available.")
         if len(self._alive_clients) == 1:
             return self._alive_clients[0]
-        return random.choice(self._alive_clients)
+        with self._client_balance_lock:
+            minimum = min(self._client_inflight_counts)
+            candidates = [
+                client
+                for client, count in zip(
+                    self._alive_clients,
+                    self._client_inflight_counts,
+                    strict=True,
+                )
+                if count == minimum
+            ]
+        return random.choice(candidates)
 
     def _client_label(self, client: Any) -> str:
         """Return a compact label for a client in load-balance logs."""
