@@ -105,6 +105,52 @@ def test_public_exports_are_direct_and_lightweight():
     assert "llm_utils" not in vars(speedy_utils.parallel_llm_job)
 
 
+def test_default_job_sidecars_live_in_temporary_workspace(tmp_path):
+    output = tmp_path / "rows.jsonl"
+
+    summary = _BasicJob("unused").run_jsonl(
+        [{"id": "one", "value": 1, "error": True}], output, progress=False
+    )
+
+    workspace = Path("/tmp/parallel_llm").resolve()
+    assert summary.state_path.is_relative_to(workspace)
+    assert summary.error_path.is_relative_to(workspace)
+    assert summary.state_path.exists()
+    assert summary.error_path.exists()
+    assert list(tmp_path.iterdir()) == [output]
+
+
+def test_resume_migrates_legacy_sidecars_to_job_workspace(tmp_path):
+    output = tmp_path / "rows.jsonl"
+    output.write_text('{"id":"one"}\n')
+    legacy_state = output.with_suffix(output.suffix + ".state.json")
+    legacy_state.write_text(json.dumps({
+        "version": 1,
+        "status": "complete",
+        "target_rows": 1,
+        "next_input_index": 1,
+        "attempted": 1,
+        "succeeded": 1,
+        "rejected": 0,
+        "failed": 0,
+        "written_rows": 1,
+        "output_bytes": output.stat().st_size,
+        "error_bytes": 0,
+    }))
+    legacy_errors = output.with_suffix(output.suffix + ".errors.jsonl")
+    legacy_errors.write_text("")
+
+    summary = _BasicJob("unused").run_jsonl(
+        [], output, target_rows=1, progress=False
+    )
+
+    assert summary.resumed
+    assert summary.state_path.exists()
+    assert not legacy_state.exists()
+    assert not legacy_errors.exists()
+    assert list(tmp_path.iterdir()) == [output]
+
+
 def test_thread_job_is_ordered_and_replaces_rejections_and_errors(tmp_path):
     output = tmp_path / "rows.jsonl"
     items = [
@@ -135,6 +181,26 @@ def test_thread_job_is_ordered_and_replaces_rejections_and_errors(tmp_path):
     errors = _rows(summary.error_path)
     assert errors[0]["item_id"] == "failed"
     assert errors[0]["error_type"] == "ValueError"
+
+
+def test_slow_first_row_does_not_block_worker_refill(tmp_path):
+    reached_next_window = threading.Event()
+
+    class RefillJob(ParallelLLMJob):
+        def process(self, item):
+            if item["id"] == 0:
+                assert reached_next_window.wait(5), "Workers stopped at the first window"
+            if item["id"] == 8:
+                reached_next_window.set()
+            return item
+
+    output = tmp_path / "refill.jsonl"
+    summary = RefillJob("unused", threads_per_process=4, prefetch_factor=2).run_jsonl(
+        ({"id": i} for i in range(16)), output, progress=False,
+    )
+    assert summary.failed == 0
+    assert summary.written_rows == 16
+    assert [row["id"] for row in _rows(output)] == list(range(16))
 
 
 def test_process_job_uses_persistent_children_and_keeps_order(tmp_path):
@@ -273,3 +339,30 @@ def test_injected_llm_is_public_and_restricted_to_thread_mode(tmp_path):
 
     with pytest.raises(ValueError, match="processes=1"):
         LLMJob("unused", llm=injected, processes=2)
+
+
+def test_resume_reuses_materialized_result_behind_interrupted_first_item(tmp_path):
+    completed = threading.Event()
+    calls = []
+
+    class Job(ParallelLLMJob):
+        def process(self, item):
+            calls.append(item["id"])
+            if item["id"] == 0 and calls.count(0) == 1:
+                assert completed.wait(5)
+                raise _StopRun()
+            completed.set()
+            return item
+
+    output = tmp_path / "rows.jsonl"
+    items = [{"id": 0}, {"id": 1}]
+    with pytest.raises(_StopRun):
+        Job("unused", threads_per_process=2).run_jsonl(
+            items, output, checkpoint_every=100, progress=False)
+    assert output.read_text() == ""
+    summary = Job("unused", threads_per_process=2).run_jsonl(
+        items, output, checkpoint_every=100, progress=False)
+    assert summary.resumed
+    assert _rows(output) == items
+    assert calls.count(0) == 2
+    assert calls.count(1) == 1

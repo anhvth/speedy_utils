@@ -7,6 +7,7 @@ import json
 import multiprocessing as mp
 import os
 import queue
+import shutil
 import threading
 import time
 import traceback
@@ -14,6 +15,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterable, Iterator, Mapping
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
+from hashlib import sha256
 from itertools import islice
 from pathlib import Path
 from typing import Any, Generic, Literal, TypeVar, cast
@@ -25,6 +27,7 @@ ItemT = TypeVar("ItemT")
 OutputT = TypeVar("OutputT")
 JobStatus = Literal["complete", "incomplete"]
 _STATE_VERSION = 1
+_WORK_ROOT = Path("/tmp/parallel_llm")
 
 
 @dataclass(frozen=True)
@@ -78,6 +81,27 @@ def _error_payload(item_id: str, exc: BaseException) -> dict[str, Any]:
 
 
 def _process_item(
+    job: "ParallelLLMJob[Any, Any]", sequence: int, item: Any
+) -> _Outcome:
+    """Persist completed work independently of ordered JSONL commits."""
+    root = getattr(job, "_materialized_root", None)
+    if root is None:
+        return _compute_item(job, sequence, item)
+    import dill
+
+    path = root / f"{sequence}.pkl"
+    item_id = job.item_id(item)
+    if path.exists():
+        saved_id, outcome = dill.loads(path.read_bytes())
+        if saved_id != item_id or outcome.sequence != sequence:
+            raise RuntimeError("Input order changed; use a new job output")
+        return outcome
+    outcome = _compute_item(job, sequence, item)
+    atomic_write(path, dill.dumps((item_id, outcome)))
+    return outcome
+
+
+def _compute_item(
     job: "ParallelLLMJob[Any, Any]", sequence: int, item: Any
 ) -> _Outcome:
     try:
@@ -149,8 +173,10 @@ class _ThreadJobExecutor:
         future = self.pool.submit(_process_item, self.job, sequence, item)
         self.futures[future] = sequence
 
-    def receive(self) -> _Outcome:
-        done, _ = wait(self.futures, return_when=FIRST_COMPLETED)
+    def receive(self) -> _Outcome | None:
+        done, _ = wait(self.futures, timeout=1, return_when=FIRST_COMPLETED)
+        if not done:
+            return None
         future = next(iter(done))
         self.futures.pop(future)
         return future.result()
@@ -196,9 +222,10 @@ class _ProcessJobExecutor:
 
         self.task_queue.put((sequence, dill.dumps(item)))
 
-    def receive(self) -> _Outcome:
+    def receive(self) -> _Outcome | None:
         import dill
 
+        deadline = time.monotonic() + 1
         while True:
             try:
                 return cast(_Outcome, dill.loads(self.result_queue.get(timeout=0.2)))
@@ -215,6 +242,8 @@ class _ProcessJobExecutor:
                     raise RuntimeError(
                         f"parallel LLM worker exited early: {statuses}"
                     ) from None
+                if time.monotonic() >= deadline:
+                    return None
 
     def close(self, *, cancel: bool) -> None:
         if cancel:
@@ -341,15 +370,42 @@ class ParallelLLMJob(Generic[ItemT, OutputT], ABC):
         return value
 
     @staticmethod
+    def _job_id(output: str | Path) -> str:
+        """Return the stable ID used to isolate one output's job artifacts."""
+        return sha256(os.fsencode(Path(output).resolve())).hexdigest()
+
+    @classmethod
+    def _workspace(cls, output: str | Path) -> Path:
+        """Return the stable temporary workspace for one output JSONL path."""
+        return _WORK_ROOT / cls._job_id(output)
+
+    @classmethod
     def _paths(
-        output: str | Path, error_log: str | Path | None
+        cls, output: str | Path, error_log: str | Path | None
     ) -> tuple[Path, Path, Path]:
         output_path = Path(output)
-        state_path = output_path.with_suffix(output_path.suffix + ".state.json")
+        workspace = cls._workspace(output_path)
+        workspace.mkdir(parents=True, exist_ok=True)
+        state_path = workspace / "state.json"
+        legacy_paths = (
+            (
+                output_path.with_suffix(output_path.suffix + ".state.json"),
+                state_path,
+            ),
+            (
+                output_path.with_suffix(output_path.suffix + ".errors.jsonl"),
+                workspace / "errors.jsonl",
+            ),
+            (Path(str(output_path) + ".materialized"), workspace / "materialized"),
+            (Path(str(output_path) + ".config.json"), workspace / "config.json"),
+        )
+        for legacy_path, destination in legacy_paths:
+            if legacy_path.exists() and not destination.exists():
+                shutil.move(str(legacy_path), str(destination))
         error_path = (
             Path(error_log)
             if error_log is not None
-            else output_path.with_suffix(output_path.suffix + ".errors.jsonl")
+            else workspace / "errors.jsonl"
         )
         return output_path, state_path, error_path
 
@@ -442,14 +498,15 @@ class ParallelLLMJob(Generic[ItemT, OutputT], ABC):
         self._context_root = Path(context_root or Path(output).parent).resolve()
         self._semantic_config = semantic_config or {}
         self._metrics_dir = None
+        workspace = self._workspace(output)
+        output_path, state_path, error_path = self._paths(output, error_log)
         if self._use_context:
-            config_path = Path(str(output) + ".config.json")
+            config_path = workspace / "config.json"
             if config_path.exists() and json.loads(config_path.read_text()) != self._semantic_config:
                 raise ValueError("Semantic configuration changed; use a new output")
             atomic_write(config_path, json.dumps(self._semantic_config, sort_keys=True).encode())
-            self._metrics_dir = self._context_root / ".status" / str(time.time_ns())
+            self._metrics_dir = workspace / "status" / str(time.time_ns())
             self._metrics_dir.mkdir(parents=True)
-        output_path, state_path, error_path = self._paths(output, error_log)
         for path in (output_path, state_path, error_path):
             path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -543,6 +600,16 @@ class ParallelLLMJob(Generic[ItemT, OutputT], ABC):
                 error_path=error_path,
             )
 
+        if "materialization_id" not in state:
+            from uuid import uuid4
+
+            state["materialization_id"] = uuid4().hex
+            self._write_state(state_path, state)
+        self._materialized_root = (
+            workspace / "materialized" / state["materialization_id"]
+        ).resolve()
+        self._materialized_root.mkdir(parents=True, exist_ok=True)
+
         start_index = int(state["next_input_index"])
         stop_monitor = threading.Event()
         reporter = None
@@ -572,6 +639,9 @@ class ParallelLLMJob(Generic[ItemT, OutputT], ABC):
         target_reached = False
         run_finished = False
         since_checkpoint = 0
+        finished = int(state["attempted"])
+        observed_errors = int(state["failed"])
+        last_refresh = 0.0
 
         progress_bar: Any = None
         if progress:
@@ -586,7 +656,25 @@ class ParallelLLMJob(Generic[ItemT, OutputT], ABC):
                 ),
                 desc=type(self).__name__,
                 dynamic_ncols=True,
+                miniters=1,
+                bar_format=(
+                    "{desc}: {n_fmt}/{total_fmt} completed [{elapsed}{postfix}]"
+                    if progress_total is not None
+                    else "{desc}: {n_fmt}/{total_fmt} saved [{elapsed}{postfix}]"
+                ),
             )
+
+        def refresh_progress(force: bool = False) -> None:
+            nonlocal last_refresh
+            now = time.monotonic()
+            if progress_bar is not None and (force or now - last_refresh >= 1):
+                progress_bar.set_postfix(
+                    finalized=int(state["attempted"]),
+                    waiting_for_order=len(completed), unfinished=inflight,
+                    errors=observed_errors, refresh=False,
+                )
+                progress_bar.refresh()
+                last_refresh = now
 
         def commit_state(output_handle: Any, error_handle: Any, complete: bool) -> None:
             nonlocal since_checkpoint
@@ -607,6 +695,7 @@ class ParallelLLMJob(Generic[ItemT, OutputT], ABC):
                 error_path.open("ab") as error_handle,
             ):
                 while True:
+                    # Refill workers independently of ordered output commits.
                     while not source_exhausted and inflight < max_inflight:
                         try:
                             item = next(source)
@@ -622,8 +711,15 @@ class ParallelLLMJob(Generic[ItemT, OutputT], ABC):
                         break
 
                     outcome = executor.receive()
+                    if outcome is None:
+                        refresh_progress()
+                        continue
                     completed[outcome.sequence] = outcome
                     inflight -= 1
+                    finished += 1
+                    observed_errors += outcome.kind == "error"
+                    if progress_bar is not None and progress_total is not None:
+                        progress_bar.update(1)
 
                     while commit_sequence in completed:
                         current = completed.pop(commit_sequence)
@@ -673,9 +769,6 @@ class ParallelLLMJob(Generic[ItemT, OutputT], ABC):
                                     ):
                                         progress_bar.update(1)
 
-                        if progress_bar is not None and progress_total is not None:
-                            progress_bar.update(1)
-
                         commit_sequence += 1
                         if (
                             target_rows is not None
@@ -686,6 +779,7 @@ class ParallelLLMJob(Generic[ItemT, OutputT], ABC):
                         if since_checkpoint >= checkpoint_every:
                             commit_state(output_handle, error_handle, False)
 
+                    refresh_progress()
                     if target_reached:
                         break
 
@@ -693,6 +787,7 @@ class ParallelLLMJob(Generic[ItemT, OutputT], ABC):
                 commit_state(output_handle, error_handle, complete)
                 run_finished = True
         finally:
+            refresh_progress(force=True)
             stop_monitor.set()
             if reporter is not None:
                 reporter.join()

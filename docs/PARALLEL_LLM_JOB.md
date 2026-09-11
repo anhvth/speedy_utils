@@ -58,8 +58,10 @@ when `processes=1`; injected live clients are rejected in process mode.
 - `processes>1` starts that many persistent spawn workers, each with
   `threads_per_process` long-lived threads.
 - Effective request concurrency is `processes * threads_per_process`.
-- `prefetch_factor` bounds queued work per concurrency slot; results are never
-  accumulated for the whole dataset.
+- `prefetch_factor` bounds unfinished submitted work per concurrency slot.
+  Each completion frees a submission slot, even if an earlier input is slow.
+  Completed results waiting for ordered output are buffered separately and may
+  accumulate beyond that limit.
 
 Each child constructs one LLM pool on first use. A live client is never
 pickled. Bare SSH endpoints such as `h1-31:8000` are resolved once in the
@@ -70,14 +72,25 @@ Workers may finish out of order, but the coordinator writes in input order.
 This gives deterministic row order and lets checkpoint state use one compact
 input cursor instead of retaining every completed ID.
 
+The progress display refreshes about once a second while waiting. Its main
+counter shows committed rows (committed inputs when `progress_total` is set).
+`finished` counts received worker outcomes, including rejections and errors;
+`buffered` counts outcomes waiting for input-order commit; `pending` counts
+submitted inputs without a received outcome; `failed` counts worker errors.
+On resume, `finished` and `failed` include checkpointed attempts and errors.
+A slow early input can hold the committed counter still while `finished`
+increases. No ETA is displayed because ordered commits arrive in bursts.
+
 ## Checkpoints and resume
 
-`run_jsonl` creates three files:
+`run_jsonl` writes only the requested JSONL in its output directory. Its
+checkpoint and diagnostic files live in a stable workspace under
+`/tmp/parallel_llm/<job-id>/`, where `job-id` is derived from the resolved
+output path:
 
 - the requested JSONL output;
-- `<output>.state.json`, containing counters, byte offsets, and the next input
-  index;
-- `<output>.errors.jsonl`, or the explicit `error_log` path.
+- `state.json`, containing counters, byte offsets, and the next input index;
+- `errors.jsonl`, or the explicit `error_log` path.
 
 At each checkpoint the coordinator flushes and fsyncs both JSONL files before
 atomically replacing state. Resume truncates any uncommitted tails to the
@@ -117,3 +130,16 @@ class StructuredJob(ParallelLLMJob[dict, Answer]):
 `JobSummary` reports attempted, succeeded, rejected, and failed inputs,
 written rows, paths, resume status, and elapsed time. Re-running a completed
 job with the same target returns immediately from its state file.
+
+### Materialized results on cancellation
+
+Each completed item is atomically saved under the output's temporary workspace
+at `/tmp/parallel_llm/<job-id>/materialized/` before being returned by
+its worker. Resume reuses these results, including completions waiting behind
+an earlier unfinished item. Ordered JSONL and checkpoint cursors retain their
+existing contract. Keep this workspace for resume; only replay identical inputs
+and job code. Errors/rejections are also retained.
+A fresh run with `resume=False` uses a new materialization namespace.
+Existing checkpoints upgrade automatically; results lost from an older process's
+memory cannot be recovered. Thread cancellation still waits for running calls;
+already materialized work survives a subsequent forced termination.
