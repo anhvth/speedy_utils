@@ -836,12 +836,15 @@ class LLM:
         if isinstance(exc, BadRequestError):
             body = exc.body
             if isinstance(body, dict):
-                err = body.get("error", body) if isinstance(body, dict) else body
+                err = body.get("error", body)
                 code = (err.get("code") or "") if isinstance(err, dict) else ""
                 # Non-retryable: input validation, auth-style codes
                 if code in ("context_length_exceeded", "content_filter"):
                     return False
-            return True
+                body = err.get("message", "") if isinstance(err, dict) else err
+            # Parameter validation cannot recover with the same input. Retry
+            # only the known transient vLLM transport response.
+            return "invalid http request received" in str(body).lower()
         return False
 
     @staticmethod
