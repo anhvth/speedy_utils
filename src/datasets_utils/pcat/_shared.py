@@ -1266,6 +1266,7 @@ def build_common_parser(
 ) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog=prog, description=description)
     parser.add_argument("path", nargs="?", type=Path, help=path_help)
+    parser.add_argument("--field", help="show only this top-level row field")
     parser.add_argument(
         "-i",
         "--index",
@@ -1319,8 +1320,8 @@ def build_common_parser(
     )
     parser.add_argument(
         "--tokenizer",
-        default="Qwen/Qwen3.5-27B",
-        help="tokenizer name or path for tokenized SDD/training rows",
+        default=None,
+        help="tokenizer name or path to decode --field or tokenized browser rows",
     )
     parser.add_argument(
         "--no-browser",
@@ -1328,6 +1329,42 @@ def build_common_parser(
         help="do not open browser when --serve starts",
     )
     return parser
+
+
+@dataclass
+class FieldRowSource:
+    source: RowSource
+    field_name: str
+    tokenizer: Any = None
+
+    @property
+    def display_path(self) -> str:
+        return self.source.display_path
+
+    @property
+    def total_rows(self) -> int:
+        return self.source.total_rows
+
+    def reload(self) -> None:
+        self.source.reload()
+
+    def load_row(self, index: int) -> Any:
+        row = self.source.load_row(index)
+        if not isinstance(row, dict) or self.field_name not in row:
+            raise ValueError(f"row {index} has no field {self.field_name!r}")
+        value = row[self.field_name]
+        if self.tokenizer is not None:
+            if not isinstance(value, list) or any(
+                type(token) is not int or token < 0 for token in value
+            ):
+                raise ValueError(
+                    f"row {index} field {self.field_name!r} must be a list of "
+                    "non-negative token IDs to decode"
+                )
+            from .serve import _decode_tokens
+
+            value = _decode_tokens(self.tokenizer, value)
+        return {self.field_name: value}
 
 
 def run_source_cli(
@@ -1341,11 +1378,25 @@ def run_source_cli(
     port: int = 8888,
     host: str = "127.0.0.1",
     mode: str = "auto",
-    tokenizer_name: str = "Qwen/Qwen3.5-27B",
+    tokenizer_name: str | None = None,
     open_browser: bool = True,
+    field_name: str | None = None,
 ) -> int:
     if source.total_rows <= 0:
         parser.error(f"{source.display_path} has no rows")
+
+    if field_name is not None:
+        if serve:
+            parser.error("--field is supported in terminal and --plain modes only")
+        tokenizer = None
+        if tokenizer_name is not None:
+            from .serve import _get_tokenizer
+
+            try:
+                tokenizer = _get_tokenizer(tokenizer_name)
+            except (RuntimeError, OSError, ValueError) as exc:
+                parser.error(str(exc))
+        source = FieldRowSource(source, field_name, tokenizer)
 
     # --serve: start web server
     if serve:
@@ -1356,7 +1407,7 @@ def run_source_cli(
             host=host,
             port=port,
             mode=mode,
-            tokenizer_name=tokenizer_name,
+            tokenizer_name=tokenizer_name or "Qwen/Qwen3.5-27B",
             open_browser=open_browser,
         )
 
@@ -1409,6 +1460,8 @@ def _run_glob_serve(
     """Serve a folder by globbing for JSONL files with a file picker."""
     from .serve import serve as _serve
 
+    if args.field is not None:
+        parser.error("--field is supported in terminal and --plain modes only")
     try:
         glob_source = JsonlGlobRowSource.from_path(path, pattern=args.ext)
     except ValueError as exc:
@@ -1427,7 +1480,7 @@ def _run_glob_serve(
         host=args.host,
         port=args.port,
         mode=args.mode,
-        tokenizer_name=args.tokenizer,
+        tokenizer_name=args.tokenizer or "Qwen/Qwen3.5-27B",
         open_browser=not args.no_browser,
         glob_source=glob_source,
     )
@@ -1479,6 +1532,7 @@ def main_jsonl(argv: Sequence[str] | None = None) -> int:
         host=args.host if hasattr(args, "host") else "127.0.0.1",
         mode=args.mode if hasattr(args, "mode") else "auto",
         tokenizer_name=args.tokenizer,
+        field_name=args.field,
         open_browser=not args.no_browser if hasattr(args, "no_browser") else True,
     )
 
@@ -1524,5 +1578,6 @@ def main_hf_dataset(argv: Sequence[str] | None = None) -> int:
         host=args.host if hasattr(args, "host") else "127.0.0.1",
         mode=args.mode if hasattr(args, "mode") else "auto",
         tokenizer_name=args.tokenizer,
+        field_name=args.field,
         open_browser=not args.no_browser if hasattr(args, "no_browser") else True,
     )

@@ -34,6 +34,7 @@ def _build_subcommand_parser(mode: str) -> argparse.ArgumentParser:
         default=None,
         help="zero-based row index (negative counts from end; default = last row)",
     )
+    parser.add_argument("--field", help="show only this top-level row field")
     parser.add_argument(
         "--plain",
         action="store_true",
@@ -49,6 +50,7 @@ def _build_subcommand_parser(mode: str) -> argparse.ArgumentParser:
         default=None,
         help="pre-draw N random rows (default 1); press s in TUI to step through",
     )
+    parser.add_argument("--tokenizer", help="tokenizer name or path to decode --field")
     if mode == "hf-dataset":
         parser.add_argument(
             "--split",
@@ -78,6 +80,7 @@ def _build_auto_parser() -> argparse.ArgumentParser:
         default=None,
         help="zero-based row index (negative counts from end; default = last row)",
     )
+    parser.add_argument("--field", help="show only this top-level row field")
     parser.add_argument(
         "--plain",
         action="store_true",
@@ -124,8 +127,8 @@ def _build_auto_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--tokenizer",
-        default="Qwen/Qwen3.5-27B",
-        help="tokenizer name or path for tokenized SDD/training rows",
+        default=None,
+        help="tokenizer name or path to decode --field or tokenized browser rows",
     )
     parser.add_argument(
         "--no-browser",
@@ -176,7 +179,7 @@ def _serve_glob_dir(path: Path, args: argparse.Namespace) -> int:
         host=args.host,
         port=args.port,
         mode=args.mode,
-        tokenizer_name=args.tokenizer,
+        tokenizer_name=args.tokenizer or "Qwen/Qwen3.5-27B",
         open_browser=not args.no_browser,
         glob_source=glob_source,
     )
@@ -205,6 +208,10 @@ def main(argv: list[str] | None = None) -> int:
             sub_argv += ["--sample", str(args.sample)]
         if mode == "hf-dataset" and args.split:
             sub_argv += ["--split", args.split]
+        if args.field is not None:
+            sub_argv += ["--field", args.field]
+        if args.tokenizer is not None:
+            sub_argv += ["--tokenizer", args.tokenizer]
         sub_argv.append(str(path))
         if mode == "jsonl":
             return main_jsonl(sub_argv)
@@ -217,6 +224,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.path is None:
         auto_parser.print_help()
         return 1
+
+    if args.serve and args.field is not None:
+        auto_parser.error("--field is supported in terminal and --plain modes only")
 
     path = args.path.expanduser()
     if not path.exists():
@@ -238,7 +248,9 @@ def main(argv: list[str] | None = None) -> int:
             sub_argv += ["--host", args.host]
         if args.mode != "auto":
             sub_argv += ["--mode", args.mode]
-        if args.tokenizer != "Qwen/Qwen3.5-27B":
+        if args.field is not None:
+            sub_argv += ["--field", args.field]
+        if args.tokenizer is not None:
             sub_argv += ["--tokenizer", args.tokenizer]
         if args.no_browser:
             sub_argv.append("--no-browser")
@@ -266,7 +278,9 @@ def main(argv: list[str] | None = None) -> int:
         sub_argv += ["--host", args.host]
     if args.mode != "auto":
         sub_argv += ["--mode", args.mode]
-    if args.tokenizer != "Qwen/Qwen3.5-27B":
+    if args.field is not None:
+        sub_argv += ["--field", args.field]
+    if args.tokenizer is not None:
         sub_argv += ["--tokenizer", args.tokenizer]
     if args.no_browser:
         sub_argv.append("--no-browser")

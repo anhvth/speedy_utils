@@ -8,7 +8,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from speedy_utils.multi_worker.multi_process_ray import multi_process_ray
+from speedy_utils.multi_worker.multi_process_ray import (
+    _importable_reference,
+    multi_process_ray,
+)
 
 
 def square(value: int, *, offset: int = 0) -> int:
@@ -39,6 +42,7 @@ class _FakeRay:
         self.submitted: list[_Ref] = []
         self.cancelled: list[_Ref] = []
         self.resource_requests: list[dict[str, object]] = []
+        self.task_option_requests: list[dict[str, object]] = []
         self.wait_queue_sizes: list[int] = []
         self.timeout_once = False
 
@@ -64,7 +68,11 @@ class _FakeRay:
                 self.submitted.append(ref)
                 return ref
 
-            return SimpleNamespace(remote=submit)
+            def options(**values: object):
+                self.task_option_requests.append(values)
+                return SimpleNamespace(remote=submit)
+
+            return SimpleNamespace(remote=submit, options=options)
 
         return decorate
 
@@ -113,10 +121,32 @@ def test_gpu_default_queue_uses_gpu_capacity(fake_ray: _FakeRay) -> None:
     assert fake_ray.wait_queue_sizes[0] == 4
 
 
+def test_applies_per_item_task_options(fake_ray: _FakeRay) -> None:
+    assert multi_process_ray(
+        square,
+        [2, 3],
+        progress=False,
+        task_options=[{"resources": {"slot_0": 1}}, {"resources": {"slot_1": 1}}],
+    ) == [4, 9]
+    assert fake_ray.task_option_requests == [
+        {"resources": {"slot_0": 1}}, {"resources": {"slot_1": 1}},
+    ]
+
+
 def test_non_importable_function_fails_before_connecting(fake_ray: _FakeRay) -> None:
     with pytest.raises(TypeError, match="top-level function"):
         multi_process_ray(lambda value: value, [1], progress=False)
     assert fake_ray.init_addresses == []
+
+
+def test_resolves_python_m_main_module(monkeypatch: pytest.MonkeyPatch) -> None:
+    original_module = square.__module__
+    monkeypatch.setattr(square, "__module__", "__main__")
+    monkeypatch.setattr(
+        sys.modules["__main__"], "__spec__", SimpleNamespace(name=original_module),
+        raising=False,
+    )
+    assert _importable_reference(square) == (original_module, "square")
 
 
 def test_ignore_preserves_failed_result_slot(fake_ray: _FakeRay) -> None:

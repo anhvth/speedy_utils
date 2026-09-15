@@ -1266,3 +1266,58 @@ def test_glob_refresh_thread_get_files_thread_safe(tmp_path: Path) -> None:
 
     rt.stop()
     rt.join(timeout=2)
+
+
+def test_selected_field_decodes_every_navigated_row(monkeypatch) -> None:
+    from datasets_utils.pcat import _shared, serve
+
+    class Tokenizer:
+        def decode(self, ids, skip_special_tokens):
+            assert skip_special_tokens is False
+            return "<special>" + str(ids[0]) + "\nTiếng Việt"
+
+    monkeypatch.setattr(serve, "_get_tokenizer", lambda name: Tokenizer())
+    source = _InMemorySource([{"input_ids": [1], "other": 0}, {"input_ids": [2]}])
+
+    def inspect_ui(run, app):
+        assert app.view.value == {"input_ids": "<special>1\nTiếng Việt"}
+        _shared.load_row(app, 1)
+        assert app.view.value == {"input_ids": "<special>2\nTiếng Việt"}
+        assert source.rows[0]["input_ids"] == [1]
+        return 0
+
+    monkeypatch.setattr(_shared.curses, "wrapper", inspect_ui)
+    parser = build_common_parser("pcat", "desc", "path")
+    assert run_source_cli(parser, source, 0, False, "pcat",
+                          field_name="input_ids", tokenizer_name="fake") == 0
+
+
+def test_field_cli_plain_selection_and_decoding(tmp_path, monkeypatch, capsys) -> None:
+    from datasets_utils.pcat import cli, serve
+
+    class Tokenizer:
+        def decode(self, ids, skip_special_tokens):
+            return "hello <special>\nworld"
+
+    monkeypatch.setattr(serve, "_get_tokenizer", lambda name: Tokenizer())
+    path = tmp_path / "rows.jsonl"
+    path.write_text('{"input_ids": [1, 2], "other": 42}\n')
+    for prefix in ([], ["jsonl"]):
+        args = prefix + [str(path), "--plain", "--field", "input_ids"]
+        assert cli.main(args) == 0
+        assert json.loads(capsys.readouterr().out) == {"input_ids": [1, 2]}
+        assert cli.main(args + ["--tokenizer", "fake"]) == 0
+        assert json.loads(capsys.readouterr().out) == {
+            "input_ids": "hello <special>\nworld"
+        }
+
+
+def test_selected_field_rejects_missing_and_invalid_token_ids() -> None:
+    import pytest
+    from datasets_utils.pcat._shared import FieldRowSource
+
+    source = FieldRowSource(_InMemorySource([{}, {"ids": [-100]}]), "ids", object())
+    with pytest.raises(ValueError, match="has no field"):
+        source.load_row(0)
+    with pytest.raises(ValueError, match="non-negative token IDs"):
+        source.load_row(1)

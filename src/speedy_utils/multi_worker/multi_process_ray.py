@@ -39,9 +39,11 @@ def _call_importable(
 def _importable_reference(func: Callable[[Any], Any]) -> tuple[str, str] | None:
     module_name = getattr(func, "__module__", "")
     qualname = getattr(func, "__qualname__", "")
+    if module_name == "__main__":
+        main_spec = getattr(sys.modules.get("__main__"), "__spec__", None)
+        module_name = getattr(main_spec, "name", "")
     if (
         not module_name
-        or module_name == "__main__"
         or not qualname
         or "<locals>" in qualname
     ):
@@ -134,6 +136,7 @@ def multi_process_ray(
     progress_increment: Callable[[Any, Any], int] | None = None,
     progress_interval_seconds: float = 30.0,
     forward_worker_output: bool = False,
+    task_options: Iterable[Mapping[str, Any]] | None = None,
     **func_kwargs: Any,
 ) -> list[Any]:
     """Run ``func(item, **func_kwargs)`` on an existing Ray cluster in input order.
@@ -151,7 +154,8 @@ def multi_process_ray(
     ``progress_interval_seconds``. Worker stdout and stderr are quiet by
     default so concurrent Ray tasks cannot corrupt the driver log; set
     ``forward_worker_output=True`` when raw worker output is intentionally
-    useful.
+    useful. ``task_options`` supplies one Ray ``.options(...)`` mapping per
+    item when individual tasks need distinct resources or node placement.
     """
 
     if num_cpus < 0 or num_gpus < 0:
@@ -164,6 +168,9 @@ def multi_process_ray(
     values = list(items)
     if not values:
         return []
+    options = list(task_options) if task_options is not None else [{} for _ in values]
+    if len(options) != len(values):
+        raise ValueError("task_options must contain exactly one mapping per item")
 
     try:
         import ray
@@ -189,9 +196,10 @@ def multi_process_ray(
         _call_importable
     )
 
-    def submit(item: Any) -> Any:
-        return call.remote(
-            importable[0], importable[1], item, func_kwargs, forward_worker_output
+    def submit(index: int) -> Any:
+        return call.options(**options[index]).remote(
+            importable[0], importable[1], values[index], func_kwargs,
+            forward_worker_output,
         )
 
     results: list[Any] = [None] * len(values)
@@ -207,7 +215,7 @@ def multi_process_ray(
     def submit_until_full() -> None:
         nonlocal next_index
         while next_index < len(values) and len(pending) < max_in_flight:
-            ref = submit(values[next_index])
+            ref = submit(next_index)
             pending[ref] = next_index
             next_index += 1
 
