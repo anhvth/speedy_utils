@@ -773,6 +773,24 @@ class LLM:
             raise ValueError("No choices returned from completion.")
         return LLM._coerce_completion_choice(choices[0])
 
+    @property
+    def last_usage(self) -> dict[str, Any] | None:
+        """Provider usage for the latest non-streaming call, or None if absent.
+
+        Preserves raw fields, including unknown/null cached-token details. A locally
+        cached response replays its original usage; this is not a billing ledger.
+        Use separate LLM instances for concurrent callers needing per-call usage.
+        """
+        return deepcopy(getattr(self, "_last_usage", None))
+
+    def _record_usage(self, completion: Any) -> None:
+        usage = self._get_completion_usage(completion)
+        if hasattr(usage, "model_dump"):
+            usage = usage.model_dump()
+        elif usage is not None and not isinstance(usage, dict):
+            usage = vars(usage)
+        self._last_usage = deepcopy(usage)
+
     @staticmethod
     def _get_completion_usage(completion: Any) -> Any | None:
         """Return the usage payload from a completion-like object."""
@@ -939,6 +957,7 @@ class LLM:
         **runtime_kwargs,
     ) -> "CompletionChoice | tuple[CompletionChoice, int]":
         """Run one text completion request against a fully-built prompt."""
+        self._last_usage = None
         if not isinstance(prompt, str):
             raise TypeError("_raw_completion_step expects `prompt` to be a string")
 
@@ -972,6 +991,7 @@ class LLM:
                 model_name=model_name,
             )
 
+        self._record_usage(completion)
         choice = self._get_completion_choice(completion)
         usage = self._get_completion_usage(completion)
         if usage is not None:
@@ -991,6 +1011,7 @@ class LLM:
         **runtime_kwargs,
     ) -> list[dict[str, Any]]:
         """Execute a chat completion call and return normalized internal results."""
+        self._last_usage = None
         self._require_single_choice(runtime_kwargs)
         # Prepare messages
         messages = self._prepare_input(input_data)
@@ -1012,6 +1033,7 @@ class LLM:
             )
         # print(completion)
 
+        self._record_usage(completion)
         choices = getattr(completion, "choices", None)
         if not choices:
             raise ValueError("No choices returned from completion.")
@@ -1099,6 +1121,7 @@ class LLM:
         **runtime_kwargs,
     ) -> dict[str, Any]:
         """Execute a structured completion and return parsed and raw artifacts."""
+        self._last_usage = None
         if not isinstance(input_data, str) and not isinstance(input_data, list):
             raise TypeError(
                 "pydantic_parse expects `input_data` to be a string or message list."
@@ -1131,6 +1154,7 @@ class LLM:
                 model_name=model_name,
             )
 
+        self._record_usage(completion)
         choices = getattr(completion, "choices", None)
         if not choices:
             raise ValueError("No choices returned from completion.")
@@ -1200,6 +1224,7 @@ class LLM:
         **runtime_kwargs,
     ) -> Any:
         """Stream a chat completion directly from the API (no caching)."""
+        self._last_usage = None
         if return_dict:
             raise ValueError(
                 "Streaming is only supported with the default return value."

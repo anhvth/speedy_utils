@@ -7878,7 +7878,7 @@ requires-dist = [
     { name = "rich", specifier = ">=14.3.1" },
     { name = "tabulate" },
     { name = "tqdm" },
-    { name = "transformers", marker = "extra == 'transformers'", specifier = ">=4.57.6" },
+    { name = "transformers", marker = "extra == 'transformers'", specifier = ">=4.57.3" },
     { name = "xxhash" },
 ]
 provides-extras = ["transformers"]

@@ -514,6 +514,30 @@ class TestLLMCallContract(TestCase):
         )
 
     @patch("llm_utils.lm.llm.get_base_client")
+    def test_last_usage_preserves_cached_tokens_and_resets(self, mock_get_client):
+        mock_get_client.return_value = self._make_mock_client()
+        llm = LLM()
+        self.assertIsNone(llm.last_usage)
+        message = SimpleNamespace(content='{"answer": "yes"}', parsed={"answer": "yes"})
+        completion = self._make_completion(message)
+        completion.usage = CompletionUsage(prompt_tokens=2000, completion_tokens=10,
+                                           total_tokens=2010,
+                                           prompt_tokens_details={"cached_tokens": 1536})
+        llm.client.chat.completions.parse.return_value = completion
+        llm.pydantic_parse("prompt", response_model=self.ParsedOutput)
+        self.assertEqual(llm.last_usage["prompt_tokens_details"]["cached_tokens"], 1536)
+        snapshot = llm.last_usage
+        snapshot["prompt_tokens"] = 0
+        self.assertEqual(llm.last_usage["prompt_tokens"], 2000)
+        completion.usage = None
+        llm.pydantic_parse("another prompt", response_model=self.ParsedOutput)
+        self.assertIsNone(llm.last_usage)
+        llm.client.chat.completions.parse.side_effect = RuntimeError("failed")
+        with self.assertRaises(Exception):
+            llm.pydantic_parse("failed", response_model=self.ParsedOutput)
+        self.assertIsNone(llm.last_usage)
+
+    @patch("llm_utils.lm.llm.get_base_client")
     def test_pydantic_parse_accepts_message_list(self, mock_get_client):
         mock_get_client.return_value = self._make_mock_client()
         llm = LLM()
