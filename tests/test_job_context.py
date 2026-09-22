@@ -42,7 +42,7 @@ def test_context_jobs_replace_rejections_and_resume_with_execution_changes(tmp_p
     job = ContextJob(1, processes=processes, threads_per_process=1)
     source = [{"id": i} for i in range(4)]
     result = job.run_jsonl(source, path, target_rows=1, progress=False,
-                          semantic_config={"version": 1})
+                          semantic_config={"version": 1}, ordered=True)
     assert result.rejected == 1
     assert "quality: bad candidate" in result.error_path.read_text()
     job.threads_per_process = 2

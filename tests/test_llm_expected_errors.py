@@ -38,6 +38,6 @@ def test_expected_response_errors_are_quiet_and_replaced(kind, tmp_path, capsys)
         target_rows=1, progress=False,
     )
     assert summary.complete and summary.failed == 1
-    assert summary.output_path.read_text().strip() == '{"id":1}'
+    assert summary.output_path.read_text().strip() == '{"_input_index":1,"id":1}'
     assert type(error).__name__ in summary.error_path.read_text()
     assert capsys.readouterr().err == ""

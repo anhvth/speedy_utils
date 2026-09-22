@@ -1,7 +1,7 @@
 # Parallel LLM jobs
 
 `ParallelLLMJob` keeps application code focused on one item. The library owns
-the LLM lifecycle, bounded parallelism, ordered output, failures, checkpoints,
+the LLM lifecycle, bounded parallelism, completion-order output, failures, checkpoints,
 resume, and exact-size JSONL generation.
 
 ```python
@@ -43,7 +43,7 @@ Override `item_id(item)` only when the identifier lives elsewhere. Override
 rows; the default yields one row.
 
 The input iterable must be deterministic and replayable from its beginning.
-Resume skips to the committed input index. For exact-target generation, make
+Resume skips checkpointed inputs. For exact-target generation, make
 the iterable large enough or unbounded so rejected inputs can be replaced.
 
 Do not create global OpenAI or LLM clients in user code. `self.llm` is lazy,
@@ -60,26 +60,46 @@ when `processes=1`; injected live clients are rejected in process mode.
 - Effective request concurrency is `processes * threads_per_process`.
 - `prefetch_factor` bounds unfinished submitted work per concurrency slot.
   Each completion frees a submission slot, even if an earlier input is slow.
-  Completed results waiting for ordered output are buffered separately and may
-  accumulate beyond that limit.
+  By default, received results are appended immediately and released. Only
+  `ordered=True` buffers completed results behind earlier unfinished inputs;
+  that buffer may accumulate beyond the prefetch limit.
 
 Each child constructs one LLM pool on first use. A live client is never
 pickled. Bare SSH endpoints such as `h1-31:8000` are resolved once in the
 parent, so all children reuse the same parent-owned loopback forwards. HTTP(S)
 URLs remain direct endpoints, and integers remain local ports.
 
-Workers may finish out of order, but the coordinator writes in input order.
-This gives deterministic row order and lets checkpoint state use one compact
-input cursor instead of retaining every completed ID.
+New jobs default to `ordered=False`: one coordinator appends received results
+directly to the final JSONL and flushes each item's rows for immediate visibility.
+Each object row automatically receives `_input_index`, the zero-based position
+in the original input iterable. Non-object results are wrapped as
+`{"_input_index": 2, "output": ...}`. Pydantic models become objects first.
+Fan-out rows share their input index. The field is reserved: a result containing
+`_input_index` raises an error instead of overwriting it. Input objects are not mutated.
 
-The progress display refreshes about once a second while waiting. Its main
-counter shows committed rows (committed inputs when `progress_total` is set).
-`finished` counts received worker outcomes, including rejections and errors;
-`buffered` counts outcomes waiting for input-order commit; `pending` counts
-submitted inputs without a received outcome; `failed` counts worker errors.
-On resume, `finished` and `failed` include checkpointed attempts and errors.
-A slow early input can hold the committed counter still while `finished`
-increases. No ETA is displayed because ordered commits arrive in bursts.
+For example, input 2 can finish before input 0:
+
+```jsonl
+{"_input_index":2,"id":"third","text":"finished first"}
+{"_input_index":0,"id":"first","text":"finished second"}
+```
+
+Use `ordered=True` to preserve input order and the original output schema.
+Omitting `ordered` on resume preserves the checkpoint's mode, including legacy
+ordered checkpoints. Explicitly changing a checkpoint's mode is rejected; use a
+new output path for a new mode. The API uses `ordered=None` for this automatic
+selection; it resolves to False for new jobs. With completion-order output,
+the first received successes fill `target_rows`, so both order and selection
+can vary between runs.
+
+The tqdm bar shows saved rows, elapsed time, rate, and an ETA when a total is
+known. With `progress_total`, it instead counts received input outcomes,
+including errors and rejections, and shows `saved` separately. `pending` counts
+submitted inputs without a received outcome (queued or running); `errors`
+counts observed item errors and `rejected` counts processed rejections.
+Only ordered jobs show `buffered`, when results are waiting for earlier inputs.
+The display refreshes about once a second. Saved rows are visible in the file;
+durability is established at checkpoints.
 
 ## Checkpoints and resume
 
@@ -91,15 +111,21 @@ output path:
 - the requested JSONL output;
 - `state.json`, containing counters, byte offsets, and the next input index;
 - `errors.jsonl`, or the explicit `error_log` path.
+- `completed.jsonl` for unordered jobs, an append-only journal of finalized
+  input indices, including failures and rejections that have no output row.
 
-At each checkpoint the coordinator flushes and fsyncs both JSONL files before
-atomically replacing state. Resume truncates any uncommitted tails to the
-recorded byte offsets and continues from the recorded input index. A non-empty
-output without state is rejected rather than guessed, unless it already has
-exactly the requested target row count.
+At each checkpoint the coordinator flushes and fsyncs the output, error log,
+and completion journal before atomically replacing state with their byte offsets.
+Unordered jobs checkpoint after `checkpoint_every` finalized inputs or
+`flush_interval` seconds (default 10, checked by the coordinator), whichever
+comes first. This avoids an fsync for every row. Resume truncates uncommitted
+tails and loads a set of completed indices to skip during input replay. Ordered
+jobs use a compact input cursor instead and checkpoint by count.
+A non-empty output without state is rejected. Only explicit `ordered=True`
+allows the legacy shortcut for an output already at exactly the requested target.
 
 A completed exact-size job may resume with a larger `target_rows`; it continues
-from the saved input cursor and appends only the additional rows. Smaller or
+with uncommitted inputs and appends only the additional rows. Smaller or
 otherwise incompatible target changes are rejected.
 
 The sink writes exactly `target_rows`, even when `iter_outputs` fans out. If
@@ -157,4 +183,6 @@ Keep input order fixed. Existing compact output is imported by matching row IDs.
 This mode holds inputs and results in memory and rewrites the JSONL snapshot
 because rows have variable lengths. New runs avoid per-result files. Errors and
 rejections leave empty slots for rerun. Fan-out outputs, exact-size replacement,
-and stage-context jobs continue to use the existing ordered mode.
+and stage-context jobs use the streaming mode described above (unordered by
+default, or explicitly ordered). Indexed mode retains its separate slot-based
+schema and resume contract.

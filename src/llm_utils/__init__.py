@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .chat_format import show_chat
 from .lm import (
+    DS41LLM,
     LLM,
     Input,
     InputField,
@@ -18,6 +19,7 @@ from .utils import get_one_turn_conv, get_tok, msgs_turns, turn
 
 
 __all__ = [
+    "DS41LLM",
     "LLM",
     "Qwen3LLM",
     "Qwen38LLM",

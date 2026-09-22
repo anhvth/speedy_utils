@@ -361,7 +361,9 @@ class LLM:
             api_key=self.api_key,
         )
         client_specs = client if isinstance(client, list) else [client]
-        resolved_clients = raw_clients if isinstance(raw_clients, list) else [raw_clients]
+        resolved_clients = (
+            raw_clients if isinstance(raw_clients, list) else [raw_clients]
+        )
         self._client_labels_by_id = {
             id(resolved): _client_spec_label(spec)
             for resolved, spec in zip(resolved_clients, client_specs, strict=True)
@@ -1328,8 +1330,9 @@ class LLM:
         raise ValueError("No message history available. Make a call first.")
 
 
+from .llm_ds41 import DS41LLM
 from .llm_qwen3 import Qwen3LLM
 from .llm_qwen38 import Qwen38LLM
 
 
-__all__ = ["LLM", "Qwen3LLM", "Qwen38LLM"]
+__all__ = ["DS41LLM", "LLM", "Qwen3LLM", "Qwen38LLM"]

@@ -14,6 +14,7 @@ import traceback
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Iterator, Mapping
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from contextlib import nullcontext
 from dataclasses import dataclass
 from hashlib import sha256
 from itertools import islice
@@ -26,7 +27,7 @@ from .job_context import JobContext, RejectItem, atomic_write, monitor
 ItemT = TypeVar("ItemT")
 OutputT = TypeVar("OutputT")
 JobStatus = Literal["complete", "incomplete"]
-_STATE_VERSION = 1
+_STATE_VERSION = 2
 _WORK_ROOT = Path("/tmp/parallel_llm")
 
 
@@ -106,8 +107,9 @@ def _compute_item(
 ) -> _Outcome:
     try:
         if getattr(job, "_use_context", False):
-            ctx = JobContext(job._context_root, item, job._semantic_config,
-                             job._metrics_dir)
+            ctx = JobContext(
+                job._context_root, item, job._semantic_config, job._metrics_dir
+            )
             result = job.process(item, ctx)
         else:
             result = job.process(item)
@@ -403,9 +405,7 @@ class ParallelLLMJob(Generic[ItemT, OutputT], ABC):
             if legacy_path.exists() and not destination.exists():
                 shutil.move(str(legacy_path), str(destination))
         error_path = (
-            Path(error_log)
-            if error_log is not None
-            else workspace / "errors.jsonl"
+            Path(error_log) if error_log is not None else workspace / "errors.jsonl"
         )
         return output_path, state_path, error_path
 
@@ -486,27 +486,45 @@ class ParallelLLMJob(Generic[ItemT, OutputT], ABC):
         status_interval: float = 15,
         indexed: bool = False,
         flush_interval: float = 10,
+        ordered: bool | None = None,
     ) -> JobSummary:
-        """Run until the iterable ends or exactly ``target_rows`` are committed."""
+        """Write completed results immediately, tagging rows with ``_input_index``.
+
+        ``ordered=True`` retains input order and the original row schema. Omitted
+        ordering defaults to False for new jobs and preserves the mode on resume.
+        ``flush_interval`` bounds time between checkpoints in unordered mode.
+        """
         if target_rows is not None and target_rows < 0:
             raise ValueError("target_rows must be non-negative")
         if checkpoint_every <= 0:
             raise ValueError("checkpoint_every must be a positive integer")
         if progress_total is not None and progress_total < 0:
             raise ValueError("progress_total must be non-negative")
+        if flush_interval <= 0:
+            raise ValueError("flush_interval must be positive")
 
         if indexed:
-            if target_rows is not None or context_root is not None or semantic_config is not None:
-                raise ValueError("Indexed mode uses finite items without target_rows or stage context")
-            if flush_interval <= 0:
-                raise ValueError("flush_interval must be positive")
+            if (
+                target_rows is not None
+                or context_root is not None
+                or semantic_config is not None
+            ):
+                raise ValueError(
+                    "Indexed mode uses finite items without target_rows or stage context"
+                )
             if len(inspect.signature(self.process).parameters) != 1:
                 raise ValueError("Indexed mode requires process(item)")
             from ._indexed_llm_job import run_indexed
 
             return run_indexed(
-                self, items, output, resume=resume, checkpoint_every=checkpoint_every,
-                error_log=error_log, progress=progress, flush_interval=flush_interval,
+                self,
+                items,
+                output,
+                resume=resume,
+                checkpoint_every=checkpoint_every,
+                error_log=error_log,
+                progress=progress,
+                flush_interval=flush_interval,
             )
 
         started = time.monotonic()
@@ -518,19 +536,30 @@ class ParallelLLMJob(Generic[ItemT, OutputT], ABC):
         output_path, state_path, error_path = self._paths(output, error_log)
         if self._use_context:
             config_path = workspace / "config.json"
-            if config_path.exists() and json.loads(config_path.read_text()) != self._semantic_config:
+            if (
+                config_path.exists()
+                and json.loads(config_path.read_text()) != self._semantic_config
+            ):
                 raise ValueError("Semantic configuration changed; use a new output")
-            atomic_write(config_path, json.dumps(self._semantic_config, sort_keys=True).encode())
+            atomic_write(
+                config_path, json.dumps(self._semantic_config, sort_keys=True).encode()
+            )
             self._metrics_dir = workspace / "status" / str(time.time_ns())
             self._metrics_dir.mkdir(parents=True)
         for path in (output_path, state_path, error_path):
             path.parent.mkdir(parents=True, exist_ok=True)
 
         resumed = bool(resume and state_path.exists())
+        completed_indices: set[int] = set()
+        journal_path = workspace / "completed.jsonl"
         if resumed:
             state = json.loads(state_path.read_text(encoding="utf-8"))
-            if state.get("version") != _STATE_VERSION:
+            if state.get("version") not in (1, _STATE_VERSION):
                 raise RuntimeError(f"unsupported ParallelLLMJob state: {state_path}")
+            saved_ordered = state.get("ordered", True)
+            if ordered is not None and ordered != saved_ordered:
+                raise ValueError("ordered does not match the existing job state")
+            ordered = saved_ordered
             existing_target = state.get("target_rows")
             extending_target = (
                 state.get("status") == "complete"
@@ -542,6 +571,10 @@ class ParallelLLMJob(Generic[ItemT, OutputT], ABC):
                 raise RuntimeError("target_rows does not match the existing job state")
             self._truncate(output_path, int(state["output_bytes"]))
             self._truncate(error_path, int(state["error_bytes"]))
+            if not ordered:
+                self._truncate(journal_path, int(state["completed_bytes"]))
+                with journal_path.open("rb") as handle:
+                    completed_indices = {int(line) for line in handle}
             if extending_target:
                 state["target_rows"] = target_rows
                 state["status"] = "incomplete"
@@ -556,11 +589,13 @@ class ParallelLLMJob(Generic[ItemT, OutputT], ABC):
                     error_path=error_path,
                 )
         else:
+            ordered = False if ordered is None else ordered
             if resume and output_path.exists() and output_path.stat().st_size:
                 existing_rows = self._line_count(output_path)
-                if target_rows is not None and existing_rows == target_rows:
+                if ordered and target_rows is not None and existing_rows == target_rows:
                     state = {
                         "version": _STATE_VERSION,
+                        "ordered": True,
                         "status": "complete",
                         "target_rows": target_rows,
                         "next_input_index": existing_rows,
@@ -591,6 +626,7 @@ class ParallelLLMJob(Generic[ItemT, OutputT], ABC):
             state_path.unlink(missing_ok=True)
             state = {
                 "version": _STATE_VERSION,
+                "ordered": ordered,
                 "status": "incomplete",
                 "target_rows": target_rows,
                 "next_input_index": 0,
@@ -602,6 +638,9 @@ class ParallelLLMJob(Generic[ItemT, OutputT], ABC):
                 "output_bytes": 0,
                 "error_bytes": 0,
             }
+            if not ordered:
+                journal_path.write_bytes(b"")
+                state["completed_bytes"] = 0
             self._write_state(state_path, state)
 
         if target_rows == 0:
@@ -630,10 +669,19 @@ class ParallelLLMJob(Generic[ItemT, OutputT], ABC):
         stop_monitor = threading.Event()
         reporter = None
         if self._use_context and progress and status_interval > 0:
-            reporter = threading.Thread(target=monitor, args=(stop_monitor, state_path,
-                                         self._metrics_dir, status_interval), daemon=True)
+            reporter = threading.Thread(
+                target=monitor,
+                args=(stop_monitor, state_path, self._metrics_dir, status_interval),
+                daemon=True,
+            )
             reporter.start()
-        source: Iterator[ItemT] = islice(iter(items), start_index, None)
+        source: Iterator[tuple[int, ItemT]] = (
+            (index, item)
+            for index, item in enumerate(
+                islice(iter(items), start_index, None), start_index
+            )
+            if index not in completed_indices
+        )
         concurrency = self.processes * self.threads_per_process
         max_inflight = max(1, concurrency * self.prefetch_factor)
         if self.processes == 1:
@@ -648,16 +696,15 @@ class ParallelLLMJob(Generic[ItemT, OutputT], ABC):
 
         pending_items: dict[int, ItemT] = {}
         completed: dict[int, _Outcome] = {}
-        submitted = start_index
         commit_sequence = start_index
         inflight = 0
         source_exhausted = False
         target_reached = False
         run_finished = False
         since_checkpoint = 0
-        finished = int(state["attempted"])
         observed_errors = int(state["failed"])
         last_refresh = 0.0
+        last_checkpoint = time.monotonic()
 
         progress_bar: Any = None
         if progress:
@@ -671,56 +718,63 @@ class ParallelLLMJob(Generic[ItemT, OutputT], ABC):
                     else state["written_rows"]
                 ),
                 desc=type(self).__name__,
+                unit="item" if progress_total is not None else "row",
                 dynamic_ncols=True,
                 miniters=1,
-                bar_format=(
-                    "{desc}: {n_fmt}/{total_fmt} completed [{elapsed}{postfix}]"
-                    if progress_total is not None
-                    else "{desc}: {n_fmt}/{total_fmt} saved [{elapsed}{postfix}]"
-                ),
+                mininterval=1,
             )
 
         def refresh_progress(force: bool = False) -> None:
             nonlocal last_refresh
             now = time.monotonic()
             if progress_bar is not None and (force or now - last_refresh >= 1):
-                progress_bar.set_postfix(
-                    finalized=int(state["attempted"]),
-                    waiting_for_order=len(completed), unfinished=inflight,
-                    errors=observed_errors, refresh=False,
-                )
+                postfix = {
+                    "pending": inflight,
+                    "errors": observed_errors,
+                    "rejected": int(state["rejected"]),
+                }
+                if progress_total is not None:
+                    postfix["saved"] = int(state["written_rows"])
+                if ordered and completed:
+                    postfix["buffered"] = len(completed)
+                progress_bar.set_postfix(postfix, refresh=False)
                 progress_bar.refresh()
                 last_refresh = now
 
         def commit_state(output_handle: Any, error_handle: Any, complete: bool) -> None:
-            nonlocal since_checkpoint
+            nonlocal since_checkpoint, last_checkpoint
             output_handle.flush()
             error_handle.flush()
             os.fsync(output_handle.fileno())
             os.fsync(error_handle.fileno())
+            if journal_handle is not None:
+                journal_handle.flush()
+                os.fsync(journal_handle.fileno())
+                state["completed_bytes"] = journal_handle.tell()
             state["status"] = "complete" if complete else "incomplete"
-            state["next_input_index"] = commit_sequence
+            state["next_input_index"] = commit_sequence if ordered else 0
             state["output_bytes"] = output_handle.tell()
             state["error_bytes"] = error_handle.tell()
             self._write_state(state_path, state)
             since_checkpoint = 0
+            last_checkpoint = time.monotonic()
 
         try:
             with (
                 output_path.open("ab") as output_handle,
                 error_path.open("ab") as error_handle,
+                nullcontext() if ordered else journal_path.open("ab") as journal_handle,
             ):
                 while True:
                     # Refill workers independently of ordered output commits.
                     while not source_exhausted and inflight < max_inflight:
                         try:
-                            item = next(source)
+                            sequence, item = next(source)
                         except StopIteration:
                             source_exhausted = True
                             break
-                        executor.submit(submitted, item)
-                        pending_items[submitted] = item
-                        submitted += 1
+                        executor.submit(sequence, item)
+                        pending_items[sequence] = item
                         inflight += 1
 
                     if inflight == 0:
@@ -728,11 +782,18 @@ class ParallelLLMJob(Generic[ItemT, OutputT], ABC):
 
                     outcome = executor.receive()
                     if outcome is None:
+                        if (
+                            not ordered
+                            and since_checkpoint
+                            and time.monotonic() - last_checkpoint >= flush_interval
+                        ):
+                            commit_state(output_handle, error_handle, False)
                         refresh_progress()
                         continue
                     completed[outcome.sequence] = outcome
+                    if not ordered:
+                        commit_sequence = outcome.sequence
                     inflight -= 1
-                    finished += 1
                     observed_errors += outcome.kind == "error"
                     if progress_bar is not None and progress_total is not None:
                         progress_bar.update(1)
@@ -756,8 +817,15 @@ class ParallelLLMJob(Generic[ItemT, OutputT], ABC):
                         elif current.kind == "rejected":
                             state["rejected"] += 1
                             if current.payload is not None:
-                                error_handle.write(json.dumps({"input_index": commit_sequence,
-                                                   **current.payload}).encode() + b"\n")
+                                error_handle.write(
+                                    json.dumps(
+                                        {
+                                            "input_index": commit_sequence,
+                                            **current.payload,
+                                        }
+                                    ).encode()
+                                    + b"\n"
+                                )
                         else:
                             rows = list(
                                 self.iter_outputs(item, cast(OutputT, current.payload))
@@ -772,8 +840,24 @@ class ParallelLLMJob(Generic[ItemT, OutputT], ABC):
                                         and state["written_rows"] >= target_rows
                                     ):
                                         break
+                                    value = self._json_value(row)
+                                    if not ordered:
+                                        if isinstance(value, Mapping):
+                                            if "_input_index" in value:
+                                                raise ValueError(
+                                                    "_input_index is reserved by ParallelLLMJob"
+                                                )
+                                            value = {
+                                                "_input_index": commit_sequence,
+                                                **value,
+                                            }
+                                        else:
+                                            value = {
+                                                "_input_index": commit_sequence,
+                                                "output": value,
+                                            }
                                     encoded = json.dumps(
-                                        self._json_value(row),
+                                        value,
                                         ensure_ascii=False,
                                         separators=(",", ":"),
                                     ).encode("utf-8")
@@ -785,6 +869,10 @@ class ParallelLLMJob(Generic[ItemT, OutputT], ABC):
                                     ):
                                         progress_bar.update(1)
 
+                        if journal_handle is not None:
+                            journal_handle.write(f"{commit_sequence}\n".encode("ascii"))
+                            # Make each received result visible without fsync per item.
+                            output_handle.flush()
                         commit_sequence += 1
                         if (
                             target_rows is not None
@@ -792,7 +880,10 @@ class ParallelLLMJob(Generic[ItemT, OutputT], ABC):
                         ):
                             target_reached = True
                             break
-                        if since_checkpoint >= checkpoint_every:
+                        if since_checkpoint >= checkpoint_every or (
+                            not ordered
+                            and time.monotonic() - last_checkpoint >= flush_interval
+                        ):
                             commit_state(output_handle, error_handle, False)
 
                     refresh_progress()
@@ -809,6 +900,9 @@ class ParallelLLMJob(Generic[ItemT, OutputT], ABC):
                 reporter.join()
             executor.close(cancel=target_reached or not run_finished)
             if progress_bar is not None:
+                inflight = 0
+                completed.clear()
+                refresh_progress(force=True)
                 progress_bar.close()
 
         summary = self._summary(

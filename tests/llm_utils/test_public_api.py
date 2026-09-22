@@ -7,6 +7,7 @@ from unittest.mock import patch
 import llm_utils
 from llm_utils.chat_format import display
 from llm_utils.chat_format.display import display_chat_messages_as_html, show_chat
+from llm_utils.lm.llm_ds41 import DS41LLM
 from llm_utils.lm.llm_qwen3 import Qwen3LLM
 from llm_utils.lm.llm_qwen38 import Qwen38LLM
 from llm_utils.lm.llm_signature import LLMSignature
@@ -24,6 +25,7 @@ class TestPublicApi(unittest.TestCase):
         self.assertIs(llm_utils.turn, utils_turn)
         self.assertIs(llm_utils.msgs_turns, utils_msgs_turns)
         self.assertIs(llm_utils.LLM, llm_utils.lm.LLM)
+        self.assertIs(llm_utils.DS41LLM, llm_utils.lm.DS41LLM)
         self.assertIs(llm_utils.Qwen3LLM, llm_utils.lm.Qwen3LLM)
         self.assertIs(llm_utils.Qwen38LLM, llm_utils.lm.Qwen38LLM)
         self.assertIs(llm_utils.MOpenAI, llm_utils.lm.MOpenAI)
@@ -160,6 +162,24 @@ class TestPublicApi(unittest.TestCase):
         )
         self.assertIn("reasoning_effort", params)
         self.assertIn("model_kwargs", params)
+        self.assertEqual(params["model_kwargs"].kind, inspect.Parameter.VAR_KEYWORD)
+
+    def test_ds41_constructor_surfaces_reasoning_controls(self):
+        params = inspect.signature(DS41LLM.__init__).parameters
+
+        self.assertEqual(
+            list(params.keys())[:7],
+            [
+                "self",
+                "client",
+                "cache",
+                "verbose",
+                "timeout",
+                "enable_thinking",
+                "model",
+            ],
+        )
+        self.assertIn("reasoning_effort", params)
         self.assertEqual(params["model_kwargs"].kind, inspect.Parameter.VAR_KEYWORD)
 
     def test_mopenai_factories_surface_explicit_keyword_signatures(self):
