@@ -4,6 +4,7 @@ from .chat_format import show_chat
 from .lm import (
     DS41LLM,
     LLM,
+    AudioLLM,
     Input,
     InputField,
     LLMSignature,
@@ -19,6 +20,7 @@ from .utils import get_one_turn_conv, get_tok, msgs_turns, turn
 
 
 __all__ = [
+    "AudioLLM",
     "DS41LLM",
     "LLM",
     "Qwen3LLM",

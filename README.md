@@ -338,6 +338,66 @@ message = llm.chat_completion(
 )
 ```
 
+### Native audio with `AudioLLM`
+
+`AudioLLM` subclasses `LLM` and sends native audio to an audio-capable chat
+endpoint. Message lists preserve system prompts and conversation history:
+
+```python
+from pathlib import Path
+from llm_utils import AudioLLM
+
+teacher = AudioLLM(client="http://localhost:8000/v1", model="your-audio-model")
+message = teacher([
+    {"role": "system", "content": "Listen carefully to the conversation."},
+    {"role": "user", "content": [
+        {"type": "input_audio", "input_audio": {"path": "/absolute/input.wav"}},
+        {"type": "text", "text": "What do you hear?"},
+    ]},
+])
+print(message.content)
+
+# Convenience inputs: a client-local path, encoded file bytes, or a waveform.
+message = teacher("What do you hear?", audio=Path("/absolute/input.wav"))
+message = teacher("What do you hear?", audio=wav_bytes, audio_format="wav")
+message = teacher("What do you hear?", audio=waveform, sample_rate=16000)
+```
+
+Paths are read on the client and expand `~` and environment variables. The
+server receives encoded audio, never the local path. Encoded bytes may also be
+supplied in `input_audio.data` with `format`; WAV bytes are detected automatically.
+Other byte formats require `audio_format` (or message `format`). Raw PCM bytes
+are unsupported. Waveforms must be nonempty NumPy float arrays in [-1, 1] or
+int16 arrays shaped `(frames,)` or `(frames, channels)`; they are encoded as
+16-bit WAV without resampling. File formats accepted locally are WAV, MP3,
+FLAC, OGG, M4A, and AAC; endpoint support may be narrower. Existing encoded or
+URL payloads pass through, and caller messages are never mutated.
+
+For DashScope, supply its explicit client credentials:
+
+```python
+import os
+from openai import OpenAI
+
+teacher = AudioLLM(
+    client=OpenAI(base_url=os.environ["DASHSCOPE_BASE_URL"],
+                  api_key=os.environ["DASHSCOPE_API_KEY"]),
+    model="qwen3.8-omni-flash", temperature=0.5, cache=False,
+)
+message = teacher("What do you hear?", audio="input.wav")
+print(message.content, teacher.last_usage)
+```
+
+DashScope hostnames are detected automatically; private gateways can set
+`audio_provider="dashscope"`. DashScope uses audio Data URIs and streaming
+internally, returning the same `ChatCompletionMessage` as a regular `LLM` call.
+`return_dict=True` retains the aggregated completion and usage. Its streaming
+transport disables caching and does not support `response_model`; request JSON
+text and validate it locally. Explicit `stream=True` returns normal SDK chunks.
+Other endpoints inherit `LLM` caching and structured parsing where supported.
+`generate()` remains the inherited text-only legacy completions API; audio is
+supported through chat calls, never by a transcription proxy.
+
 ### Structured output with Pydantic
 
 ```python

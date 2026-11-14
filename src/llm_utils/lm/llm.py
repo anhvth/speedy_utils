@@ -1003,6 +1003,10 @@ class LLM:
             return choice, self._client_index_by_id[id(client)]
         return choice
 
+    def _create_chat_completion(self, client, **kwargs):
+        """Execute a provider chat request; subclasses may adapt transport."""
+        return client.chat.completions.create(**kwargs)
+
     @clean_traceback
     def _chat_completion_result(
         self,
@@ -1028,8 +1032,8 @@ class LLM:
             )
             self._set_cache(cache, client=client)
             completion = LLM._call_with_retry(
-                lambda: client.chat.completions.create(
-                    model=model_name, messages=messages, **api_kwargs
+                lambda: self._create_chat_completion(
+                    client, model=model_name, messages=messages, **api_kwargs
                 ),
                 model_name=model_name,
             )
