@@ -123,8 +123,8 @@ def test_identify_and_memoize_work_without_pandas(monkeypatch):
 
     calls = []
 
-    # cache_type='mem': a disk entry from an earlier run would hide the call
-    @memoize(cache_type='mem')
+    # cache_type='memory': a disk entry from an earlier run would hide the call
+    @memoize(cache_type='memory')
     def double(x):
         calls.append(x)
         return x * 2
