@@ -4,12 +4,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Literal
 
-from httpx import Timeout
-
 from .llm import LLM
 
 
 if TYPE_CHECKING:
+    from httpx import Timeout
     from openai import OpenAI
     from openai.types.chat import ChatCompletionMessage
     from pydantic import BaseModel

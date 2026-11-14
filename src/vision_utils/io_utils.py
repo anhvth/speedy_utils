@@ -1,13 +1,9 @@
 from __future__ import annotations
 
 import os
-import time
-from contextlib import suppress
 from multiprocessing import cpu_count
 from pathlib import Path
 from typing import TYPE_CHECKING, Sequence, Tuple
-
-from PIL import Image
 
 from speedy_utils import identify
 
@@ -17,24 +13,9 @@ if TYPE_CHECKING:
     from nvidia.dali import fn, pipeline_def
     from nvidia.dali import types as dali_types
     from tqdm import tqdm
-    try:
-        from torch.utils.data import Dataset
-    except ImportError:
-        Dataset: object = object  # type: ignore[misc,assignment]
-    else:
-        Dataset: object = object  # type: ignore[misc,assignment]
 
 
 PathLike = str | os.PathLike
-
-
-def _get_Dataset():
-    """Lazy import torch.utils.data.Dataset."""
-    try:
-        from torch.utils.data import Dataset
-        return Dataset
-    except ImportError:
-        return object
 
 
 def _to_str_paths(paths: Sequence[PathLike]) -> list[str]:
@@ -292,11 +273,6 @@ class ImageMmap:  # Removed Dataset base class to avoid torch import at module l
     - Next runs: only read from mmap (no filesystem image reads).
     """
 
-    @property
-    def _torch_dataset_base(self):
-        """Lazy torch.utils.data.Dataset for type checking."""
-        return _get_Dataset()
-
     def __init__(
         self,
         img_paths: Sequence[str | os.PathLike],
@@ -331,35 +307,8 @@ class ImageMmap:  # Removed Dataset base class to avoid torch import at module l
         if self.n == 0:
             raise ValueError("Cannot create ImageMmap with empty img_paths list")
 
-        # Calculate hash of image paths
-        needs_rebuild = False
-
-        if not self.mmap_path.exists():
-            needs_rebuild = True
-            print("Mmap file does not exist, building cache...")
-        elif not self.hash_path.exists():
-            needs_rebuild = True
-            print("Hash file does not exist, rebuilding cache...")
-        else:
-            # Check if hash matches
-            stored_hash = self.hash_path.read_text().strip()
-            if stored_hash != current_hash:
-                needs_rebuild = True
-                print(
-                    f"Hash mismatch (stored: {stored_hash[:16]}..., current: {current_hash[:16]}...), rebuilding cache..."
-                )
-
-        # Verify file size matches expected
-        expected_bytes = np.prod(self.shape) * self.dtype.itemsize
-        if self.mmap_path.exists():
-            actual_size = self.mmap_path.stat().st_size
-            if actual_size != expected_bytes:
-                needs_rebuild = True
-                print(
-                    f"Mmap file size mismatch (expected: {expected_bytes}, got: {actual_size}), rebuilding cache..."
-                )
-
-        if needs_rebuild:
+        if not self._cache_is_valid(current_hash):
+            print("Mmap cache missing or stale, building...")
             self._build_cache_with_lock(current_hash)
 
         # runtime: always open read-only; assume cache is complete
@@ -373,32 +322,45 @@ class ImageMmap:  # Removed Dataset base class to avoid torch import at module l
     # --------------------------------------------------------------------- #
     # Build phase (only on first run)
     # --------------------------------------------------------------------- #
+    def _cache_is_valid(self, current_hash: str) -> bool:
+        import numpy as np
+
+        try:
+            if self.hash_path.read_text().strip() != current_hash:
+                return False
+            expected_bytes = np.prod(self.shape) * self.dtype.itemsize
+            return self.mmap_path.stat().st_size == expected_bytes
+        except OSError:
+            return False
+
     def _build_cache_with_lock(
         self, current_hash: str, num_workers: int | None = None
     ) -> None:
-        """Build cache with lock file to prevent concurrent disk writes"""
+        """Build the cache under an exclusive lock.
+
+        The lock file is never removed: a third process would otherwise lock a
+        fresh inode while another one still writes the shared cache file.
+        """
         import fcntl
 
         self.mmap_path.parent.mkdir(parents=True, exist_ok=True)
 
-        try:
-            with open(self.lock_path, "w") as lock_fd:
-                try:
-                    fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except BlockingIOError:
-                    # Another process is building, wait for it
-                    print("Another process is building the cache, waiting...")
-                    fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
-                    print("Cache built by another process!")
-
-                # We got the lock, build the cache
-                self._build_cache(current_hash, num_workers)
-        finally:
-            if self.lock_path.exists():
-                with suppress(Exception):
-                    self.lock_path.unlink()
+        with open(self.lock_path, "a") as lock_fd:
+            try:
+                fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                print("Another process is building the cache, waiting...")
+                fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
+            # Whoever held the lock may have finished the build we waited for.
+            if self._cache_is_valid(current_hash):
+                return
+            # shortcut: a rebuild truncates the shared .dat in place, so a
+            # process still mapping an older cache would fault. Upgrade by
+            # writing a new cache file per hash version instead.
+            self._build_cache(current_hash, num_workers)
 
     def _build_cache(self, current_hash: str, num_workers: int | None = None) -> None:
+        import numpy as np
         from tqdm import tqdm
 
         # Pre-allocate the file with the required size
@@ -471,11 +433,6 @@ class ImageMmap:  # Removed Dataset base class to avoid torch import at module l
         self.hash_path.write_text(current_hash)
         print(f"Mmap cache built successfully! Hash saved to {self.hash_path}")
 
-    def _load_and_resize(self, path: str) -> np.ndarray:
-        img = Image.open(path).convert("RGB")
-        img = img.resize((self.W, self.H), Image.BILINEAR)
-        return np.asarray(img, dtype=self.dtype)
-
     # --------------------------------------------------------------------- #
     # Dataset API
     # --------------------------------------------------------------------- #
@@ -483,10 +440,14 @@ class ImageMmap:  # Removed Dataset base class to avoid torch import at module l
         return self.n
 
     def __getitem__(self, idx: int) -> np.ndarray:
+        import numpy as np
+
         # At runtime: this is just a mmap read
         return np.array(self.data[idx])  # copy to normal ndarray
 
     def imread(self, image_path: str | os.PathLike) -> np.ndarray:
+        import numpy as np
+
         idx = self.imgpath2idx.get(str(image_path))
         if idx is None:
             raise ValueError(f"Image path {image_path} not found in dataset")
@@ -506,11 +467,6 @@ class ImageMmapDynamic:  # Removed Dataset base class to avoid torch import at m
         img_path -> [offset, H, W, C]
     - Next runs: only open mmap + meta and do constant-time slice + reshape.
     """
-
-    @property
-    def _torch_dataset_base(self):
-        """Lazy torch.utils.data.Dataset for type checking."""
-        return _get_Dataset()
 
     def __init__(
         self,
@@ -541,48 +497,8 @@ class ImageMmapDynamic:  # Removed Dataset base class to avoid torch import at m
 
         # Hash of the path list to detect changes
         current_hash = identify(self.img_paths)
-        needs_rebuild = False
-
-        if not self.mmap_path.exists() or not self.meta_path.exists():
-            needs_rebuild = True
-            print("Dynamic mmap or meta file does not exist, building cache...")
-        elif not self.hash_path.exists():
-            needs_rebuild = True
-            print("Hash file does not exist for dynamic mmap, rebuilding cache...")
-        else:
-            stored_hash = self.hash_path.read_text().strip()
-            if stored_hash != current_hash:
-                needs_rebuild = True
-                print(
-                    f"Dynamic mmap hash mismatch "
-                    f"(stored: {stored_hash[:16]}..., current: {current_hash[:16]}...), "
-                    "rebuilding cache..."
-                )
-            else:
-                # Check size vs meta
-                import json
-
-                try:
-                    with open(self.meta_path, "r") as f:
-                        meta = json.load(f)
-                    meta_dtype = np.dtype(meta.get("dtype", "uint8"))
-                    total_elems = int(meta["total_elems"])
-                    expected_bytes = total_elems * meta_dtype.itemsize
-                    actual_bytes = self.mmap_path.stat().st_size
-                    if actual_bytes != expected_bytes:
-                        needs_rebuild = True
-                        print(
-                            "Dynamic mmap file size mismatch "
-                            f"(expected: {expected_bytes}, got: {actual_bytes}), "
-                            "rebuilding cache..."
-                        )
-                except Exception as e:
-                    needs_rebuild = True
-                    print(
-                        f"Failed to read dynamic mmap meta ({e}), rebuilding cache..."
-                    )
-
-        if needs_rebuild:
+        if not self._cache_is_valid(current_hash):
+            print("Dynamic mmap cache missing or stale, building...")
             self._build_cache_with_lock(current_hash)
 
         # After build (or if cache was already OK), load meta + mmap
@@ -597,28 +513,40 @@ class ImageMmapDynamic:  # Removed Dataset base class to avoid torch import at m
     # ------------------------------------------------------------------ #
     # Build phase with lock (same pattern as ImageMmap)
     # ------------------------------------------------------------------ #
+    def _cache_is_valid(self, current_hash: str) -> bool:
+        import json
+
+        import numpy as np
+
+        if not self.mmap_path.exists() or not self.meta_path.exists():
+            return False
+        try:
+            if self.hash_path.read_text().strip() != current_hash:
+                return False
+            with open(self.meta_path, "r") as f:
+                meta = json.load(f)
+            meta_dtype = np.dtype(meta.get("dtype", "uint8"))
+            expected_bytes = int(meta["total_elems"]) * meta_dtype.itemsize
+            return self.mmap_path.stat().st_size == expected_bytes
+        except (OSError, KeyError, ValueError):
+            return False
+
     def _build_cache_with_lock(self, current_hash: str) -> None:
         """Build dynamic mmap with a lock file to prevent concurrent writes."""
         self.mmap_path.parent.mkdir(parents=True, exist_ok=True)
 
         import fcntl  # POSIX only, same as ImageMmap
 
-        try:
-            with open(self.lock_path, "w") as lock_fd:
-                try:
-                    fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except BlockingIOError:
-                    # Another process is building -> wait
-                    print("Another process is building the dynamic mmap cache, waiting...")
-                    fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
-                    print("Dynamic mmap cache built by another process!")
-
-                # We got the lock -> build cache
-                self._build_cache(current_hash)
-        finally:
-            if self.lock_path.exists():
-                with suppress(Exception):
-                    self.lock_path.unlink()
+        with open(self.lock_path, "a") as lock_fd:
+            try:
+                fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                print("Another process is building the dynamic mmap, waiting...")
+                fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
+            # Whoever held the lock may have finished the build we waited for.
+            if self._cache_is_valid(current_hash):
+                return
+            self._build_cache(current_hash)
 
     def _build_cache(self, current_hash: str, batch_size: int = 4096) -> None:
         """
@@ -630,6 +558,7 @@ class ImageMmapDynamic:  # Removed Dataset base class to avoid torch import at m
         """
         import json
 
+        import numpy as np
         from tqdm import tqdm
 
         print(f"Building dynamic mmap cache for {self.n} images...")
@@ -719,6 +648,8 @@ class ImageMmapDynamic:  # Removed Dataset base class to avoid torch import at m
     def _load_metadata(self) -> None:
         import json
 
+        import numpy as np
+
         with open(self.meta_path, "r") as f:
             meta = json.load(f)
 
@@ -750,6 +681,8 @@ class ImageMmapDynamic:  # Removed Dataset base class to avoid torch import at m
         return flat, h, w, c
 
     def __getitem__(self, idx: int) -> np.ndarray:
+        import numpy as np
+
         flat, h, w, c = self._get_flat_slice(idx)
         img = np.array(flat).reshape(h, w, c)  # copy to normal ndarray
         return img

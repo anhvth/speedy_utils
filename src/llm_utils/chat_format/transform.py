@@ -16,9 +16,10 @@ def identify_format(item):
 def _transform_sharegpt_to_chatml(
     item, default_system_message="You are a helpful assistant.", print_msg=False
 ):
-    assert isinstance(
-        item, dict
-    ), "The item is not in the correct format. Please check the format of the item."
+    if not isinstance(item, dict):
+        raise ValueError(
+            "The item is not in the correct format. Please check the format of the item."
+        )
 
     messages = []
     system_msg = item.get("system", "")
@@ -29,7 +30,8 @@ def _transform_sharegpt_to_chatml(
     conversations = item.get("conversations", [])
     if hasattr(conversations, "tolist"):
         conversations = conversations.tolist()
-    assert conversations, "The item does not have any conversations."
+    if not conversations:
+        raise ValueError("The item does not have any conversations.")
     for conversation in item.get("conversations", []):
         role = conversation["from"]
         content = conversation["value"]

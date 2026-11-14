@@ -8,11 +8,7 @@ license = { text = "MIT" }
 requires-python = ">=3.9"
 dependencies = [
     "numpy",
-    "xxhash",
     "loguru",
-    "fastcore",
-    "matplotlib",
-    "pandas",
     "tabulate",
     "pydantic",
     "tqdm",
@@ -20,13 +16,8 @@ dependencies = [
     "dill",
     "openai",
     "rich>=14.3.1",
-    "chainlit>=2.0",
-    "datasets",
     "psutil",
     "json-repair>=0.44.1",
-    "jupyterlab>=4.5.9",
-    "jupyter>=1.1.1",
-    "notebook>=7.5.7",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -43,7 +34,11 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
+plot = ["matplotlib"]
+pandas = ["pandas"]
+datasets = ["datasets"]
 transformers = ["transformers>=4.57.3"]
+chat = ["chainlit>=2.0"]
 
 [project.urls]
 Homepage = "https://github.com/anhvth/speedy"
@@ -151,4 +146,8 @@ dev = [
     "pytest",
     "freezegun",
     "ruff",
+    # test suite exercises the optional extras (ImageMmap needs pandas)
+    "matplotlib",
+    "pandas",
+    "datasets",
 ]

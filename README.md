@@ -28,6 +28,21 @@ pip install speedy-utils
 uv pip install speedy-utils
 ```
 
+The core install covers caching, file I/O, parallel helpers, LLM wrappers, and
+the CLIs. Optional features pull their own dependencies, and only the ones you
+ask for:
+
+| Extra | Install | Needed for |
+|-------|---------|------------|
+| `plot` | `pip install 'speedy-utils[plot]'` | `plot_images_notebook` (matplotlib) |
+| `pandas` | `pip install 'speedy-utils[pandas]'` | CSV loading via `load_by_ext`, DataFrame inputs to `multi_thread` |
+| `datasets` | `pip install 'speedy-utils[datasets]'` | HuggingFace dataset directories in `viz_chat`, `pcat`, and dataset sharding |
+| `transformers` | `pip install 'speedy-utils[transformers]'` | `Qwen3LLM` tokenizer rendering, `viz_chat`, tokenized/SDD `pcat` views |
+| `chat` | `pip install 'speedy-utils[chat]'` | `sp_chat` (Chainlit UI) |
+
+The authoritative dependency list lives in [`pyproject.toml`](pyproject.toml)
+under `[project.optional-dependencies]`.
+
 Install from source:
 
 ```bash
@@ -41,7 +56,7 @@ Local development:
 ```bash
 git clone https://github.com/anhvth/speedy_utils
 cd speedy_utils
-uv sync
+uv sync --all-extras  # optional extras are needed by parts of the test suite
 ```
 
 Install the repo's AI skill definitions locally:
@@ -214,6 +229,9 @@ data = load_by_ext("data.csv")
 data = load_by_ext(["part1.jsonl", "part2.jsonl"])
 ```
 
+CSV loading uses pandas, so it needs the `pandas` extra; JSON, JSONL, and
+pickle paths are core.
+
 For streaming or compressed JSONL, use `fast_load_jsonl` directly:
 
 ```python
@@ -283,6 +301,8 @@ kill-mpython
 
 sp_chat client=8000
 sp_chat client=http://10.0.0.3:8000/v1 port=5010 model=Qwen/Qwen2.5-7B-Instruct
+# sp_chat needs the chat extra:
+pip install 'speedy-utils[chat]'
 
 spu-prefetch-large-model /path/to/model -j 8
 
@@ -598,12 +618,16 @@ Supported inputs:
 - Folders of JSON files
 - tokenized datasets when `--tokenizer` is provided
 
+`viz_chat` renders chat templates with a HuggingFace tokenizer, so it needs the
+`transformers` extra; HuggingFace dataset directories also need the `datasets`
+extra. See [Installation](#installation).
+
 Examples:
 
 ```bash
 viz_chat data/my_dataset
 viz_chat data/conversations.jsonl
-viz_chat data/sharegpt.jsonl --format sharegpt
+viz_chat data/sharegpt.jsonl --count 5
 viz_chat data/tokenized_dataset/ --tokenizer Qwen/Qwen3-8B
 viz_chat data/with_tools.jsonl --show-tools
 ```
@@ -614,6 +638,8 @@ Install once:
 
 ```bash
 uv tool install git+https://github.com/anhvth/speedy_utils
+# add HuggingFace dataset / tokenized-row support:
+uv tool install 'speedy-utils[datasets,transformers]'
 ```
 
 Then use the installed executable:
@@ -662,7 +688,8 @@ first_image = images[paths[0]]
 ### Notebook plotting
 
 `plot_images_notebook()` accepts NumPy arrays, PyTorch tensors, lists, or tuples
-of image arrays. If you loaded images with `read_images*`, pass the values.
+of image arrays. If you loaded images with `read_images*`, pass the values. It
+needs the `plot` extra (matplotlib).
 
 ```python
 from vision_utils import plot_images_notebook, read_images

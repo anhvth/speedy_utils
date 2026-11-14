@@ -111,62 +111,6 @@ class _MultiprocessRuntime:
     progress: MpProgressState = field(default_factory=MpProgressState)
 
 
-def build_backend_context(
-    *,
-    f_wrapped: Callable[[Any], Any],
-    items: list[Any],
-    total: int,
-    desc: str,
-    progress: bool,
-    func_kwargs: dict[str, Any],
-    log_worker: Literal["zero", "first", "all"],
-    log_gate_path: Path | None,
-    error_handler: ErrorHandlerType,
-    error_stats: ErrorStats,
-    func_name: str,
-    tqdm_cls: type["tqdm"],
-) -> BackendRunContext:
-    return BackendRunContext(
-        f_wrapped=f_wrapped,
-        items=items,
-        total=total,
-        desc=desc,
-        progress=progress,
-        func_kwargs=func_kwargs,
-        log_worker=log_worker,
-        log_gate_path=log_gate_path,
-        error_handler=error_handler,
-        error_stats=error_stats,
-        func_name=func_name,
-        tqdm_cls=tqdm_cls,
-    )
-
-
-def build_multiprocess_context(
-    *,
-    backend: BackendRunContext,
-    start_method: Literal["spawn", "fork"] = "spawn",
-    func: Callable[[Any], Any],
-    cache_dir: Path | None,
-    dump_in_thread: bool,
-    num_procs: int,
-    num_threads: int,
-    max_error_files: int,
-    caller_info: dict[str, Any] | None,
-) -> MultiprocessBackendContext:
-    return MultiprocessBackendContext(
-        backend=backend,
-        start_method=start_method,
-        func=func,
-        cache_dir=cache_dir,
-        dump_in_thread=dump_in_thread,
-        num_procs=num_procs,
-        num_threads=num_threads,
-        max_error_files=max_error_files,
-        caller_info=caller_info,
-    )
-
-
 def _caller_info_from_stack(depth: int = 2) -> dict[str, Any] | None:
     frame = inspect.currentframe()
     try:

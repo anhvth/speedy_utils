@@ -344,6 +344,35 @@ class TestMainTokenized:
         assert "Total items: 2" in output
 
 
+class TestMainCount:
+    """Tests for the --count flag driving the sample loop."""
+
+    def test_main_count_stops_after_n_items(self, monkeypatch):
+        """--count N must show N items and exit instead of looping forever."""
+        rows = [
+            (None, i, {"messages": [{"role": "user", "content": f"m{i}"}]})
+            for i in range(10)
+        ]
+        shown: list[int] = []
+
+        class FakeTokenizer:
+            def apply_chat_template(
+                self, messages, tokenize=False, add_generation_prompt=False
+            ):
+                return "ok"
+
+        def keep_going(*args, **kwargs):
+            shown.append(kwargs["item_number"])
+            return True, None
+
+        monkeypatch.setattr(viz_chat, "load_data", lambda path: rows)
+        monkeypatch.setattr(viz_chat, "_get_tokenizer", lambda name: FakeTokenizer())
+        monkeypatch.setattr(viz_chat, "_wait_for_next_sample", keep_going)
+
+        assert viz_chat.main(["dummy_source", "--count", "3"]) == 0
+        assert len(shown) == 3
+
+
 class TestMainChatTemplate:
     """Tests for chat-template visualization behavior."""
 

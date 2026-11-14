@@ -14,7 +14,6 @@ from contextlib import contextmanager
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, cast
 
-from httpx import Timeout
 from loguru import logger
 from pydantic import BaseModel
 
@@ -24,6 +23,7 @@ from .utils import get_base_client
 
 # Lazy import openai types for type checking only
 if TYPE_CHECKING:
+    from httpx import Timeout
     from openai import (
         APITimeoutError,
         AuthenticationError,
@@ -108,13 +108,7 @@ def _get_or_create_client_bootstrap(
 _DEFAULT_WAIT_POLL_INTERVAL = 1.0
 
 
-# Optional bootstrap wait helper. Older builds / partial source trees may
-# not define this; default to None so the call sites below can fall back to
-# calling bootstrap_fn() directly.
-_wait_for_endpoint_bootstrap = None  # type: ignore[assignment]
-
-
-def _wait_for_endpoint_bootstrap(  # type: ignore[no-redef]
+def _wait_for_endpoint_bootstrap(
     llm: "LLM",
     cache_key: tuple[Any, ...],
     bootstrap_fn: Callable[[], tuple[list[int], Any | None]],
@@ -299,7 +293,7 @@ class LLM:
         client: "OpenAI | int | str | list | None" = None,  # type: ignore[name-defined]
         cache=True,
         verbose=False,
-        timeout: float | Timeout | None = None,
+        timeout: "float | Timeout | None" = None,
         enable_thinking: bool | None = None,
         *,
         model: str | None = None,
@@ -375,16 +369,12 @@ class LLM:
         # Handle list of clients for load balancing
         if isinstance(raw_clients, list):
             self._clients = raw_clients
-            # If the bootstrap wait helper is unavailable, call directly.
-            if _wait_for_endpoint_bootstrap is None:
-                alive_indices, primary_models_response = self._check_clients_health()
-            else:
-                alive_indices, primary_models_response = _wait_for_endpoint_bootstrap(
-                    self,
-                    bootstrap_cache_key,
-                    self._check_clients_health,
-                    wait_for_endpoint=wait_for_endpoint,
-                )
+            alive_indices, primary_models_response = _wait_for_endpoint_bootstrap(
+                self,
+                bootstrap_cache_key,
+                self._check_clients_health,
+                wait_for_endpoint=wait_for_endpoint,
+            )
             self._alive_clients = [
                 raw_clients[idx] for idx in alive_indices if 0 <= idx < len(raw_clients)
             ]
@@ -418,15 +408,12 @@ class LLM:
                         )
                     raise e
 
-            if _wait_for_endpoint_bootstrap is None:
-                _, primary_models_response = _bootstrap_single_client()
-            else:
-                _, primary_models_response = _wait_for_endpoint_bootstrap(
-                    self,
-                    bootstrap_cache_key,
-                    _bootstrap_single_client,
-                    wait_for_endpoint=wait_for_endpoint,
-                )
+            _, primary_models_response = _wait_for_endpoint_bootstrap(
+                self,
+                bootstrap_cache_key,
+                _bootstrap_single_client,
+                wait_for_endpoint=wait_for_endpoint,
+            )
             if primary_models_response is not None:
                 self._alive_clients = [raw_clients]
 
@@ -981,6 +968,7 @@ class LLM:
                 enable_thinking=enable_thinking,
                 drop_keys=drop_keys,
             )
+            # _build_api_kwargs re-adds dropped switches through extra_body.
             for key in drop_keys:
                 api_kwargs.pop(key, None)
             self._set_cache(cache, client=client)
@@ -1255,14 +1243,19 @@ class LLM:
                 enable_thinking=enable_thinking,
                 drop_keys=("stream",),
             )
-            # Disable caching on the selected client to prevent pickle errors.
+            # Disable caching on the selected client to prevent pickle errors,
+            # then restore it so later non-streaming calls stay cached.
+            previous_cache = self.cache if cache is None else cache
             self._set_cache(False, client=client)
-            return client.chat.completions.create(
-                model=model_name,
-                messages=messages,
-                stream=True,
-                **api_kwargs,
-            )
+            try:
+                return client.chat.completions.create(
+                    model=model_name,
+                    messages=messages,
+                    stream=True,
+                    **api_kwargs,
+                )
+            finally:
+                self._set_cache(previous_cache, client=client)
 
     def __call__(
         self,

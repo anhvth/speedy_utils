@@ -8,11 +8,9 @@ import pytest
 import speedy_utils.multi_worker.thread as thread_mod
 from speedy_utils.multi_worker.thread import (
     SPEEDY_RUNNING_THREADS,
-    _chunk_items_for_processes,
     _prune_dead_threads,
     kill_all_thread,
     multi_thread,
-    multi_thread_standard,
 )
 
 
@@ -66,26 +64,6 @@ def test_workers_default_safe_limit(monkeypatch):
     monkeypatch.delenv('SPEEDY_UTILS_MAX_WORKERS', raising=False)
     monkeypatch.setattr(thread_mod.os, 'cpu_count', lambda: 256)
     assert thread_mod._safe_worker_limit() == 2048
-
-
-def test_multi_thread_n_proc_chunks_at_most_requested_processes():
-    items = list(range(1000))
-
-    chunks = _chunk_items_for_processes(items, 64)
-
-    assert len(chunks) == 64
-    assert [item for chunk in chunks for item in chunk] == items
-    sizes = [len(chunk) for chunk in chunks]
-    assert max(sizes) - min(sizes) <= 1
-
-
-def test_multi_thread_n_proc_chunks_do_not_exceed_item_count():
-    items = list(range(5))
-
-    chunks = _chunk_items_for_processes(items, 64)
-
-    assert len(chunks) == len(items)
-    assert [item for chunk in chunks for item in chunk] == items
 
 
 def test_multi_thread_n_proc_progress_reports_global_item_count(monkeypatch):
@@ -430,40 +408,19 @@ def test_speedy_vs_normal():
     assert out1 == out2, 'Outputs do not match!'
 
 
-# =====
+def test_timeout_does_not_wait_for_running_work():
+    """A watchdog timeout must return at once, not after the in-flight items."""
 
+    def slow(x):
+        time.sleep(0.5)
+        return x
 
-# ────────────────────────────────────────────────────────────
-# 12. Test multi_thread vs standard threading, use a heavry compute function like fibonacci
-def fibonacci(n, x):
-    if n <= 1:
-        return n + x
-    return fibonacci(n - 1, x) + fibonacci(n - 2, x)
+    # the first call imports pandas; keep that one-time cost out of the timing
+    multi_thread(slow, range(1), workers=1, progress=False)
 
+    start = time.monotonic()
+    with pytest.raises(TimeoutError):
+        multi_thread(slow, range(8), workers=2, timeout=0.05, progress=False)
+    elapsed = time.monotonic() - start
 
-def test_multi_thread_vs_standard():
-    def f(x):
-        return fibonacci(x, 0)
-
-    # Create a shorter input list to avoid timeout (fibonacci is exponential time)
-    inp = list(range(10, 28))  # Fibonacci numbers from 10 to 27 (faster)
-
-    # Use multi_thread
-    start_mt = time.time()
-    out_mt = multi_thread(
-        f,
-        inp,
-        workers=4,
-        progress=False,
-    )
-    mt_time = time.time() - start_mt
-
-    # Use standard ThreadPoolExecutor
-    start_std = time.time()
-    out_std = multi_thread_standard(f, inp, workers=4)
-    std_time = time.time() - start_std
-
-    print(
-        f'multi_thread: {mt_time:.4f}s, standard: {std_time:.4f}s, outputs equal: {out_mt == out_std}'
-    )
-    assert out_mt == out_std, 'multi_thread and standard outputs differ'
+    assert elapsed < 0.3, f'timeout waited {elapsed:.2f}s for running items'

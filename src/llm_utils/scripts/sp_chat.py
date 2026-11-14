@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import base64
-import html
 import mimetypes
 import os
 import subprocess
@@ -92,88 +91,6 @@ class ChatConfig:
             and self.api_key == other.api_key
             and self.thinking == other.thinking
         )
-
-
-def _build_history_title(messages: list[dict[str, str]], index: int) -> str:
-    for message in messages:
-        if message.get("role") != "user":
-            continue
-        content = message.get("content", "").strip()
-        if not content:
-            continue
-        compact = " ".join(content.split())
-        if len(compact) > 30:
-            compact = f"{compact[:27]}..."
-        return f"Chat {index}: {compact}"
-    return f"Chat {index}"
-
-
-def _archive_current_chat(session_state: Any) -> None:
-    messages = list(session_state.get("messages", []))
-    if not messages:
-        return
-
-    history_index = int(session_state.get("history_counter", 1))
-    copied_messages = [dict(msg) for msg in messages]
-    history_entry = {
-        "id": history_index,
-        "title": _build_history_title(copied_messages, history_index),
-        "messages": copied_messages,
-        "turn_count": len(copied_messages),
-    }
-
-    history = session_state.setdefault("chat_history", [])
-    history.append(history_entry)
-    session_state["dimmed_messages"] = [dict(msg) for msg in copied_messages]
-    session_state["history_counter"] = history_index + 1
-
-
-def _reset_chat_state(session_state: Any, config: ChatConfig) -> None:
-    session_state["messages"] = []
-    session_state["temperature"] = DEFAULT_TEMPERATURE
-    session_state["max_tokens"] = DEFAULT_MAX_TOKENS
-    session_state["system_prompt"] = DEFAULT_SYSTEM_PROMPT
-    session_state["enable_thinking"] = bool(config.thinking)
-
-    # Keep these mirrored keys for backward compatibility with previous UI state shape.
-    session_state["temp_slider"] = DEFAULT_TEMPERATURE
-    session_state["max_tokens_input"] = DEFAULT_MAX_TOKENS
-    session_state["system_prompt_input"] = DEFAULT_SYSTEM_PROMPT
-    session_state["enable_thinking_toggle"] = bool(config.thinking)
-
-
-def _render_streaming_blocks(
-    placeholder: Any,
-    *,
-    thinking_text: str,
-    answer_text: str,
-) -> None:
-    parts: list[str] = []
-    cursor = (
-        '<span style="display:inline-block;width:4px;height:1em;'
-        'background:#ECECEC;animation:blink 1s step-end infinite;"></span>'
-    )
-
-    if thinking_text.strip():
-        parts.append(
-            '<details class="sp-thinking-stream" '
-            'style="color:#A3A3A3;font-size:0.9em;margin-bottom:1rem;'
-            'padding:0.5rem;border-left:2px solid #444;">'
-            '<summary style="cursor:pointer;margin-bottom:0.5rem;">'
-            "Thought Process</summary>"
-            f'<div style="white-space:pre-wrap;">{html.escape(thinking_text)}'
-            f"{cursor if not answer_text else ''}</div></details>"
-        )
-
-    if answer_text.strip():
-        parts.append(
-            f'<div style="white-space:pre-wrap;line-height:1.6;">'
-            f"{html.escape(answer_text)}{cursor}</div>"
-        )
-    elif not thinking_text.strip():
-        parts.append(f"<div>{cursor}</div>")
-
-    placeholder.markdown("\n".join(parts), unsafe_allow_html=True)
 
 
 def normalize_client_base_url(client: str | int | None) -> str:
@@ -682,7 +599,10 @@ def _launch_chainlit(config: ChatConfig) -> int:
     try:
         import chainlit  # noqa
     except ImportError:
-        print("Install chainlit via: uv pip install chainlit", file=sys.stderr)
+        print(
+            "Install the chat UI via: uv pip install 'speedy-utils[chat]'",
+            file=sys.stderr,
+        )
         return 1
 
     # Pass config via environment variables to the subprocess

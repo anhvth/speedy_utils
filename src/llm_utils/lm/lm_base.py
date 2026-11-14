@@ -13,7 +13,6 @@ from typing import (
     overload,
 )
 
-from httpx import URL
 from loguru import logger
 from pydantic import BaseModel
 
@@ -27,6 +26,7 @@ RawMsgs = Union[Messages, LegacyMsgs]
 
 # Lazy import openai types for type checking only
 if TYPE_CHECKING:
+    from httpx import URL
     from openai import OpenAI
     from openai.pagination import SyncPage
     from openai.types.chat import (

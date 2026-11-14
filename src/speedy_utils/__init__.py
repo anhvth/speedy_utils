@@ -1,5 +1,4 @@
 # Third-party (fast)
-import xxhash
 from loguru import logger
 from tqdm import tqdm
 
@@ -8,7 +7,7 @@ tabulate = __import__("tabulate").tabulate
 
 
 # Clock
-from speedy_utils.common.clock import Clock, speedy_timer, timef
+from speedy_utils.common.clock import Clock, timef
 
 # Error handling utilities
 from speedy_utils.common.exceptions import (
@@ -17,24 +16,19 @@ from speedy_utils.common.exceptions import (
     SpeedyWorkerError,
 )
 
-# Function decorators / logging
-from speedy_utils.common.function_decorator import retry_runtime
+# Logging
 from speedy_utils.common.logger import log, setup_logger
 from speedy_utils.common.mirror_path import MirrowPath
 
 # Notebook helpers
 from speedy_utils.common.notebook_utils import (
-    change_dir,
     display_pretty_table_html,
     print_table,
 )
 
 # Cache utilities
-from speedy_utils.common.utils_cache import identify, identify_uuid, imemoize, memoize
-from speedy_utils.common.utils_error import (
-    clean_traceback,
-    handle_exceptions_with_clean_traceback,
-)
+from speedy_utils.common.utils_cache import identify, imemoize, memoize
+from speedy_utils.common.utils_error import clean_traceback
 
 # IO utilities
 from speedy_utils.common.utils_io import (
@@ -53,7 +47,6 @@ from speedy_utils.common.utils_misc import (
     convert_to_builtin_python,
     dedup,
     flatten_list,
-    get_arg_names,
     is_notebook,
     mkdir_or_exist,
 )
@@ -74,21 +67,16 @@ from speedy_utils.parallel_llm_job import (
 
 __all__ = [
     # Third-party
-    "xxhash",
     "logger",
     "tabulate",
     "tqdm",
     # Clock
     "Clock",
-    "speedy_timer",
     "timef",
-    # Function decorators
-    "retry_runtime",
     # Cache utilities
     "memoize",
     "imemoize",
     "identify",
-    "identify_uuid",
     # IO utilities
     "dump_json_or_pickle",
     "dump_jsonl",
@@ -101,7 +89,6 @@ __all__ = [
     # Misc utilities
     "mkdir_or_exist",
     "flatten_list",
-    "get_arg_names",
     "is_notebook",
     "convert_to_builtin_python",
     "dedup",
@@ -117,7 +104,6 @@ __all__ = [
     "SpeedySerializationError",
     "SpeedyWorkerError",
     "clean_traceback",
-    "handle_exceptions_with_clean_traceback",
     # Multi-worker processing
     "multi_process",
     "multi_process_ray",
@@ -125,7 +111,6 @@ __all__ = [
     "kill_all_thread",
     "multi_process_dataset",
     # Notebook utilities
-    "change_dir",
     "MirrowPath",
     "JobSummary",
     "ParallelLLMJob",

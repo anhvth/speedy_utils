@@ -156,6 +156,20 @@ def test_main_distributes_workers_across_nodes(monkeypatch):
     )
 
 
+def test_main_rejects_ignoring_every_selected_gpu(monkeypatch):
+    monkeypatch.setattr(
+        mpython.sys,
+        "argv",
+        ["mpython", "--gpus", "0", "--ignore_gpus", "0", "demo.py"],
+    )
+    monkeypatch.setattr(mpython, "assert_script", lambda _: None)
+
+    with pytest.raises(SystemExit) as error:
+        mpython.main()
+
+    assert error.value.code == 2
+
+
 def test_main_rejects_missing_python_before_launch(monkeypatch):
     monkeypatch.setattr(
         mpython.sys,

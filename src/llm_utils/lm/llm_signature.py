@@ -1,12 +1,17 @@
 """LLM wrapper that binds a `Signature` to runtime generation."""
 
-from httpx import Timeout
-from typing import Any
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
 from .llm import LLM
 from .signature import Signature
+
+
+if TYPE_CHECKING:
+    from httpx import Timeout
 
 
 __all__ = ["LLMSignature"]
@@ -52,25 +57,9 @@ class LLMSignature(LLM):
             frequency_penalty: Default OpenAI frequency penalty
             **model_kwargs: Additional provider-specific model options
         """
-        legacy_keys = [
-            key
-            for key in (
-                "input_model",
-                "output_model",
-                "response_model",
-                "is_reasoning_model",
-            )
-            if key in model_kwargs
-        ]
-        if legacy_keys:
-            raise TypeError(
-                "LLMSignature no longer accepts legacy constructor arguments: "
-                + ", ".join(legacy_keys)
-            )
         self.signature = signature
         self.input_model = signature.get_input_model()
         self.output_model = signature.get_output_model()
-        self.sft_data: list[dict[str, Any]] = []  # Store SFT training examples
 
         super().__init__(
             client=client,

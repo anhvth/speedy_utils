@@ -10,6 +10,8 @@ import threading
 import traceback
 from typing import Any, Callable, TypeVar
 
+from .exceptions import SpeedyExecutionError
+
 
 F = TypeVar('F', bound=Callable[..., Any])
 
@@ -17,11 +19,10 @@ F = TypeVar('F', bound=Callable[..., Any])
 __all__ = [
     "CleanTracebackError",
     "clean_traceback",
-    "handle_exceptions_with_clean_traceback",
 ]
 
 
-class CleanTracebackError(Exception):
+class CleanTracebackError(SpeedyExecutionError):
     """Exception wrapper that provides clean, user-focused tracebacks."""
 
     def __init__(
@@ -78,7 +79,9 @@ class CleanTracebackError(Exception):
         # Show user code frames with context
         for frame in self.user_traceback:
             if frame.lineno is not None:
-                func_name = f' {self.func_name}' if self.func_name else ''
+                func_name = (
+                    f' {self.func_name}' if self.func_name and self.func_name != frame.name else ''
+                )
                 tb_parts.append(
                     f'[cyan]{frame.filename}[/cyan]:[yellow]{frame.lineno}[/yellow] '
                     f'in [green]{frame.name}{func_name}[/green]'
@@ -103,23 +106,6 @@ class CleanTracebackError(Exception):
             f'{self.original_exception}'
         )
         console.print()
-
-
-def _get_code_context(filename: str, lineno: int, context_lines: int = 3) -> list[str]:
-    """Get code context around a line with line numbers and highlighting."""
-    lines: list[str] = []
-    start = max(1, lineno - context_lines)
-    end = lineno + context_lines
-
-    for i in range(start, end + 1):
-        line = linecache.getline(filename, i)
-        if not line:
-            continue
-        line = line.rstrip()
-        marker = '❱' if i == lineno else ' '
-        lines.append(f'  {i:4d} {marker} {line}')
-
-    return lines
 
 
 def _get_code_context_rich(filename: str, lineno: int, context_lines: int = 3) -> list[str]:
@@ -216,6 +202,13 @@ def clean_traceback(func: F) -> F:
         try:
             return func(*args, **kwargs)
         except Exception as exc:
+            from openai import LengthFinishReasonError
+            from pydantic import ValidationError
+
+            # Invalid/truncated structured responses are recoverable item errors.
+            # Preserve their types for callers; batch jobs record them themselves.
+            if isinstance(exc, (LengthFinishReasonError, ValidationError)):
+                raise
             # Get the current traceback
             exc_tb = sys.exc_info()[2]
 
@@ -261,8 +254,3 @@ def clean_traceback(func: F) -> F:
             raise
 
     return wrapper  # type: ignore
-
-
-def handle_exceptions_with_clean_traceback(func: F) -> F:
-    """Alias for clean_traceback decorator."""
-    return clean_traceback(func)

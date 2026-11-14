@@ -5,7 +5,6 @@ import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
-from httpx import Timeout
 from loguru import logger
 from pydantic import BaseModel
 
@@ -15,6 +14,7 @@ from .llm import LLM, Messages
 
 
 if TYPE_CHECKING:
+    from httpx import Timeout
     from openai.types.chat import ChatCompletionMessage
     from openai.types.completion_choice import CompletionChoice
 
@@ -43,7 +43,6 @@ __all__ = [
     "split_assistant_parts",
     "build_assistant_prefix",
     "is_content_done",
-    "strip_assistant_end",
 ]
 
 
@@ -182,14 +181,6 @@ def build_assistant_prefix(
 def is_content_done(content: str | None, stop_reason: str | None) -> bool:
     """Return True when the model produced content and stopped normally."""
     return content not in ("", None) and stop_reason == "stop"
-
-
-def strip_assistant_end(text: str) -> str:
-    """Remove the assistant end token when the backend appends it (legacy helper)."""
-    stripped_text = text.rstrip()
-    if stripped_text.endswith(ASSISTANT_END):
-        return stripped_text[: -len(ASSISTANT_END)].rstrip()
-    return text
 
 
 def _add_assistant_wrapper(body: str) -> str:
@@ -470,21 +461,6 @@ class Qwen3LLM(LLM):
         if not stop_list or any(not item for item in stop_list):
             raise ValueError("stop must contain non-empty strings")
         return stop_list
-
-    @staticmethod
-    def _append_stop_text(
-        generated_text: str,
-        *,
-        stop_reason: str | None,
-        stop_sequences: list[str],
-        include_stop: bool,
-    ) -> tuple[str, str | None]:
-        matched_stop = None
-        if stop_reason == "stop" and stop_sequences:
-            matched_stop = stop_sequences[0] if len(stop_sequences) == 1 else None
-            if include_stop and matched_stop and matched_stop not in generated_text:
-                generated_text = f"{generated_text}{matched_stop}"
-        return generated_text, matched_stop
 
     @staticmethod
     def _validate_prefix_completion_kwargs(

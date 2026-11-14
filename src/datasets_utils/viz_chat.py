@@ -37,9 +37,6 @@ Usage:
     # Single JSON file
     viz_chat data/single_item.json
 
-    # With specific format
-    viz_chat data/sharegpt.jsonl --format sharegpt
-
     # Show tools if present
     viz_chat data/with_tools.jsonl --show-tools
 """
@@ -48,12 +45,12 @@ from __future__ import annotations
 
 import argparse
 import bisect
+import itertools
 import json
-import os
 import random
 import sys
 import types
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -61,12 +58,12 @@ from rich.console import Console, Group
 from rich.panel import Panel
 from rich.text import Text
 
+from ._tokenizer import get_tokenizer as _get_tokenizer
+
 
 # Lazy import for datasets
 _dataset_module = None
 DEFAULT_CHAT_TEMPLATE_TOKENIZER = "Qwen/Qwen3.5-27B"
-os.environ.setdefault("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")
-
 
 __all__ = [
     "parse_args",
@@ -85,7 +82,13 @@ def _get_dataset_module():
     """Lazy load the datasets module."""
     global _dataset_module
     if _dataset_module is None:
-        from datasets import Dataset, DatasetDict, load_from_disk
+        try:
+            from datasets import Dataset, DatasetDict, load_from_disk
+        except ImportError as exc:  # pragma: no cover - depends on env
+            raise ImportError(
+                "loading a HuggingFace dataset needs the HF datasets extra: "
+                "pip install 'speedy-utils[datasets]'"
+            ) from exc
 
         _dataset_module = types.SimpleNamespace(
             Dataset=Dataset,
@@ -102,7 +105,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Examples:\n"
             "  viz_chat data/my_dataset.jsonl\n"
             "  viz_chat data/hf_dataset/ --count 5\n"
-            "  viz_chat data/folder/ --format sharegpt"
+            "  viz_chat data/folder/ --show-tools"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -121,17 +124,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=0,
         help="Random seed used when sampling items (default: 0).",
-    )
-    parser.add_argument(
-        "--split",
-        default=None,
-        help="Split name to sample from (HF datasets only).",
-    )
-    parser.add_argument(
-        "--format",
-        choices=["auto", "chatml", "sharegpt"],
-        default="auto",
-        help="Input format (auto-detect by default).",
     )
     parser.add_argument(
         "--show-tools",
@@ -329,30 +321,6 @@ def _is_tokenized_dataset(items: list[tuple[str | None, int, dict[str, Any]]]) -
     # Check first item
     _, _, first_row = items[0]
     return _is_tokenized_row(first_row)
-
-
-_tokenizer_cache: dict[str, Any] = {}
-
-
-def _get_tokenizer(tokenizer_name: str) -> Any:
-    """Load and cache a tokenizer by name."""
-    if tokenizer_name in _tokenizer_cache:
-        return _tokenizer_cache[tokenizer_name]
-
-    os.environ.setdefault("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")
-
-    try:
-        from transformers import AutoTokenizer
-    except ImportError as exc:
-        raise ImportError(
-            "transformers is required for tokenized datasets. "
-            "Install with: pip install 'speedy-utils[transformers]'"
-        ) from exc
-
-    print(f"Loading tokenizer: {tokenizer_name}...")
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, trust_remote_code=True)
-    _tokenizer_cache[tokenizer_name] = tokenizer
-    return tokenizer
 
 
 def decode_tokenized_row(
@@ -593,6 +561,18 @@ def extract_tools(row: Mapping[str, Any]) -> list[dict[str, Any]] | None:
 # =============================================================================
 
 
+def _sample_indices(n: int, *, count: int, seed: int) -> list[int]:
+    """Sorted random positions to sample from `n` items."""
+    if count < 0:
+        raise ValueError("--count must be non-negative.")
+    if n == 0 or count == 0:
+        return []
+    if count >= n:
+        return list(range(n))
+    rng = random.Random(seed)
+    return sorted(rng.sample(range(n), count))
+
+
 def sample_items(
     items: Sequence[tuple[str | None, int, dict[str, Any]]],
     *,
@@ -600,16 +580,7 @@ def sample_items(
     seed: int,
 ) -> list[tuple[str | None, int, dict[str, Any]]]:
     """Sample items randomly."""
-    if count < 0:
-        raise ValueError("--count must be non-negative.")
-    if not items or count == 0:
-        return []
-    if count >= len(items):
-        return list(items)
-
-    rng = random.Random(seed)
-    selected_indices = sorted(rng.sample(range(len(items)), count))
-    return [items[index] for index in selected_indices]
+    return [items[index] for index in _sample_indices(len(items), count=count, seed=seed)]
 
 
 # =============================================================================
@@ -1032,38 +1003,31 @@ def main(argv: list[str] | None = None) -> int:
     if not items:
         raise ValueError(f"No items found in: {source_path}")
 
-    # Check if data is tokenized
-    is_tokenized = items and _is_tokenized_row(items[0][2])
+    total_items = len(items)
+    is_tokenized = _is_tokenized_row(items[0][2])
 
     tokenizer = _get_tokenizer(tokenizer_name)
 
     # Print summary
     console.print(f"Source: {source_path}", soft_wrap=True)
     console.print(f"Tokenizer: {tokenizer_name}", soft_wrap=True)
-    console.print(f"Total items: {len(items)}", soft_wrap=True)
+    console.print(f"Total items: {total_items}", soft_wrap=True)
     console.print(
         "Interactive mode: Enter=next random, 'g'=goto index, 'q'=quit",
         style="dim",
     )
     console.print()
 
-    # Infinite random sampling
-    rng = random.Random(args.seed)
-    item_number = 1
-
-    while True:
-        # Pick a random item
-        idx = rng.randint(0, len(items) - 1)
-        source_name, row_index, row = items[idx]
-
+    def show(dataset_index: int, item_number: int) -> None:
+        source_name, row_index, row = items[dataset_index]
         if is_tokenized:
             decoded_row = dict(row)
             decoded_row.update(decode_tokenized_row(row, tokenizer))
             print_tokenized_item(
                 console=console,
                 item_number=item_number,
-                total_items=len(items),
-                dataset_index=idx,
+                total_items=total_items,
+                dataset_index=dataset_index,
                 source_name=source_name,
                 row_index=row_index,
                 row=decoded_row,
@@ -1072,8 +1036,8 @@ def main(argv: list[str] | None = None) -> int:
             print_item(
                 console=console,
                 item_number=item_number,
-                total_items=len(items),
-                dataset_index=idx,
+                total_items=total_items,
+                dataset_index=dataset_index,
                 source_name=source_name,
                 row_index=row_index,
                 row=row,
@@ -1081,46 +1045,33 @@ def main(argv: list[str] | None = None) -> int:
                 show_tools=args.show_tools,
             )
 
+    if args.count < 0:
+        # Infinite random sampling, one fresh draw per step.
+        rng = random.Random(args.seed)
+        sampled_indices: Iterable[int] = (
+            rng.randrange(total_items) for _ in itertools.count()
+        )
+    else:
+        sampled_indices = _sample_indices(
+            total_items, count=args.count, seed=args.seed
+        )
+
+    item_number = 1
+    for dataset_index in sampled_indices:
+        show(dataset_index, item_number)
         continue_loop, goto_idx = _wait_for_next_sample(
             console,
             item_number=item_number,
-            total_items=len(items),
-            total_in_dataset=len(items),
-            current_index=idx,
+            total_items=total_items,
+            total_in_dataset=total_items,
+            current_index=dataset_index,
         )
+        item_number += 1
         if not continue_loop:
             break
-
         if goto_idx is not None:
-            # Jump to specific index - show it but continue infinite mode after
-            source_name, row_index, row = items[goto_idx]
+            show(goto_idx, item_number)
             item_number += 1
-            if is_tokenized:
-                decoded_row = dict(row)
-                decoded_row.update(decode_tokenized_row(row, tokenizer))
-                print_tokenized_item(
-                    console=console,
-                    item_number=item_number,
-                    total_items=len(items),
-                    dataset_index=goto_idx,
-                    source_name=source_name,
-                    row_index=row_index,
-                    row=decoded_row,
-                )
-            else:
-                print_item(
-                    console=console,
-                    item_number=item_number,
-                    total_items=len(items),
-                    dataset_index=goto_idx,
-                    source_name=source_name,
-                    row_index=row_index,
-                    row=row,
-                    tokenizer=tokenizer,
-                    show_tools=args.show_tools,
-                )
-
-        item_number += 1
 
     return 0
 

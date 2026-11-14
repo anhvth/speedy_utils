@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from unittest.mock import patch
 
@@ -114,3 +115,86 @@ def test_generate_uses_cached_mopenai_completion_and_preserves_logprobs():
         assert choice.token_ids == [11, 22]  # type: ignore[attr-defined]
         assert choice.prompt_token_ids == [33, 44]  # type: ignore[attr-defined]
         assert choice.extra_choice_field == "vllm-extra"  # type: ignore[attr-defined]
+
+
+def _make_chat_payload() -> dict:
+    return {
+        "id": "chatcmpl-123",
+        "object": "chat.completion",
+        "created": 1710000000,
+        "model": "test-model",
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "stop",
+                "message": {"role": "assistant", "content": "hi"},
+            }
+        ],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+
+
+def _make_stream_body() -> bytes:
+    def chunk(delta: dict, finish_reason: str | None) -> dict:
+        return {
+            "id": "chatcmpl-stream",
+            "object": "chat.completion.chunk",
+            "created": 1710000000,
+            "model": "test-model",
+            "choices": [
+                {"index": 0, "delta": delta, "finish_reason": finish_reason}
+            ],
+        }
+
+    events = [chunk({"content": "hi"}, None), chunk({}, "stop")]
+    body = "".join(f"data: {json.dumps(event)}\n\n" for event in events)
+    return (body + "data: [DONE]\n\n").encode()
+
+
+def test_streaming_call_restores_client_caching():
+    counts = {"streams": 0, "completions": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path.endswith("/models"):
+            return httpx.Response(200, json=_make_models_list_payload())
+        if request.method == "POST" and request.url.path.endswith("/chat/completions"):
+            if json.loads(request.content).get("stream"):
+                counts["streams"] += 1
+                return httpx.Response(
+                    200,
+                    headers={"content-type": "text/event-stream"},
+                    content=_make_stream_body(),
+                )
+            counts["completions"] += 1
+            return httpx.Response(200, json=_make_chat_payload())
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    http_client = httpx.Client(transport=httpx.MockTransport(handler))
+    client = MOpenAI(
+        api_key="dummy-key",
+        base_url="http://test/v1",
+        http_client=http_client,
+        cache=True,
+    )
+
+    try:
+        with patch("llm_utils.lm.llm.get_base_client", return_value=client):
+            llm = LLM(model="test-model")
+            prompt = f"prompt-{uuid.uuid4().hex}"
+            stream = llm(prompt, stream=True)
+            text = "".join(
+                choice.delta.content or ""
+                for chunk in stream
+                for choice in chunk.choices
+            )
+            assert client.post is not client._orig_post
+            first = llm(prompt)
+            second = llm(prompt)
+    finally:
+        client.close()
+
+    assert text == "hi"
+    assert first.content == "hi"
+    assert second.content == "hi"
+    # one streamed request plus one cached non-streaming request
+    assert counts == {"streams": 1, "completions": 1}

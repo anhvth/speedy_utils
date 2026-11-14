@@ -20,6 +20,7 @@ import ctypes
 import datetime
 import functools
 import gc
+import hashlib
 import inspect
 import io
 import json
@@ -79,23 +80,13 @@ import cachetools
 
 # Direct imports (previously lazy-loaded)
 import psutil
-from fastcore.parallel import parallel
 from json_repair import loads as jloads
 from loguru import logger
 from tqdm import tqdm
 
 
 tabulate = __import__("tabulate").tabulate
-import xxhash
 
-
-# numpy — lazy to keep `import speedy_utils` under 0.4 s
-def __getattr__(name):
-    if name == "np":
-        import numpy as _np
-        globals()["np"] = _np
-        return _np
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 # Optional imports - lazy loaded for performance
 def _get_pandas():
@@ -206,49 +197,27 @@ def _get_ipython_display():
         return None, None
 
 
-_ipython_display_cache = None
-_HTML = None
-_display = None
-
-
 def _get_HTML():
     """Lazy import HTML from IPython.display."""
-    global _HTML, _display, _ipython_display_cache
-    if _ipython_display_cache is None:
-        _ipython_display_cache = _get_ipython_display()
-    _HTML, _display = _ipython_display_cache
-    return _HTML
+    return _get_ipython_display()[0]
 
 
 def _get_display():
     """Lazy import display from IPython.display."""
-    global _HTML, _display, _ipython_display_cache
-    if _ipython_display_cache is None:
-        _ipython_display_cache = _get_ipython_display()
-    _HTML, _display = _ipython_display_cache
-    return _display
+    return _get_ipython_display()[1]
 
 
 HTML = _LazyModule(_get_HTML, "_HTML")  # type: ignore
 display = _LazyModule(_get_display, "_display")  # type: ignore
-
-try:
-    from PIL import Image
-except ImportError:
-    Image = None
 
 if TYPE_CHECKING:
     import matplotlib.pyplot as plt
     import numpy as np
     import pandas as pd
     import torch
-
-    # xxhash
-    import xxhash  # type: ignore
     from IPython.core.getipython import get_ipython  # type: ignore
     from IPython.display import HTML, display  # type: ignore
     from loguru import logger  # type: ignore
-    from PIL import Image
     from tabulate import tabulate  # type: ignore
     from tqdm import tqdm  # type: ignore
 
@@ -257,15 +226,12 @@ __all__ = [
     # Direct imports (previously lazy-loaded)
     # ------------------------------------------------------------------
     "torch",
-    "np",
     "pd",
     "tqdm",
     "tabulate",
-    "xxhash",
     "get_ipython",
     "HTML",
     "display",
-    "Image",
     "matplotlib",
     "plt",
     # ------------------------------------------------------------------
@@ -278,6 +244,7 @@ __all__ = [
     "datetime",
     "functools",
     "gc",
+    "hashlib",
     "inspect",
     "io",
     "json",
@@ -358,7 +325,6 @@ __all__ = [
     # ------------------------------------------------------------------
     "cachetools",
     "psutil",
-    "parallel",
     "jloads",
     "logger",
     "plt",

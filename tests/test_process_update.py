@@ -2,6 +2,8 @@
 
 from io import StringIO
 import queue
+import subprocess
+import sys
 import time
 from unittest.mock import MagicMock, patch
 
@@ -39,7 +41,7 @@ def test_process_basic_execution():
         test_input,
         num_procs=1,
         num_threads=2,
-        progress=False,  # Disable progress to avoid fastcore's progress bar
+        progress=False,
         backend="spawn",
     )
 
@@ -74,6 +76,31 @@ def test_sequential_backend_basic_map():
 
     # Check results
     assert result == test_input
+
+
+def test_lazy_output_with_many_workers_does_not_deadlock(tmp_path):
+    """Regression: a global thread-count busy-wait hung every worker above 16.
+
+    Runs in a subprocess so a regression hits the timeout instead of hanging pytest.
+    """
+    script = """
+from speedy_utils import multi_process
+
+paths = multi_process(
+    lambda x: x * 2, list(range(40)), num_threads=32, lazy_output=True, progress=False
+)
+assert len(paths) == 40, paths
+assert all(isinstance(path, str) for path in paths), paths
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_prefixed_writer_coalesces_fragmented_writes_into_one_prefixed_line():
@@ -249,7 +276,7 @@ def test_mp_progress_bar_appears_before_process_start_and_refreshes_while_idle()
                     "speedy_utils.multi_worker._mp_backends._track_processes",
                     return_value=None,
                 ):
-                    backend_ctx = mp_mod.build_backend_context(
+                    backend_ctx = mp_mod.BackendRunContext(
                         f_wrapped=identity,
                         items=[1, 2],
                         total=2,
@@ -267,8 +294,9 @@ def test_mp_progress_bar_appears_before_process_start_and_refreshes_while_idle()
                         func_name="identity",
                         tqdm_cls=_FakeTqdm,  # type: ignore[arg-type]
                     )
-                    mp_ctx = mp_mod.build_multiprocess_context(
+                    mp_ctx = mp_mod.MultiprocessBackendContext(
                         backend=backend_ctx,
+                        start_method="spawn",
                         func=identity,
                         cache_dir=None,
                         dump_in_thread=True,
@@ -289,6 +317,14 @@ def test_mp_progress_bar_appears_before_process_start_and_refreshes_while_idle()
     assert bar.postfix["start"] >= 1
     assert bar.postfix["active"] >= 1
     assert bar.refresh_calls >= 2
+
+
+def test_error_stats_without_write_logs_does_not_create_cache_dir(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    mp_mod.ErrorStats(func_name="identity", write_logs=False)
+
+    assert not (tmp_path / ".cache").exists()
 
 
 def test_error_stats_logs_first_error_path():
@@ -344,7 +380,7 @@ def test_mp_parent_logs_first_error_path():
                     "speedy_utils.multi_worker._mp_backends.logger"
                 ) as mock_logger:
                     mock_logger.opt.return_value.warning = MagicMock()
-                    backend_ctx = mp_mod.build_backend_context(
+                    backend_ctx = mp_mod.BackendRunContext(
                         f_wrapped=identity,
                         items=[1, 2],
                         total=2,
@@ -362,8 +398,9 @@ def test_mp_parent_logs_first_error_path():
                         func_name="identity",
                         tqdm_cls=_FakeTqdm,  # type: ignore[arg-type]
                     )
-                    mp_ctx = mp_mod.build_multiprocess_context(
+                    mp_ctx = mp_mod.MultiprocessBackendContext(
                         backend=backend_ctx,
+                        start_method="spawn",
                         func=identity,
                         cache_dir=None,
                         dump_in_thread=True,

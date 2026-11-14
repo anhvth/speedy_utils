@@ -15,11 +15,6 @@ def flatten_list(list_of_lists: list[list[Any]]) -> list[Any]:
     return [item for sublist in list_of_lists for item in sublist]
 
 
-def get_arg_names(func: Callable) -> list[str]:
-    """Retrieve argument names of a function."""
-    return inspect.getfullargspec(func).args
-
-
 def is_notebook() -> bool:
     try:
         if 'get_ipython' in globals():
@@ -72,7 +67,6 @@ def dedup(items: list[T], key: Callable[[T], Any]) -> list[T]:
 __all__ = [
     'mkdir_or_exist',
     'flatten_list',
-    'get_arg_names',
     'is_notebook',
     'convert_to_builtin_python',
     'dedup',

@@ -10,8 +10,8 @@ from openai.types.completion_choice import CompletionChoice
 from openai.types.completion_usage import CompletionUsage
 from pydantic import BaseModel
 
-from llm_utils._traceback import CleanTracebackError
 from llm_utils.lm.llm import LLM
+from speedy_utils.common.utils_error import CleanTracebackError
 
 
 class TestLLMCallContract(TestCase):

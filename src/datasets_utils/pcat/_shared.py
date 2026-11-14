@@ -204,9 +204,10 @@ class HFDatasetRowSource:
     def from_path(cls, path: Path, split: str | None = None) -> HFDatasetRowSource:
         try:
             from datasets import DatasetDict, load_from_disk
-        except ModuleNotFoundError as exc:  # pragma: no cover - depends on env
-            raise RuntimeError(
-                "pcat-hf-dataset requires the 'datasets' package. Install it with: pip install datasets"
+        except ImportError as exc:  # pragma: no cover - depends on env
+            raise ImportError(
+                "pcat-hf-dataset needs the HF datasets extra: "
+                "pip install 'speedy-utils[datasets]'"
             ) from exc
 
         try:
@@ -321,6 +322,7 @@ class Node:
     value: Any
     depth: int
     parent: tuple | None
+    parent_is_list: bool = False
     is_continuation: bool = False
     continuation_text: str = ""
 
@@ -532,7 +534,13 @@ Segment = tuple[str, int]
 Line = list[Segment]
 
 
-def render_line(node: Node, width: int, is_cursor: bool) -> Line:
+def render_line(
+    node: Node,
+    width: int,
+    is_cursor: bool,
+    expanded: set[tuple],
+    scalar_expanded: set[tuple],
+) -> Line:
     indent = "  " * node.depth
     cursor_marker = "▌ " if is_cursor else "  "
     prefix_text = cursor_marker + indent
@@ -545,7 +553,7 @@ def render_line(node: Node, width: int, is_cursor: bool) -> Line:
     line: Line = [(prefix_text, 0)]
 
     if node.key_repr:
-        if node.parent is not None and isinstance_at(node.parent, list, node):
+        if node.parent_is_list:
             line.append((node.key_repr, CP_PUNCT))
             line.append((" ", 0))
         else:
@@ -554,27 +562,17 @@ def render_line(node: Node, width: int, is_cursor: bool) -> Line:
 
     if node.is_container:
         kind = node.container_kind
-        if node.path in EXPANDED_HINT:
+        if node.path in expanded:
             open_brace = "{" if kind == "dict" else "["
             line.append((open_brace, CP_PUNCT))
         else:
             line.append((collapsed_summary(node.value), CP_SUMMARY))
-    elif node.path in SCALAR_EXPANDED_HINT:
+    elif node.path in scalar_expanded:
         line.append(("▾", CP_SUMMARY))
     else:
         line.extend(scalar_segments(node.value))
 
     return clip_line(line, width)
-
-
-EXPANDED_HINT: set[tuple] = set()
-SCALAR_EXPANDED_HINT: set[tuple] = set()
-
-
-def isinstance_at(
-    parent_path: tuple, kind, node: Node
-) -> bool:  # pragma: no cover - tiny helper
-    return getattr(node, "_parent_is_list", False)
 
 
 def collapsed_summary(value: Any) -> str:
@@ -683,7 +681,7 @@ class RowView:
             if node.parent is None or node.is_continuation:
                 continue
             parent_value = resolve_path(self.value, node.parent)
-            node._parent_is_list = isinstance(parent_value, list)  # type: ignore[attr-defined]
+            node.parent_is_list = isinstance(parent_value, list)
         self.nodes = nodes
         if self.cursor >= len(nodes):
             self.cursor = max(0, len(nodes) - 1)
@@ -806,8 +804,6 @@ class AppState:
     last_query: str = ""
     matches: list[int] = field(default_factory=list)
     match_pos: int = -1
-    sample_indices: list[int] = field(default_factory=list)
-    sample_pos: int = 0
 
     @property
     def total_rows(self) -> int:
@@ -922,11 +918,6 @@ def draw(stdscr, app: AppState) -> None:
         app.view.top = app.view.cursor - body_height + 1
     app.view.top = max(0, min(app.view.top, max(0, len(app.view.nodes) - body_height)))
 
-    EXPANDED_HINT.clear()
-    EXPANDED_HINT.update(app.view.expanded)
-    SCALAR_EXPANDED_HINT.clear()
-    SCALAR_EXPANDED_HINT.update(app.view.scalar_expanded)
-
     visible = app.view.nodes[app.view.top : app.view.top + body_height]
     for row in range(body_top, body_top + body_height):
         try:
@@ -937,7 +928,9 @@ def draw(stdscr, app: AppState) -> None:
     for row, node in enumerate(visible, start=body_top):
         idx = app.view.top + (row - body_top)
         is_cursor = idx == app.view.cursor
-        line = render_line(node, width - 1, is_cursor)
+        line = render_line(
+            node, width - 1, is_cursor, app.view.expanded, app.view.scalar_expanded
+        )
         x = 0
         base_attr = curses.A_REVERSE if is_cursor else 0
         if idx in app.matches:
@@ -1052,13 +1045,7 @@ def yank_node(view: RowView, out_path: Path) -> str:
     return f"yanked {label} -> {out_path}"
 
 
-def smart_expand(view: RowView, screen_height: int) -> None:
-    view.expanded = set(all_container_paths(view.value))
-    view.scalar_expanded = set(all_scalar_paths(view.value))
-    view.rebuild()
-
-
-def load_row(app: AppState, new_index: int, screen_height: int = 30) -> None:
+def load_row(app: AppState, new_index: int) -> None:
     new_index = max(0, min(app.total_rows - 1, new_index))
     if new_index == app.row_index and app.view.nodes:
         return
@@ -1069,7 +1056,7 @@ def load_row(app: AppState, new_index: int, screen_height: int = 30) -> None:
         return
     app.row_index = new_index
     app.view = RowView(value=value)
-    smart_expand(app.view, screen_height)
+    app.view.expand_all()
     app.matches = []
     app.match_pos = -1
     app.status = ""
@@ -1096,7 +1083,7 @@ def step_match(app: AppState, delta: int) -> None:
     app.view.cursor = app.matches[app.match_pos]
 
 
-def step_sample(app: AppState, screen_height: int) -> str:
+def step_sample(app: AppState) -> str:
     """Jump to a uniformly random row that differs from the current one.
 
     Analogous to ``[``/``]`` (prev/next) but picks randomly.  Works the same
@@ -1110,11 +1097,11 @@ def step_sample(app: AppState, screen_height: int) -> str:
     idx = random.randrange(total - 1)
     if idx >= app.row_index:
         idx += 1
-    load_row(app, idx, screen_height)
+    load_row(app, idx)
     return f"random → row {idx + 1}/{total}"
 
 
-def reload_source(app: AppState, screen_height: int) -> None:
+def reload_source(app: AppState) -> None:
     old_total = app.total_rows
     old_index = app.row_index
     was_on_last_row = old_total > 0 and old_index >= old_total - 1
@@ -1131,7 +1118,8 @@ def reload_source(app: AppState, screen_height: int) -> None:
     target_index = (
         app.total_rows - 1 if was_on_last_row else min(old_index, app.total_rows - 1)
     )
-    load_row(app, target_index, screen_height)
+    app.row_index = -1  # force load_row to re-read the row it already shows
+    load_row(app, target_index)
     if app.total_rows == old_total:
         app.status = f"reloaded {app.total_rows} rows"
     else:
@@ -1146,7 +1134,7 @@ def run_curses(stdscr, app: AppState) -> int:
         curses.curs_set(0)
     stdscr.keypad(True)
     height, width = stdscr.getmaxyx()
-    smart_expand(app.view, height)
+    app.view.expand_all()
     app.view.rebuild(width)
 
     while True:
@@ -1193,20 +1181,16 @@ def run_curses(stdscr, app: AppState) -> int:
             if app.row_index <= 0:
                 curses.beep()
             else:
-                height, _ = stdscr.getmaxyx()
-                load_row(app, app.row_index - 1, height)
+                load_row(app, app.row_index - 1)
         elif key == ord("]"):
             if app.row_index >= app.total_rows - 1:
                 curses.beep()
             else:
-                height, _ = stdscr.getmaxyx()
-                load_row(app, app.row_index + 1, height)
+                load_row(app, app.row_index + 1)
         elif key == ord("{"):
-            height, _ = stdscr.getmaxyx()
-            load_row(app, 0, height)
+            load_row(app, 0)
         elif key == ord("}"):
-            height, _ = stdscr.getmaxyx()
-            load_row(app, app.total_rows - 1, height)
+            load_row(app, app.total_rows - 1)
         elif key == ord("/"):
             query = prompt(stdscr, "/")
             run_search(app, query.strip())
@@ -1217,11 +1201,9 @@ def run_curses(stdscr, app: AppState) -> int:
         elif key == ord("y"):
             app.status = yank_node(app.view, app.yank_path)
         elif key == ord("r"):
-            height, _ = stdscr.getmaxyx()
-            reload_source(app, height)
+            reload_source(app)
         elif key == ord("s"):
-            height, _ = stdscr.getmaxyx()
-            app.status = step_sample(app, height)
+            app.status = step_sample(app)
         elif key == ord(":"):
             raw = prompt(stdscr, ":").strip()
             if raw:
@@ -1231,8 +1213,7 @@ def run_curses(stdscr, app: AppState) -> int:
                         target -= 1
                     else:
                         target = app.total_rows + target
-                    height, _ = stdscr.getmaxyx()
-                    load_row(app, target, height)
+                    load_row(app, target)
                 except ValueError:
                     app.status = f"goto: invalid row number '{raw}'"
         elif key == ord("?"):
@@ -1288,9 +1269,8 @@ def build_common_parser(
         metavar="N",
         default=None,
         help=(
-            "pre-draw N random row indices (default 1 when flag given); "
-            "press s in the TUI to step through them. "
-            "Efficient: only the viewed row is loaded from disk."
+            "open a random row instead of the last one; "
+            "press s in the TUI to jump to another random row"
         ),
     )
     parser.add_argument(
@@ -1411,25 +1391,18 @@ def run_source_cli(
             open_browser=open_browser,
         )
 
-    # --sample: pre-draw N random indices without loading any row data.
-    # random.sample(range(N), k) is O(k) and never materialises the full range.
-    sample_indices: list[int] = []
     if sample is not None:
-        k = min(max(1, sample), source.total_rows)
-        sample_indices = random.sample(range(source.total_rows), k)
-        resolved_index = sample_indices[0]
+        resolved_index = random.randrange(source.total_rows)
     else:
         try:
             resolved_index = resolve_initial_index(index, source.total_rows)
         except ValueError as exc:
             parser.error(str(exc))
-            return 2
 
     try:
         value = source.load_row(resolved_index)
     except ValueError as exc:
         parser.error(str(exc))
-        return 2
 
     if plain:
         print_plain(value, sys.stdout)
@@ -1441,8 +1414,6 @@ def run_source_cli(
         yank_path=Path(f"/tmp/{prog}-yank.txt"),
         row_index=resolved_index,
         view=RowView(value=value),
-        sample_indices=sample_indices,
-        sample_pos=0,
     )
     return curses.wrapper(run_curses, app)
 
@@ -1466,7 +1437,6 @@ def _run_glob_serve(
         glob_source = JsonlGlobRowSource.from_path(path, pattern=args.ext)
     except ValueError as exc:
         parser.error(str(exc))
-        return 2
 
     print(
         f"  Found {len(glob_source.files)} files in {path}/{args.ext}",
@@ -1527,13 +1497,13 @@ def main_jsonl(argv: Sequence[str] | None = None) -> int:
         args.plain,
         prog="pcat-jsonl",
         sample=args.sample,
-        serve=args.serve if hasattr(args, "serve") else False,
-        port=args.port if hasattr(args, "port") else 8888,
-        host=args.host if hasattr(args, "host") else "127.0.0.1",
-        mode=args.mode if hasattr(args, "mode") else "auto",
+        serve=args.serve,
+        port=args.port,
+        host=args.host,
+        mode=args.mode,
         tokenizer_name=args.tokenizer,
         field_name=args.field,
-        open_browser=not args.no_browser if hasattr(args, "no_browser") else True,
+        open_browser=not args.no_browser,
     )
 
 
@@ -1560,9 +1530,8 @@ def main_hf_dataset(argv: Sequence[str] | None = None) -> int:
 
     try:
         source = HFDatasetRowSource.from_path(path, split=args.split)
-    except (RuntimeError, ValueError) as exc:
+    except (ImportError, RuntimeError, ValueError) as exc:
         parser.error(str(exc))
-        return 2
 
     if source.total_rows <= 0:
         parser.error(f"{source.display_path} has no rows")
@@ -1573,11 +1542,11 @@ def main_hf_dataset(argv: Sequence[str] | None = None) -> int:
         args.plain,
         prog="pcat-hf-dataset",
         sample=args.sample,
-        serve=args.serve if hasattr(args, "serve") else False,
-        port=args.port if hasattr(args, "port") else 8888,
-        host=args.host if hasattr(args, "host") else "127.0.0.1",
-        mode=args.mode if hasattr(args, "mode") else "auto",
+        serve=args.serve,
+        port=args.port,
+        host=args.host,
+        mode=args.mode,
         tokenizer_name=args.tokenizer,
         field_name=args.field,
-        open_browser=not args.no_browser if hasattr(args, "no_browser") else True,
+        open_browser=not args.no_browser,
     )

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import ctypes
 import inspect
-import linecache
 import os
 import queue
 import sys
@@ -30,7 +29,9 @@ from typing import (
 from loguru import logger
 
 from speedy_utils.common.exceptions import SpeedyWorkerError
+from speedy_utils.common.utils_error import CleanTracebackError
 
+from ._mp_progress import set_progress_postfix
 from .common import ErrorHandlerType, ErrorStats
 
 
@@ -42,12 +43,9 @@ except ImportError:  # pragma: no cover
 # Sensible defaults
 DEFAULT_WORKERS = (os.cpu_count() or 4) * 2
 _SAFE_WORKER_LIMIT_ENV = 'SPEEDY_UTILS_MAX_WORKERS'
-_SAFE_WORKER_LIMIT_DEFAULT = "2048"
 _SAFE_WORKER_LIMIT_MIN = 64
-_SAFE_WORKER_LIMIT_MAX = int(_SAFE_WORKER_LIMIT_DEFAULT)
+_SAFE_WORKER_LIMIT_MAX = 2048
 _SAFE_WORKER_LIMIT_FACTOR = 16
-
-os.environ.setdefault(_SAFE_WORKER_LIMIT_ENV, _SAFE_WORKER_LIMIT_DEFAULT)
 
 T = TypeVar('T')
 R = TypeVar('R')
@@ -59,7 +57,7 @@ SPEEDY_RUNNING_THREADS: list[threading.Thread] = []  # cooperative shutdown trac
 _SPEEDY_THREADS_LOCK = threading.Lock()
 
 
-class UserFunctionError(Exception):
+class UserFunctionError(CleanTracebackError):
     """Exception wrapper that highlights user function errors."""
 
     def __init__(
@@ -70,105 +68,8 @@ class UserFunctionError(Exception):
         user_traceback: list[traceback.FrameSummary],
         caller_frame: traceback.FrameSummary | None = None,
     ) -> None:
-        self.original_exception = original_exception
-        self.func_name = func_name
         self.input_value = input_value
-        self.user_traceback = user_traceback
-        self.caller_frame = caller_frame
-
-        # Create a focused error message
-        tb_str = ''.join(traceback.format_list(user_traceback))
-        msg = (
-            f'\nError in function "{func_name}" with input: {input_value!r}\n'
-            f'\nUser code traceback:\n{tb_str}'
-            f'{type(original_exception).__name__}: {original_exception}'
-        )
-        super().__init__(msg)
-
-    def __str__(self) -> str:
-        # Return focused error without infrastructure frames
-        return super().__str__()
-
-    def format_rich(self) -> None:
-        """Format and print error with rich panels and code context."""
-        try:
-            from rich.console import Console
-            from rich.panel import Panel
-        except ImportError:  # pragma: no cover
-            # Fallback to plain text
-            print(str(self), file=sys.stderr)
-            return
-
-        console = Console(stderr=True, force_terminal=True)
-
-        # Build traceback display with code context
-        tb_parts: list[str] = []
-
-        # Show caller frame first if available
-        if self.caller_frame and self.caller_frame.lineno is not None:
-            tb_parts.append(
-                f'[cyan]{self.caller_frame.filename}[/cyan]:[yellow]{self.caller_frame.lineno}[/yellow] '
-                f'in [green]{self.caller_frame.name}[/green]'
-            )
-            tb_parts.append('')
-            context = _get_code_context_rich(
-                self.caller_frame.filename, self.caller_frame.lineno, 3
-            )
-            tb_parts.extend(context)
-            tb_parts.append('')
-
-        # Show user code frames with context
-        for frame in self.user_traceback:
-            if frame.lineno is not None:
-                tb_parts.append(
-                    f'[cyan]{frame.filename}[/cyan]:[yellow]{frame.lineno}[/yellow] '
-                    f'in [green]{frame.name}[/green]'
-                )
-                tb_parts.append('')
-                context = _get_code_context_rich(frame.filename, frame.lineno, 3)
-                tb_parts.extend(context)
-                tb_parts.append('')
-
-        # Print with rich Panel
-        console.print()
-        console.print(
-            Panel(
-                '\n'.join(tb_parts),
-                title='[bold red]Traceback (most recent call last)[/bold red]',
-                border_style='red',
-                expand=False,
-            )
-        )
-        console.print(
-            f'[bold red]{type(self.original_exception).__name__}[/bold red]: '
-            f'{self.original_exception}'
-        )
-        console.print()
-
-
-def _get_code_context_rich(
-    filename: str, lineno: int, context_lines: int = 3
-) -> list[str]:
-    """Get code context with rich formatting (colors)."""
-    lines: list[str] = []
-    start = max(1, lineno - context_lines)
-    end = lineno + context_lines
-
-    for i in range(start, end + 1):
-        line = linecache.getline(filename, i)
-        if not line:
-            continue
-        line = line.rstrip()
-        num_str = f'{i:4d}'
-
-        if i == lineno:
-            # Highlight error line
-            lines.append(f'[dim]{num_str}[/dim] [red]❱[/red] {line}')
-        else:
-            # Normal context line
-            lines.append(f'[dim]{num_str} │[/dim] {line}')
-
-    return lines
+        super().__init__(original_exception, user_traceback, caller_frame, func_name)
 
 
 _PY_SET_ASYNC_EXC = ctypes.pythonapi.PyThreadState_SetAsyncExc
@@ -311,13 +212,6 @@ def _progress_units_for_item(
     return units
 
 
-def _set_progress_postfix(pbar: "tqdm", postfix: dict[str, Any]) -> None:  # type: ignore[type-arg]
-    try:
-        pbar.set_postfix(postfix, refresh=False)
-    except TypeError:
-        pbar.set_postfix(postfix)
-
-
 class _ProgressReporter:
     def __init__(
         self,
@@ -350,9 +244,6 @@ class _ProgressReporter:
         )
         self._thread.start()
         self._started.wait()
-
-    def set_pool(self, pool: ThreadPoolExecutor) -> None:
-        self._pool = pool
 
     def advance(self, units: int) -> None:
         if not self._enabled or units <= 0:
@@ -416,7 +307,7 @@ class _ProgressReporter:
                         bar.update(delta)
                         visible += delta
                         pending -= delta
-                    _set_progress_postfix(bar, self._build_postfix())
+                    set_progress_postfix(bar, self._build_postfix())
 
                 if should_break and self._event_queue.empty():
                     break
@@ -426,7 +317,7 @@ class _ProgressReporter:
                 if delta > 0:
                     bar.update(delta)
                     visible += delta
-            _set_progress_postfix(bar, self._build_postfix())
+            set_progress_postfix(bar, self._build_postfix())
             bar.close()
 
 
@@ -511,11 +402,17 @@ def _normalize_error_handler(
 def _coerce_dataframe_inputs(inputs: Iterable[T]) -> Iterable[T]:
     try:
         import pandas as pd
+    except ImportError as exc:  # pandas is an optional extra
+        # Only a pandas input can need pandas, so plain iterables still run
+        if type(inputs).__module__.split('.')[0] != 'pandas':
+            return cast(Iterable[T], inputs)
+        raise ImportError(
+            'multi_thread on a DataFrame needs pandas: '
+            'pip install speedy-utils[pandas]'
+        ) from exc
 
-        if isinstance(inputs, pd.DataFrame):
-            return cast(Iterable[T], inputs.to_dict(orient='records'))
-    except ImportError:  # pragma: no cover - optional dependency
-        pass
+    if isinstance(inputs, pd.DataFrame):
+        return cast(Iterable[T], inputs.to_dict(orient='records'))
     return cast(Iterable[T], inputs)
 
 
@@ -741,24 +638,6 @@ def _run_multi_process_fanout(
         results.extend(proc_results.get(proc_idx, []))
 
     return results
-
-
-def _chunk_items_for_processes(items: list[T], n_proc: int) -> list[list[T]]:
-    if n_proc <= 0:
-        raise ValueError('n_proc must be a positive integer')
-    if not items:
-        return []
-
-    proc_count = min(n_proc, len(items))
-    base, extra = divmod(len(items), proc_count)
-    chunks: list[list[T]] = []
-    start = 0
-    for proc_idx in range(proc_count):
-        size = base + (1 if proc_idx < extra else 0)
-        end = start + size
-        chunks.append(items[start:end])
-        start = end
-    return chunks
 
 
 def _input_value_for_error(items_list: list[Any] | None, idx: int) -> Any:
@@ -1079,19 +958,18 @@ def multi_thread(  # type: ignore[misc]
         # ~workers*prefetch_factor futures active when batching.
         max_inflight *= batch
     state = _ThreadPoolState(collector=collector, inflight=set())
+    pool = ThreadPoolExecutor(
+        max_workers=workers_val,
+        thread_name_prefix='speedy-thread',
+    )
     reporter = _ProgressReporter(
         enabled=progress,
         total=effective_progress_total,
         progress_update=progress_update,
         error_stats=error_stats,
         workers=workers_val,
-        pool=None,
+        pool=pool,
     )
-    pool = ThreadPoolExecutor(
-        max_workers=workers_val,
-        thread_name_prefix='speedy-thread',
-    )
-    reporter.set_pool(pool)
     reporter.start()
     shutdown_kwargs: dict[str, Any] = {'wait': True}
 
@@ -1138,6 +1016,7 @@ def multi_thread(  # type: ignore[misc]
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     _cancel_futures(state.inflight)
+                    shutdown_kwargs = {'wait': False, 'cancel_futures': True}
                     raise TimeoutError(
                         f'multi_thread timed out after {timeout} seconds',
                     )
@@ -1151,6 +1030,7 @@ def multi_thread(  # type: ignore[misc]
 
             if not done:
                 _cancel_futures(state.inflight)
+                shutdown_kwargs = {'wait': False, 'cancel_futures': True}
                 raise TimeoutError(
                     f'multi_thread timed out after {timeout} seconds',
                 )
@@ -1245,6 +1125,8 @@ def multi_thread(  # type: ignore[misc]
     except KeyboardInterrupt:
         shutdown_kwargs = {'wait': False, 'cancel_futures': True}
         _cancel_futures(state.inflight)
+        # shortcut: kill_all_thread hits every tracked pool, not just this one;
+        # track per-call threads when a background pool must survive Ctrl-C.
         kill_all_thread(SystemExit)
         raise KeyboardInterrupt() from None
     finally:
@@ -1254,30 +1136,10 @@ def multi_thread(  # type: ignore[misc]
             pool.shutdown(shutdown_kwargs.get('wait', True))
         reporter.close()
 
-    results = state.collector.finalize() if 'results' not in locals() else results
     if store_output_pkl_file:
         dump_json_or_pickle(results, store_output_pkl_file)
     _prune_dead_threads()
     return results if collect else None
-
-
-def multi_thread_standard(
-    fn: Callable[[T], R], items: Iterable[T], workers: int = 4
-) -> list[R]:
-    """Execute ``fn`` across ``items`` while preserving submission order."""
-
-    workers_val = _resolve_worker_count(workers)
-    with ThreadPoolExecutor(
-        max_workers=workers_val,
-        thread_name_prefix='speedy-thread',
-    ) as executor:
-        futures: list[Future[R]] = []
-        for item in items:
-            futures.append(executor.submit(fn, item))
-        _track_executor_threads(executor)
-        results = [fut.result() for fut in futures]
-    _prune_dead_threads()
-    return results
 
 
 def _async_raise(thread_id: int, exc_type: type[BaseException]) -> bool:
@@ -1332,6 +1194,5 @@ __all__ = [
     'SPEEDY_RUNNING_THREADS',
     'UserFunctionError',
     'multi_thread',
-    'multi_thread_standard',
     'kill_all_thread',
 ]

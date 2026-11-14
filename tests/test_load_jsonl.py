@@ -211,3 +211,72 @@ def test_load_jsonl_and_fast_load_jsonl_equivalence(simple_jsonl_file):
     result_fast_load_jsonl = list(fast_load_jsonl(simple_jsonl_file))
 
     assert result_load_jsonl == result_fast_load_jsonl
+
+# ----------------------------------------------------------------------
+# Regressions
+# ----------------------------------------------------------------------
+
+
+def test_load_json_or_pickle_reads_jsonl(tmp_path):
+    """load_json_or_pickle must return the records of a .jsonl file."""
+    from speedy_utils.common.utils_io import load_json_or_pickle
+
+    path = tmp_path / "rows.jsonl"
+    rows = [{"a": 1}, {"a": 2}]
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+
+    assert load_json_or_pickle(str(path)) == rows
+
+
+def test_fast_load_jsonl_multiworker_streams_chunks(tmp_path, monkeypatch):
+    """The multi-worker path must not read the whole file before the first chunk."""
+    path = tmp_path / "big.jsonl"
+    path.write_text(
+        "".join(json.dumps({"i": i}) + "\n" for i in range(30000)), encoding="utf-8"
+    )
+
+    import builtins
+
+    real_open = builtins.open
+    reads = {"lines": 0, "opens": 0}
+
+    class CountingReader:
+        def __init__(self, fh):
+            self.fh = fh
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            line = next(self.fh)
+            reads["lines"] += 1
+            return line
+
+        def close(self):
+            self.fh.close()
+
+    def counting_open(file, *args, **kwargs):
+        fh = real_open(file, *args, **kwargs)
+        if str(file) != str(path):
+            return fh
+        reads["opens"] += 1
+        # First open is the line count; the second one feeds the chunker
+        return CountingReader(fh) if reads["opens"] > 1 else fh
+
+    snapshot = {}
+
+    def fake_multi_thread(func, items, **kwargs):
+        chunk = next(iter(items))
+        snapshot["lines"] = reads["lines"]
+        return [func(chunk)]
+
+    monkeypatch.setattr(builtins, "open", counting_open)
+    monkeypatch.setattr(
+        "speedy_utils.multi_worker.thread.multi_thread", fake_multi_thread
+    )
+
+    rows = list(fast_load_jsonl(path, multiworker_threshold=0, workers=2))
+
+    chunk_size = 30000 // 2
+    assert len(rows) == chunk_size
+    assert snapshot["lines"] <= chunk_size

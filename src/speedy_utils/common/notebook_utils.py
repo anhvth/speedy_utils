@@ -1,15 +1,7 @@
 from ..__imports import *
 
 
-__all__ = ["change_dir", "display_pretty_table_html", "print_table"]
-
-
-def change_dir(target_directory: str = 'POLY') -> None:
-    """Change directory to the first occurrence of x in the current path."""
-    cur_dir = pathlib.Path('./')
-    target_dir = str(cur_dir.absolute()).split(target_directory)[0] + target_directory
-    os.chdir(target_dir)
-    print(f'Current dir: {target_dir}')
+__all__ = ["display_pretty_table_html", "print_table"]
 
 
 def display_pretty_table_html(data: dict) -> None:

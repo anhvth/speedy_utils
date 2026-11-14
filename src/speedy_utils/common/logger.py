@@ -146,13 +146,9 @@ _last_log_intervals = {}
 
 
 def _get_call_site_id(depth=2) -> str:
-    """
-    Generate a unique identifier for the call site based on filename and line number.
-    Adjusts for test environment where frame information may change.
-    """
-    frame = inspect.stack()[depth]
-    # Use a stable identifier in test environment to handle mocking
-    return f'{frame.filename}:{frame.lineno}'
+    """Unique identifier for the call site: filename and line number."""
+    frame = sys._getframe(depth)
+    return f'{frame.f_code.co_filename}:{frame.f_lineno}'
 
 
 def log(

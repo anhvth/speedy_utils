@@ -1,12 +1,10 @@
 from ..__imports import *
 
 
-__all__ = ['Clock', 'timef']
-
-
 def timef(func):
     "Decorator to print the execution time of a function"
 
+    @functools.wraps(func)
     def wrapper(*args, **kwargs):
         start_time = time.time()
         result = func(*args, **kwargs)
@@ -83,7 +81,7 @@ class Clock:
         else:
             logger.opt(depth=2).info(msg)
 
-    def _tick(self):
+    def tick(self):
         """Return the time elapsed since the last checkpoint and update the last checkpoint."""
         # assert self.start_time is not None, f"Timer has not been started. {id(self)=}"
         if not self.start_time:
@@ -100,9 +98,6 @@ class Clock:
         elapsed = current_time - self.last_checkpoint
         self.last_checkpoint = current_time
         return elapsed
-
-    def tick(self):
-        return self._tick()
 
     def time_since_last_checkpoint(self):
         """Return the time elapsed since the last checkpoint."""
@@ -202,9 +197,4 @@ class Clock:
             logger.opt(depth=2).info(f'\n{table}')
 
 
-# Example of how to instantiate the Timer
-speedy_timer = Clock(start_now=False)
-
-
-# Clock, speedy_timer, timef
-__all__ = ['Clock', 'speedy_timer', 'timef']
+__all__ = ['Clock', 'timef']

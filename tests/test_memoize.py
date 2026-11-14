@@ -309,3 +309,61 @@ def test_imemoize_method_with_ignore_self():
 
     assert result1 == 12
     assert result2 == 12
+
+# ----------------------------------------------------------------------
+# Regressions
+# ----------------------------------------------------------------------
+
+
+def test_default_cache_dir_is_under_user_cache():
+    """The default disk cache must not be the world-writable /tmp/speedy_cache."""
+    from speedy_utils.common import utils_cache
+
+    assert utils_cache.SPEED_CACHE_DIR == str(
+        Path("~/.cache/speedy_cache").expanduser()
+    )
+
+
+def test_memoize_runs_raising_function_once(cache_dir):
+    """A raising memoized function must not be executed twice."""
+    calls = []
+
+    @memoize(cache_dir=cache_dir, cache_type="disk")
+    def boom(x: int) -> int:
+        calls.append(x)
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        boom(1)
+
+    assert calls == [1]
+
+
+def test_verbose_memoized_functions_do_not_share_cache_entries(cache_dir):
+    """Two verbose-memoized functions with equal args must not share results."""
+
+    @memoize(cache_dir=cache_dir, verbose=True)
+    def first(x: int) -> str:
+        return "first"
+
+    @memoize(cache_dir=cache_dir, verbose=True)
+    def second(x: int) -> str:
+        return "second"
+
+    assert first(1) == "first"
+    assert second(1) == "second"
+
+
+def test_async_memoize_runs_raising_function_once(cache_dir):
+    """The async disk wrapper must not re-run a raising coroutine either."""
+    calls = []
+
+    @memoize(cache_dir=cache_dir, cache_type="disk")
+    async def boom(x: int) -> int:
+        calls.append(x)
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        asyncio.run(boom(1))
+
+    assert calls == [1]

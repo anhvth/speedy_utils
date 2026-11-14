@@ -22,10 +22,10 @@ from datasets_utils.pcat._shared import (
     clip_line,
     collapsed_summary,
     main_jsonl,
+    reload_source,
     render_line,
     run_source_cli,
     scalar_segments,
-    smart_expand,
     step_sample,
 )
 
@@ -51,15 +51,8 @@ class _InMemorySource:
         pass
 
 
-def _make_app(
-    rows: list[Any],
-    sample_indices: list[int] | None = None,
-    sample_pos: int = 0,
-    start_index: int = 0,
-) -> AppState:
+def _make_app(rows: list[Any], start_index: int = 0) -> AppState:
     source = _InMemorySource(rows=rows)
-    if sample_indices is None:
-        sample_indices = []
     value = source.load_row(start_index)
     view = RowView(value=value)
     return AppState(
@@ -68,8 +61,6 @@ def _make_app(
         yank_path=Path("/tmp/test-yank.txt"),
         row_index=start_index,
         view=view,
-        sample_indices=sample_indices,
-        sample_pos=sample_pos,
     )
 
 
@@ -113,7 +104,7 @@ def test_step_sample_always_moves_to_different_row() -> None:
 
     prev = app.row_index
     for _ in range(30):
-        step_sample(app, 30)
+        step_sample(app)
         assert app.row_index != prev, "step_sample must move to a different row each press"
         prev = app.row_index
 
@@ -122,7 +113,7 @@ def test_step_sample_status_format() -> None:
     rows = [{"i": i} for i in range(10)]
     app = _make_app(rows, start_index=0)
 
-    status = step_sample(app, 30)
+    status = step_sample(app)
     assert status.startswith("random → row ")
     assert "/10" in status
 
@@ -130,21 +121,9 @@ def test_step_sample_status_format() -> None:
 def test_step_sample_single_row_stays_put() -> None:
     rows = [{"i": 0}]
     app = _make_app(rows, start_index=0)
-    status = step_sample(app, 30)
+    status = step_sample(app)
     assert app.row_index == 0
     assert status == "only one row"
-
-
-def test_step_sample_works_regardless_of_sample_indices() -> None:
-    # --sample N pre-draws a starting pool, but s always picks a fresh random row.
-    rows = [{"i": i} for i in range(20)]
-    app = _make_app(rows, sample_indices=[3, 7, 15], sample_pos=0, start_index=3)
-
-    prev = app.row_index
-    for _ in range(20):
-        step_sample(app, 30)
-        assert app.row_index != prev
-        prev = app.row_index
 
 
 # ---------------------------------------------------------------------------
@@ -242,7 +221,18 @@ def test_main_jsonl_sample_indices_are_unique(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_smart_expand_expands_full_multiline_scalars_for_large_rows() -> None:
+def test_reload_source_shows_row_edited_after_it_was_loaded() -> None:
+    rows = [{"i": 0}]
+    app = _make_app(rows, start_index=0)
+    assert app.view.value == {"i": 0}
+
+    rows[0] = {"i": 42}
+    reload_source(app)
+
+    assert app.view.value == {"i": 42}
+
+
+def test_expand_all_expands_full_multiline_scalars_for_large_rows() -> None:
     value = {
         "title": "example",
         "payload": {
@@ -253,7 +243,7 @@ def test_smart_expand_expands_full_multiline_scalars_for_large_rows() -> None:
 
     view = RowView(value=value)
 
-    smart_expand(view, screen_height=5)
+    view.expand_all()
 
     assert view.expanded == set(all_container_paths(value))
     assert view.scalar_expanded == set(all_scalar_paths(value))
@@ -360,7 +350,9 @@ def test_rowview_vietnamese_nodes_render_in_bounds() -> None:
     view.expanded = {()}
     view.rebuild(width=60)
     for i, node in enumerate(view.nodes):
-        line_rendered = render_line(node, 60, i == view.cursor)
+        line_rendered = render_line(
+            node, 60, i == view.cursor, view.expanded, view.scalar_expanded
+        )
         total_w = sum(_display_width(t) for t, _ in line_rendered)
         assert total_w <= 60, f"node[{i}] too wide: {total_w}"
 
@@ -1138,7 +1130,7 @@ def test_glob_source_refresh_removes_deleted_file(tmp_path: Path) -> None:
 
 
 def test_serve_files_json_endpoint(tmp_path: Path) -> None:
-    """/files endpoint returns current file list as JSON."""
+    """/files endpoint returns the current file count as JSON."""
     import http.client
     import threading
     import time
@@ -1177,15 +1169,14 @@ def test_serve_files_json_endpoint(tmp_path: Path) -> None:
     time.sleep(0.5)
 
     try:
-        # Verify /files returns the current file list
+        # Verify /files returns the current file count
         conn = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
         conn.request("GET", "/files")
         resp = conn.getresponse()
         assert resp.status == 200
         data = json.loads(resp.read())
         assert data["count"] >= 2
-        assert any(f["name"] == "a.jsonl" for f in data["files"])
-        assert any(f["name"] == "b.jsonl" for f in data["files"])
+        assert list(data) == ["count"]
         conn.close()
 
         # Create a new file and wait for refresh
@@ -1198,7 +1189,6 @@ def test_serve_files_json_endpoint(tmp_path: Path) -> None:
         assert resp.status == 200
         data2 = json.loads(resp.read())
         assert data2["count"] >= 3
-        assert any(f["name"] == "c.jsonl" for f in data2["files"])
         conn.close()
     finally:
         # Kill the server

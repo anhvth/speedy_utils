@@ -9,6 +9,7 @@ from .io_utils import (
 )
 from .plot import plot_images_notebook
 
+
 __all__ = [  # type: ignore[misc]
     "plot_images_notebook",  # type: ignore[misc]
     "read_images_cpu",  # type: ignore[misc]

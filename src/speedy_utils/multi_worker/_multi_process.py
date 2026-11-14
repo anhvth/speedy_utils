@@ -21,17 +21,11 @@ from tqdm import tqdm
 from . import _mp_spawn as _spawn
 from ._mp_backends import (
     BackendRunContext,
-    MpWorkerContext,
+    MultiprocessBackendContext,
     _caller_info_from_stack,
-    build_backend_context,
-    build_multiprocess_context,
-    bump_error_count,
-    chunk_indexed_items,
-    multiprocess_entrypoint,
     run_multiprocess_backend,
     run_seq_backend,
     run_threadpool_backend,
-    terminate_processes,
 )
 from ._mp_progress import (
     build_progress_desc,
@@ -168,7 +162,7 @@ def _prepare_run(
         max_error_files=max_error_files,
         write_logs=error_handler == "log",
     )
-    backend_ctx = build_backend_context(
+    backend_ctx = BackendRunContext(
         f_wrapped=f_wrapped,
         items=request.items,
         total=len(request.items),
@@ -238,7 +232,7 @@ def _run_multiprocess_with_fallback(
     prepared: PreparedRun,
     update_pbar_postfix: Callable[[tqdm], None],
 ) -> list[Any]:
-    mp_ctx = build_multiprocess_context(
+    mp_ctx = MultiprocessBackendContext(
         backend=prepared.backend_ctx,
         start_method=request.backend,
         func=prepared.func,

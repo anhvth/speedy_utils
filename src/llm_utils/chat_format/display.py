@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from difflib import SequenceMatcher
 from typing import TYPE_CHECKING, Any
 
@@ -8,60 +7,6 @@ from typing import TYPE_CHECKING, Any
 # Lazy import IPython.display
 if TYPE_CHECKING:
     from IPython.display import HTML, display
-
-
-def _preprocess_as_json(content: str) -> str:
-    """Preprocess content as JSON with proper formatting."""
-    try:
-        parsed = json.loads(content)
-        return json.dumps(parsed, indent=2, ensure_ascii=False)
-    except (json.JSONDecodeError, TypeError):
-        return content
-
-
-def _preprocess_as_markdown(content: str) -> str:
-    """Preprocess content as markdown with proper formatting."""
-    lines = content.split('\n')
-    processed_lines = []
-
-    for line in lines:
-        # Convert **bold** to span with bold styling
-        while '**' in line:
-            first_pos = line.find('**')
-            if first_pos == -1:
-                break
-            second_pos = line.find('**', first_pos + 2)
-            if second_pos == -1:
-                break
-            before = line[:first_pos]
-            bold_text = line[first_pos + 2 : second_pos]
-            after = line[second_pos + 2 :]
-            line = f'{before}<span style="font-weight: bold;">{bold_text}</span>{after}'
-
-        # Convert *italic* to span with italic styling
-        while '*' in line and line.count('*') >= 2:
-            first_pos = line.find('*')
-            if first_pos == -1:
-                break
-            second_pos = line.find('*', first_pos + 1)
-            if second_pos == -1:
-                break
-            before = line[:first_pos]
-            italic_text = line[first_pos + 1 : second_pos]
-            after = line[second_pos + 1 :]
-            line = (
-                f'{before}<span style="font-style: italic;">{italic_text}</span>{after}'
-            )
-
-        # Convert # headers to bold headers
-        if line.strip().startswith('#'):
-            level = len(line) - len(line.lstrip('#'))
-            header_text = line.lstrip('# ').strip()
-            line = f'<span style="font-weight: bold; font-size: 1.{min(4, level)}em;">{header_text}</span>'
-
-        processed_lines.append(line)
-
-    return '\n'.join(processed_lines)
 
 
 def _truncate_text(text: str, max_length: int, head_ratio: float = 0.3) -> str:

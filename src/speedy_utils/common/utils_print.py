@@ -48,29 +48,22 @@ def fprint(
                 f,
             )
             print('\n' + '-' * 100 + '\n')
+        return
 
     from speedy_utils import is_notebook as is_interactive
 
     # is_notebook = is_notebook or is_interactive()
     if is_notebook is None:
         is_notebook = is_interactive()
-    if isinstance(input_data, list):
-        if all(hasattr(item, 'toDict') for item in input_data):
-            input_data = [item.toDict() for item in input_data]
-    elif hasattr(input_data, 'toDict'):
-        input_data = input_data.toDict()
 
-    if isinstance(input_data, list):
-        if all(hasattr(item, 'to_dict') for item in input_data):
-            input_data = [item.to_dict() for item in input_data]
-    elif hasattr(input_data, 'to_dict'):
-        input_data = input_data.to_dict()
+    # Normalize objects exposing toDict / to_dict / model_dump, in that order
+    for converter in ('toDict', 'to_dict', 'model_dump'):
+        if isinstance(input_data, list):
+            if all(hasattr(item, converter) for item in input_data):
+                input_data = [getattr(item, converter)() for item in input_data]
+        elif hasattr(input_data, converter):
+            input_data = getattr(input_data, converter)()
 
-    if isinstance(input_data, list):
-        if all(hasattr(item, 'model_dump') for item in input_data):
-            input_data = [item.model_dump() for item in input_data]
-    elif hasattr(input_data, 'model_dump'):
-        input_data = input_data.model_dump()
     if not isinstance(input_data, (dict, str)):
         raise ValueError('Input data must be a dictionary or string')
 
@@ -106,9 +99,6 @@ def fprint(
                 sub_result[parts[-1]] = copy.deepcopy(sub_source.get(parts[-1]))
         return result
 
-    if hasattr(input_data, 'to_dict') and not isinstance(input_data, str):
-        input_data = input_data.to_dict()
-
     processed_data = copy.deepcopy(input_data)
 
     if isinstance(processed_data, dict) and is_notebook:
@@ -134,8 +124,6 @@ def fprint(
     elif isinstance(processed_data, str):
         wrapped_text = textwrap.fill(processed_data, width=str_wrap_width)
         f(wrapped_text)
-    elif isinstance(processed_data, list):
-        f(tabulate(processed_data, tablefmt=table_format))
     else:
         printer = pprint.PrettyPrinter(width=max_width, indent=indent, depth=depth)
         printer.pprint(processed_data)

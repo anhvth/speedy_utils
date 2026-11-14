@@ -5,13 +5,18 @@ os.environ["HF_HOME"] = "/mnt/data/anhvth/tmp/"
 import sys
 from pathlib import Path
 
-from datasets import load_dataset
-
 
 __all__ = ["convert_to_arrow"]
 
 
 def convert_to_arrow(path_to_dir):
+    try:
+        from datasets import load_dataset
+    except ImportError as e:
+        raise ImportError(
+            "convert_to_arrow requires datasets: pip install 'speedy-utils[datasets]'"
+        ) from e
+
     # 1. Setup paths
     input_path = Path(path_to_dir).resolve()
     # Search for all .parquet files in the directory

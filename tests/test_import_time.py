@@ -1,5 +1,5 @@
 # tests/test_import_time.py
-"""Regression test to ensure speedy_utils import time stays under 1 second."""
+"""Regression test to keep the speedy_utils import inside the 0.4s hook budget."""
 import subprocess
 import sys
 import time
@@ -9,7 +9,7 @@ import pytest
 
 def test_import_time_star_import():
     """
-    Ensure that `from speedy_utils import *` completes in under 1 second.
+    Ensure that `from speedy_utils import *` completes in under 0.4 seconds.
 
     This is a regression test to catch any accidental additions of slow
     module-level imports that would degrade the import performance.
@@ -38,8 +38,8 @@ print(f"IMPORT_TIME:{elapsed}")
     else:
         pytest.fail(f"Could not parse import time from output: {result.stdout}\nstderr: {result.stderr}")
 
-    # Assert import time is under 1 second (subprocess variance; hook uses 0.4s)
-    max_time = 1.0
+    # Same budget as .githooks/pre-commit
+    max_time = 0.4
     assert import_time < max_time, (
         f"Import time ({import_time:.3f}s) exceeds maximum allowed ({max_time}s). "
         "Check for slow module-level imports in speedy_utils."
@@ -48,7 +48,7 @@ print(f"IMPORT_TIME:{elapsed}")
 
 def test_import_time_module_import():
     """
-    Ensure that `import speedy_utils` completes in under 1 second.
+    Ensure that `import speedy_utils` completes in under 0.4 seconds.
 
     This tests the basic module import without the star import.
     """
@@ -74,8 +74,8 @@ print(f"IMPORT_TIME:{elapsed}")
     else:
         pytest.fail(f"Could not parse import time from output: {result.stdout}\nstderr: {result.stderr}")
 
-    # Assert import time is under 1 second (subprocess variance; hook uses 0.4s)
-    max_time = 1.0
+    # Same budget as .githooks/pre-commit
+    max_time = 0.4
     assert import_time < max_time, (
         f"Import time ({import_time:.3f}s) exceeds maximum allowed ({max_time}s). "
         "Check for slow module-level imports in speedy_utils."

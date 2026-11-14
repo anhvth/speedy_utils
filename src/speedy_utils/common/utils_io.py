@@ -66,9 +66,9 @@ def dump_json_or_pickle(
                     data = obj.model_dump(mode='python', round_trip=True)  # type: ignore
                 except TypeError:
                     data = obj.model_dump()  # type: ignore
-                from fastcore.all import dict2obj
-
-                obj2 = dict2obj(data)
+                # shortcut: nested dicts stay plain dicts, upgrade if nested
+                # attribute access after unpickling matters
+                obj2 = types.SimpleNamespace(**data)
                 with open(fname, 'wb') as f:
                     pickle.dump(obj2, f)
             else:
@@ -80,9 +80,11 @@ def dump_json_or_pickle(
 
 def load_json_or_pickle(fname: str, counter=0) -> Any:
     """
-    Load an object from a file, supporting both JSON and pickle formats.
+    Load an object from a file, supporting JSON, JSONL and pickle formats.
     """
-    if fname.endswith(('.json', '.jsonl')):
+    if fname.endswith('.jsonl'):
+        return list(fast_load_jsonl(fname))
+    if fname.endswith('.json'):
         with open(fname, encoding='utf-8') as f:
             return json.load(f)
     else:
@@ -259,17 +261,10 @@ def fast_load_jsonl(
             num_workers = workers if workers is not None else default_workers
             num_workers = max(1, num_workers)  # At least 1 worker
 
-            # Read all lines into chunks
+            # Stream chunks of lines instead of loading the whole file
             f = _open_auto(path_or_file)
-            all_lines = list(f)
-            f.close()
-
-            # Split into chunks - aim for ~10k-20k lines per chunk minimum
-            min_chunk_size = 10000
-            chunk_size = max(len(all_lines) // num_workers, min_chunk_size)
-            chunks = []
-            for i in range(0, len(all_lines), chunk_size):
-                chunks.append(all_lines[i : i + chunk_size])
+            chunk_size = max(line_count // num_workers, 10000)
+            chunks = iter(lambda: list(islice(f, chunk_size)), [])
 
             # Process chunks in parallel
             if progress:
@@ -280,6 +275,7 @@ def fast_load_jsonl(
             chunk_results = multi_thread(
                 _process_chunk, chunks, workers=num_workers, progress=progress
             )
+            f.close()
 
             # Flatten results and yield
             if chunk_results:
@@ -400,7 +396,12 @@ def load_by_ext(fname: str | list[str], do_memoize: bool = False) -> Any:
             return multi_process(load_by_ext, paths, num_procs=16)
 
         def load_csv(path: str, **pd_kwargs) -> Any:
-            import pandas as pd
+            try:
+                import pandas as pd
+            except ImportError as exc:
+                raise ImportError(
+                    'load_by_ext on a CSV needs pandas: pip install speedy-utils[pandas]'
+                ) from exc
 
             return pd.read_csv(path, engine='pyarrow', **pd_kwargs)
 
@@ -437,6 +438,8 @@ def load_by_ext(fname: str | list[str], do_memoize: bool = False) -> Any:
             load_fn = memoize(load_fn)
 
         return load_fn(fname)
+    except ImportError:
+        raise  # a missing optional extra must surface as ImportError, not ValueError
     except Exception as e:
         raise ValueError(f'Error {e} while loading {fname}') from e
 

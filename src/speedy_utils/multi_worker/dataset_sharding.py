@@ -90,7 +90,13 @@ def _final_output_path(output_path: str, dataset_size: int) -> Path:
 
 
 def _merge_shards(output_paths: list[str], output_path: str) -> str:
-    from datasets import concatenate_datasets, load_from_disk
+    try:
+        from datasets import concatenate_datasets, load_from_disk
+    except ImportError as exc:  # datasets is an optional extra
+        raise ImportError(
+            'merging shards needs the HF datasets extra: '
+            'pip install speedy-utils[datasets]'
+        ) from exc
 
     logger.info('Merging shards...')
     shard_datasets = [load_from_disk(path) for path in output_paths]
@@ -181,6 +187,9 @@ def multi_process_dataset(
         num_workers=num_workers,
     )
     output_paths = _run_shard_jobs(shard_jobs, len(dataset), num_workers)
+    failed = [idx for idx, path in enumerate(output_paths) if path is None]
+    if failed:
+        raise RuntimeError(f'shard(s) {failed} produced no output; not merging')
     final_path = _merge_shards(output_paths, output_path)
     _cleanup_shards(output_paths)
 

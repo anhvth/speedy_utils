@@ -211,34 +211,38 @@ class AudioLLM(LLM):
             )
         from openai.types.chat import ChatCompletion
 
+        previous_cache = self.cache
         self._set_cache(False, client=client)
-        kwargs.pop("stream", None)
-        options = dict(kwargs.pop("stream_options", {}) or {})
-        options["include_usage"] = True
-        stream = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            stream=True,
-            stream_options=options,
-            **kwargs,
-        )
-        chunks, reasoning, usage = [], [], None
-        completion_id, created, finish_reason = "audio", 0, None
         try:
-            for chunk in stream:
-                completion_id, created = chunk.id, chunk.created
-                if chunk.usage is not None:
-                    usage = chunk.usage
-                for choice in chunk.choices:
-                    if choice.delta.content:
-                        chunks.append(choice.delta.content)
-                    detail = getattr(choice.delta, "reasoning_content", None)
-                    if detail:
-                        reasoning.append(detail)
-                    if choice.finish_reason:
-                        finish_reason = choice.finish_reason
+            kwargs.pop("stream", None)
+            options = dict(kwargs.pop("stream_options", {}) or {})
+            options["include_usage"] = True
+            stream = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                stream=True,
+                stream_options=options,
+                **kwargs,
+            )
+            chunks, reasoning, usage = [], [], None
+            completion_id, created, finish_reason = "audio", 0, None
+            try:
+                for chunk in stream:
+                    completion_id, created = chunk.id, chunk.created
+                    if chunk.usage is not None:
+                        usage = chunk.usage
+                    for choice in chunk.choices:
+                        if choice.delta.content:
+                            chunks.append(choice.delta.content)
+                        detail = getattr(choice.delta, "reasoning_content", None)
+                        if detail:
+                            reasoning.append(detail)
+                        if choice.finish_reason:
+                            finish_reason = choice.finish_reason
+            finally:
+                stream.close()
         finally:
-            stream.close()
+            self._set_cache(previous_cache, client=client)
         if finish_reason is None:
             raise ValueError("Audio stream ended without a finish reason")
         message = {"role": "assistant", "content": "".join(chunks)}

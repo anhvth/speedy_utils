@@ -1,6 +1,7 @@
 """Tests for identify function."""
 
 import json
+from dataclasses import dataclass
 
 import pytest
 
@@ -256,3 +257,22 @@ def test_identify_dict_key_order_independence():
     result2 = identify(dict2)
 
     assert result1 == result2
+
+# ----------------------------------------------------------------------
+# Mutation
+# ----------------------------------------------------------------------
+
+
+def test_identify_reflects_object_mutation():
+    """identify must re-read object content, not a cached per-instance id."""
+
+    @dataclass(eq=False)
+    class Point:
+        x: int
+
+    point = Point(1)
+    before = identify(point)
+
+    point.x = 2
+
+    assert identify(point) != before

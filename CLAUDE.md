@@ -6,7 +6,7 @@ This file provides guidance for working in this repository.
 
 ```bash
 # Install dependencies
-uv sync
+uv sync --all-extras
 
 # Run tests
 ./tools/uv_test.sh -n 32
@@ -91,6 +91,13 @@ they are expensive enough to matter for import time:
 - `llm_utils.__init__` exports selected public classes and helpers directly.
 - `vision_utils` keeps plotting and image backends lazy inside function bodies.
 
+The 0.400s budget is enforced by `.githooks/pre-commit` and measured with
+`scripts/debug_import_time.py` (command above); heavy third-party imports stay
+inside functions. `speedy_utils.parallel_llm_job` deliberately imports
+`llm_utils` inside its methods because `speedy_utils.__init__` imports that
+module: hoisting the import would pull the LLM stack into every
+`import speedy_utils`.
+
 Do not add new top-level imports for heavy third-party libraries in public
 package `__init__.py` files unless you have rechecked import-time impact.
 
@@ -172,9 +179,10 @@ Registered console scripts in `pyproject.toml`:
 
 - `mpython`
 - `kill-mpython`
-- `sp_chat`
+- `sp_chat` (needs the `chat` extra)
 - `spu-prefetch-large-model`
 - `viz_chat`
+- `pcat` (also `pcat-jsonl`, `pcat-hf-dataset`)
 - `openapi_client_codegen`
 
 ## Code Style

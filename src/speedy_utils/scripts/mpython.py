@@ -265,6 +265,8 @@ def main():
     gpus = parse_gpu_ids(args.gpus)
     gpus = [gpu for gpu in gpus if gpu not in args.ignore_gpus.split(",")]
     num_gpus = len(gpus)
+    if not num_gpus:
+        parser.error("--ignore_gpus removed every GPU")
     nodes = [node.strip() for node in args.nodes.split(",") if node.strip()]
     total_fold = args.total_fold or (len(nodes) * num_gpus if nodes else 16)
     if nodes and total_fold != len(nodes) * num_gpus:

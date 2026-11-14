@@ -5,13 +5,13 @@ from __future__ import annotations
 from tqdm import tqdm
 
 from ._multi_process import multi_process
-from .multi_process_ray import multi_process_ray
 from .common import (
     SPEEDY_RUNNING_PROCESSES,
     ErrorHandlerType,
     ErrorStats,
     cleanup_phantom_workers,
 )
+from .multi_process_ray import multi_process_ray
 
 
 __all__ = [

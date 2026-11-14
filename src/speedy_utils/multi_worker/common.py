@@ -17,7 +17,6 @@ import pickle
 import sys
 import tempfile
 import threading
-import time
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Literal
@@ -51,8 +50,9 @@ class ErrorStats:
         self._first_error_shown = False
         self._max_error_files = max_error_files
         self._write_logs = write_logs
-        self._error_log_dir = self._get_error_log_dir(func_name)
+        self._error_log_dir = None
         if write_logs:
+            self._error_log_dir = self._get_error_log_dir(func_name)
             self._error_log_dir.mkdir(parents=True, exist_ok=True)
 
     @staticmethod
@@ -123,6 +123,7 @@ class ErrorStats:
 
         from rich.console import Console
 
+        assert self._error_log_dir is not None, "log dir requires write_logs"
         log_path = self._error_log_dir / f"{idx}.log"
 
         output = StringIO()
@@ -229,10 +230,6 @@ def _should_skip_frame(filepath: str) -> bool:
         "speedy_utils/multi_worker",
         "concurrent/futures",
         "multiprocessing/",
-        "fastcore/parallel",
-        "fastcore/foundation",
-        "fastcore/basics",
-        "site-packages/fastcore",
         "/threading.py",
         "/concurrent/",
     ]
@@ -516,26 +513,6 @@ def _track_processes(processes: list[psutil.Process]) -> None:
         SPEEDY_RUNNING_PROCESSES[:] = living
 
 
-def _track_multiprocessing_processes() -> None:
-    """Track multiprocessing worker processes."""
-    try:
-        # Find recently created child processes
-        current_pid = os.getpid()
-        parent = psutil.Process(current_pid)
-        new_processes = []
-        for child in parent.children(recursive=False):
-            try:
-                # Created within last 5 seconds
-                if time.time() - child.create_time() < 5:
-                    new_processes.append(child)
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
-        _track_processes(new_processes)
-    except Exception:
-        # Don't fail if process tracking fails
-        pass
-
-
 # ─── Log gating utilities ───────────────────────────────────────
 
 _LOG_GATE_CACHE: dict[str, bool] = {}
@@ -740,8 +717,6 @@ def wrap_dump(
 
         if dump_in_thread:
             thread = threading.Thread(target=save)
-            while threading.active_count() > 16:
-                time.sleep(0.1)
             thread.start()
         else:
             save()
@@ -840,7 +815,6 @@ __all__ = [
     # Process tracking
     "_prune_dead_processes",
     "_track_processes",
-    "_track_multiprocessing_processes",
     # Log gating
     "_LOG_GATE_CACHE",
     "_should_allow_worker_logs",

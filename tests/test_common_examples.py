@@ -37,3 +37,13 @@ def test_load_by_ext_dispatches_on_suffix(tmp_path):
     jsonl_path = tmp_path / "data.jsonl"
     dump_jsonl([{"i": 0}, {"i": 1}], str(jsonl_path))
     assert load_by_ext(str(jsonl_path)) == [{"i": 0}, {"i": 1}]
+
+
+def test_fprint_prints_list_items_without_raising(capsys):
+    from speedy_utils import fprint
+
+    fprint([{"a": 1}, {"b": 2}])
+
+    out = capsys.readouterr().out
+    assert "a" in out
+    assert "b" in out

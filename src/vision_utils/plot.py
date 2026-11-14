@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
 
+
 # Lazy import heavy modules
 if TYPE_CHECKING:
     import matplotlib.pyplot as plt
@@ -10,7 +11,7 @@ if TYPE_CHECKING:
     from .io_utils import read_images
 
 
-__all__ = ["plot_images_notebook", "visualize_tensor"]
+__all__ = ["plot_images_notebook"]
 
 
 def _check_torch_available():
@@ -123,14 +124,8 @@ def _normalize_batch(
             from .io_utils import read_images
 
             loaded_arrays = read_images([str(images[idx]) for idx in path_indices])
-
-            if len(loaded_arrays) != len(path_indices):
-                raise ValueError(
-                    'Number of loaded images does not match number of paths provided.'
-                )
-
-            for idx, arr in zip(path_indices, loaded_arrays, strict=False):
-                loaded_paths[idx] = arr
+            for idx in path_indices:
+                loaded_paths[idx] = loaded_arrays[str(images[idx])]
 
         normalized = []
         for idx, img in enumerate(images):
@@ -210,7 +205,7 @@ def plot_images_notebook(
     # Check matplotlib availability
     mpl_available, plt = _check_matplotlib_available()
     if not mpl_available:
-        raise ImportError("matplotlib is required for plotting. Install it with: pip install matplotlib")
+        raise ImportError("plotting needs matplotlib: pip install speedy-utils[plot]")
     assert plt is not None
 
     # Normalize all images to list of (H, W, C) numpy arrays
@@ -304,57 +299,4 @@ def plot_images_notebook(
         axes_flat[idx].axis('off')
 
     plt.tight_layout()
-    plt.show()
-
-
-def visualize_tensor(img_tensor, mode='hwc', normalize=True, max_cols=8):
-    """
-    Visualize a tensor as an image or grid.
-
-    Args:
-        img_tensor: torch.Tensor, shape (C,H,W), (H,W,C), or (B,C,H,W)
-        mode: "hwc", "chw", or "bchw"
-        normalize: scale float tensor to 0–255 uint8 for display
-        max_cols: max columns when tiling a batch
-    """
-    import numpy as np
-
-    # Check matplotlib availability
-    mpl_available, plt = _check_matplotlib_available()
-    if not mpl_available:
-        raise ImportError("matplotlib is required for plotting. Install it with: pip install matplotlib")
-    assert plt is not None
-
-    if mode == 'chw':
-        img_tensor = img_tensor.permute(1, 2, 0)
-        imgs = [img_tensor]
-    elif mode == 'bchw':
-        b, c, h, w = img_tensor.shape
-        imgs = [img_tensor[i].permute(1, 2, 0) for i in range(b)]
-    elif mode == 'hwc':
-        imgs = [img_tensor]
-    else:
-        raise ValueError("mode must be 'hwc', 'chw', or 'bchw'")
-
-    # normalize each image
-    processed = []
-    for img in imgs:
-        img = img.detach().cpu().numpy()
-        if normalize:
-            img = (img - img.min()) / (img.max() - img.min() + 1e-8)
-            img = (img * 255).astype(np.uint8)
-        processed.append(img)
-
-    if len(processed) == 1:
-        plt.imshow(processed[0])
-    else:
-        cols = min(max_cols, len(processed))
-        rows = int(np.ceil(len(processed) / cols))
-        fig, axes = plt.subplots(rows, cols, figsize=(cols * 2, rows * 2))
-        axes = np.atleast_2d(axes)
-        for ax, img in zip(axes.flat, processed, strict=False):
-            ax.imshow(img)
-            ax.axis('off')
-        for ax in axes.flat[len(processed) :]:
-            ax.axis('off')
     plt.show()
